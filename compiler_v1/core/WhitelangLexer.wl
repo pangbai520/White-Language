@@ -50,12 +50,28 @@ func get_number(l -> Lexer) -> Token {
     let start_col  -> Int = l.col;
     let start_pos  -> Int = l.pos;
     
-    while (l.current_char != 0 && is_digit(l.current_char)) {
+    let dot_count -> Int = 0;
+    
+    // 46 is '.'
+    while (l.current_char != 0 && (is_digit(l.current_char) || l.current_char == 46)) {
+        if (l.current_char == 46) {
+            // If there is a dot, then the second dot isn't a decimal point
+            if (dot_count == 1) {
+                break;
+            }
+            dot_count = 1;
+        }
         advance(l);
     }
     
     let value -> String = l.text.slice(start_pos, l.pos);
-    return Token(type=TOK_NUMBER, value=value, line=start_line, col=start_col);
+    
+    // 如果包含小数点，我们给它一个不同的 Token 类型，方便 Parser 区分
+    if (dot_count == 1) {
+        return Token(type=TOK_FLOAT, value=value, line=start_line, col=start_col);
+    }
+    
+    return Token(type=TOK_INT, value=value, line=start_line, col=start_col);
 }
 
 

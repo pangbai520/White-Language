@@ -18,30 +18,8 @@ func get_output_name(input_name -> String) -> String {
 }
 
 
-func print_ast(node -> Struct, indent -> String) -> Void {
-    if (node == null) {
-        return;
-    }
-
-    let base -> BaseNode = node;
-    
-    if (base.type == NODE_INTEGER) {
-        let n -> IntegerNode = node;
-        builtin.print(indent + "IntegerNode(" + n.value + ")");
-    }
-
-    if (base.type == NODE_BINOP) {
-        let b -> BinOpNode = node;
-        let op_name -> String = get_token_name(b.op);
-        builtin.print(indent + "BinOpNode(" + op_name + ")");
-        print_ast(b.left,  indent + "  ");
-        print_ast(b.right, indent + "  ");
-    }
-}
-
-
 func main() -> Int {
-    let input_filename -> String = "./tests/calculator.wl"; // Input source code file
+    let input_filename -> String = "./tests/neg_float.wl"; // Input source code file
     let f_in -> File = file_io.open(input_filename, "r");
     if (f_in == null) {
         builtin.print("Error: Could not open input file " + input_filename);
@@ -67,7 +45,7 @@ func main() -> Int {
     let compiler -> Compiler = new_compiler(output_filename);
     compile_start(compiler); // Header required for compiling LLVM
     
-    let result_reg -> String = compile_node(compiler, ast);
+    let result_reg -> CompileResult = compile_node(compiler, ast);
     
     compile_end(compiler, result_reg);
 
