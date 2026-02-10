@@ -19,14 +19,14 @@ func get_output_name(input_name -> String) -> String {
 
 
 func main() -> Int {
-    let input_filename -> String = "./tests/while.wl"; // Input source code file
+    let input_filename -> String = "./tests/for.wl"; // Input source code file
     let f_in -> File = file_io.open(input_filename, "r");
     if (f_in == null) {
         builtin.print("Error: Could not open input file " + input_filename);
         return 1;
     }
     let source -> String = file_io.read_all(f_in);
-    builtin.print(source);
+    // builtin.print(source);
     file_io.close(f_in); // Release file
 
     builtin.print("Compiling: " + input_filename + "...");

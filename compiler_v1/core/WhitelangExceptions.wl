@@ -82,3 +82,7 @@ func throw_name_error(pos -> Position, details -> String) -> Void {
 func throw_type_error(pos -> Position, details -> String) -> Void {
     report_error(pos, "TypeError", details);
 }
+
+func throw_missing_initializer(pos -> Position, details -> String) -> Void {
+    report_error(pos, "MissingInitializer", details);
+}

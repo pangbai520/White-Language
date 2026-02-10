@@ -15,6 +15,8 @@ const NODE_IF         -> Int = 11;
 const NODE_WHILE      -> Int = 12;
 const NODE_BREAK      -> Int = 13;
 const NODE_CONTINUE   -> Int = 14;
+const NODE_FOR        -> Int = 15;
+const NODE_CALL       -> Int = 16; // func()
 
 struct BaseNode(type -> Int) // Used to read node type
 
@@ -113,4 +115,25 @@ struct BreakNode(
 struct ContinueNode(
     type -> Int,   // too lazy to write
     pos  -> Position
+)
+
+struct ForNode(
+    type -> Int,        // NODE_FOR
+    init -> Struct,
+    cond -> Struct,
+    step -> Struct,
+    body -> Struct,
+    pos  -> Position
+)
+
+struct CallNode(
+    type   -> Int,    // NODE_CALL
+    callee -> Struct,
+    args   -> Struct,
+    pos    -> Position
+)
+
+struct ArgNode(
+    val  -> Struct, // expression
+    next -> Struct  // next parameter
 )
