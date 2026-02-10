@@ -52,7 +52,6 @@ func get_number(l -> Lexer) -> Token {
     let start_pos  -> Int = l.pos.idx;
     
     let dot_count -> Int = 0;
-    
     // Support floating point numbers
     while (l.current_char != 0 && (is_digit(l.current_char) || l.current_char == 46)) {
         if (l.current_char == 46) {
@@ -65,7 +64,6 @@ func get_number(l -> Lexer) -> Token {
     }
     
     let value -> String = l.text.slice(start_pos, l.pos.idx);
-    
     if (dot_count == 1) {
         return Token(type=TOK_FLOAT, value=value, line=start_line, col=start_col);
     }
@@ -122,28 +120,51 @@ func get_next_token(l -> Lexer) -> Token {
         }
 
         let char   -> Byte = l.current_char;
-        let c_line -> Int = l.pos.ln;
-        let c_col  -> Int = l.pos.col;
+        let char_line -> Int = l.pos.ln;
+        let char_col  -> Int = l.pos.col;
 
-        // Operator handling
-        if (char == 43) { advance(l); return Token(type=TOK_PLUS, value="+", line=c_line, col=c_col); }
+        // + and x++
+        if (char == 43) { 
+            advance(l);
+            if (l.current_char == 43) {
+                advance(l);
+                return Token(type=TOK_INC, value="++", line=char_line, col=char_col);
+            }
+            return Token(type=TOK_PLUS, value="+", line=char_line, col=char_col); 
+        }
+
+        // -, x-- and ->
         if (char == 45) { 
             advance(l); 
             if (l.current_char == 62) {
                 advance(l);
-                return Token(type=TOK_TYPE_ARROW, value="->", line=c_line, col=c_col);
+                return Token(type=TOK_TYPE_ARROW, value="->", line=char_line, col=char_col);
             }
-            return Token(type=TOK_SUB, value="-", line=c_line, col=c_col); 
+            if (l.current_char == 45) {
+                advance(l);
+                return Token(type=TOK_DEC, value="--", line=char_line, col=char_col);
+            }
+            return Token(type=TOK_SUB, value="-", line=char_line, col=char_col); 
         }
-        if (char == 42) { advance(l); return Token(type=TOK_MUL,    value="*", line=c_line, col=c_col); }
-        if (char == 47) { advance(l); return Token(type=TOK_DIV,    value="/", line=c_line, col=c_col); }
-        if (char == 40) { advance(l); return Token(type=TOK_LPAREN, value="(", line=c_line, col=c_col); }
-        if (char == 41) { advance(l); return Token(type=TOK_RPAREN, value=")", line=c_line, col=c_col); }
-        if (char == 61) { advance(l); return Token(type=TOK_ASSIGN, value="=", line=c_line, col=c_col); }
-        if (char == 59) { advance(l); return Token(type=TOK_SEMICOLON, value=";", line=c_line, col=c_col); }
+
+        // * and x ** y
+        if (char == 42) { 
+            advance(l); 
+            if (l.current_char == 42) {
+                advance(l);
+                return Token(type=TOK_POW, value="**", line=char_line, col=char_col);
+            }
+            return Token(type=TOK_MUL, value="*", line=char_line, col=char_col); 
+        }
+        if (char == 47) { advance(l); return Token(type=TOK_DIV,       value="/", line=char_line, col=char_col); }
+        if (char == 37) { advance(l); return Token(type=TOK_MOD,       value="%", line=char_line, col=char_col); }
+        if (char == 40) { advance(l); return Token(type=TOK_LPAREN,    value="(", line=char_line, col=char_col); }
+        if (char == 41) { advance(l); return Token(type=TOK_RPAREN,    value=")", line=char_line, col=char_col); }
+        if (char == 61) { advance(l); return Token(type=TOK_ASSIGN,    value="=", line=char_line, col=char_col); }
+        if (char == 59) { advance(l); return Token(type=TOK_SEMICOLON, value=";", line=char_line, col=char_col); }
 
         // Trigger visual error reporting and stop compilation
-        throw_illegal_char(l.pos, "unknow character '" + char + "'. ");
+        throw_illegal_char(l.pos, "unknown character '" + char + "'. ");
     }
 
     return Token(type=TOK_EOF, value="", line=l.pos.ln, col=l.pos.col);

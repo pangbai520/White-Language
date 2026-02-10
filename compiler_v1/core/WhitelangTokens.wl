@@ -14,12 +14,18 @@ const TOK_IDENTIFIER    -> Int = 10; // variable name
 const TOK_ASSIGN        -> Int = 11; // =
 const TOK_TYPE_ARROW    -> Int = 12; // ->
 const TOK_SEMICOLON     -> Int = 13; // ;
+const TOK_MOD           -> Int = 14; // %
+const TOK_POW           -> Int = 15; // **
+const TOK_INC           -> Int = 16; // x++
+const TOK_DEC           -> Int = 17; // x--
 
-const TOK_T_INT         -> Int = 14; // "Int"
-const TOK_T_FLOAT       -> Int = 15; // "Float"
-const TOK_T_STRING      -> Int = 16; // "String"
-const TOK_T_BOOL        -> Int = 17; // "Bool"
-const TOK_T_VOID        -> Int = 18; // "Void"
+const TOK_T_INT         -> Int = 18;
+const TOK_T_FLOAT       -> Int = 19;
+const TOK_T_STRING      -> Int = 20;
+const TOK_T_BOOL        -> Int = 21;
+const TOK_T_VOID        -> Int = 22;
+
+
 
 
 func get_token_name(type -> Int) -> String {
