@@ -3,7 +3,6 @@ import "builtin"
 import "WhitelangTokens.wl"
 import "WhitelangExceptions.wl"
 
-extern func strcmp(s1 -> String, s2 -> String) -> Int from "C";
 
 struct Lexer(
     text -> String,
@@ -34,8 +33,8 @@ func is_alpha(c -> Byte) -> Bool {
 
 func new_lexer(text -> String) -> Lexer {
     // Initialize Position at start
-    let p -> Position = Position(idx=-1, ln=0, col=-1, text=text);
-    let l -> Lexer = Lexer(text=text, pos=p, current_char=0);
+    let pos -> Position = Position(idx=-1, ln=0, col=-1, text=text);
+    let l -> Lexer = Lexer(text=text, pos=pos, current_char=0);
     advance(l);
     return l;
 }
@@ -87,36 +86,19 @@ func get_identifier(l -> Lexer) -> Token {
 
     let value -> String = l.text.slice(start_pos, l.pos.idx);
 
-    if (value == "let") {
-        return Token(type=TOK_LET, value=value, line=start_line, col=start_col);
-    }
-    if (value == "Int") {
-        return Token(type=TOK_T_INT, value=value, line=start_line, col=start_col);
-    }
-    if (value == "Float") {
-        return Token(type=TOK_T_FLOAT, value=value, line=start_line, col=start_col);
-    }
-    if (value == "String") {
-        return Token(type=TOK_T_STRING, value=value, line=start_line, col=start_col);
-    }
-    if (value == "Bool") {
-        return Token(type=TOK_T_BOOL, value=value, line=start_line, col=start_col);
-    }
-    if (value == "Void") {
-        return Token(type=TOK_T_VOID, value=value, line=start_line, col=start_col);
-    }
-    if (value == "true") {
-        return Token(type=TOK_TRUE, value=value, line=start_line, col=start_col);
-    }
-    if (value == "false") {
-        return Token(type=TOK_FALSE, value=value, line=start_line, col=start_col);
-    }
-    if (value == "if") {
-        return Token(type=TOK_IF, value=value, line=start_line, col=start_col);
-    }
-    if (value == "else") {
-        return Token(type=TOK_ELSE, value=value, line=start_line, col=start_col);
-    }
+    if (value == "let") {return Token(type=TOK_LET, value=value, line=start_line, col=start_col);}
+    if (value == "Int") {return Token(type=TOK_T_INT, value=value, line=start_line, col=start_col);}
+    if (value == "Float") {return Token(type=TOK_T_FLOAT, value=value, line=start_line, col=start_col);}
+    if (value == "String") {return Token(type=TOK_T_STRING, value=value, line=start_line, col=start_col);}
+    if (value == "Bool") {return Token(type=TOK_T_BOOL, value=value, line=start_line, col=start_col);}
+    if (value == "Void") {return Token(type=TOK_T_VOID, value=value, line=start_line, col=start_col);}
+    if (value == "true") {return Token(type=TOK_TRUE, value=value, line=start_line, col=start_col);}
+    if (value == "false") {return Token(type=TOK_FALSE, value=value, line=start_line, col=start_col);}
+    if (value == "if") {return Token(type=TOK_IF, value=value, line=start_line, col=start_col);}
+    if (value == "else") {return Token(type=TOK_ELSE, value=value, line=start_line, col=start_col);}
+    if (value == "while") {return Token(type=TOK_WHILE, value=value, line=start_line, col=start_col);}
+    if (value == "break") { return Token(type=TOK_BREAK, value=value, line=start_line, col=start_col); }
+    if (value == "continue") { return Token(type=TOK_CONTINUE, value=value, line=start_line, col=start_col); }
     
     return Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }

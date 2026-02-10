@@ -7,10 +7,14 @@ const NODE_BINOP      -> Int = 3;
 const NODE_UNARYOP    -> Int = 4;
 const NODE_VAR_DECL   -> Int = 5; // let identi -> Type = ...
 const NODE_VAR_ACCESS -> Int = 6; // x
-const NODE_BLOCK      -> Int = 7; // { stmt1; stmt2; ... }
-const NODE_POSTFIX    -> Int = 8; // a++, a--
-const NODE_BOOL       -> Int = 9;
-const NODE_IF         -> Int = 10;
+const NODE_VAR_ASSIGN -> Int = 7;
+const NODE_BLOCK      -> Int = 8; // { stmt1; stmt2; ... }
+const NODE_POSTFIX    -> Int = 9; // a++, a--
+const NODE_BOOL       -> Int = 10;
+const NODE_IF         -> Int = 11;
+const NODE_WHILE      -> Int = 12;
+const NODE_BREAK      -> Int = 13;
+const NODE_CONTINUE   -> Int = 14;
 
 struct BaseNode(type -> Int) // Used to read node type
 
@@ -69,6 +73,13 @@ struct VarAccessNode(
     pos      -> Position
 )
 
+struct VarAssignNode(
+    type      -> Int,       // NODE_VAR_ASSIGN
+    name_tok  -> Token,
+    value     -> Struct,
+    pos       -> Position
+)
+
 struct StmtListNode(
     stmt -> Struct,
     next -> Struct
@@ -85,4 +96,21 @@ struct IfNode(
     body      -> Struct,    // BlockNode
     else_body -> Struct,    // BlockNode or IfNode (else if) or null
     pos       -> Position
+)
+
+struct WhileNode(
+    type      -> Int,       // NODE_WHILE
+    condition -> Struct,    // Boolean expression
+    body      -> Struct,    // BlockNode
+    pos       -> Position
+)
+
+struct BreakNode(
+    type -> Int,    // NODE_BREAK
+    pos  -> Position
+)
+
+struct ContinueNode(
+    type -> Int,   // too lazy to write
+    pos  -> Position
 )

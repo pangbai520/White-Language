@@ -27,8 +27,17 @@ struct Compiler(
     output_file -> File,
     reg_count   -> Int,        // Virtual register counter like: (t1, t2...)
     symbol_table -> HashMap,   // Variable name -> allocated pointer name (%a)
-    indent      -> String      // IR indentation used for generation
+    indent      -> String,     // IR indentation used for generation
+    loop_stack   -> Struct     // Loop Context
 )
+
+
+struct LoopScope(
+    label_cond -> String,  // continue
+    label_end  -> String,  // break 
+    parent     -> Struct   // loop scope
+)
+
 
 func new_compiler(out_path -> String) -> Compiler {
     let f -> File = open(out_path, "w");
@@ -37,7 +46,8 @@ func new_compiler(out_path -> String) -> Compiler {
         output_file = f,
         reg_count = 1,
         symbol_table = map_new(32),
-        indent = "  "
+        indent = "  ",
+        loop_stack = null
     );
 }
 
@@ -83,7 +93,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         let node_if -> IfNode = node;
         let cond_res -> CompileResult = compile_node(c, node_if.condition);
         if (cond_res.type != TYPE_BOOL) {
-            throw_type_error(node_if.pos, "If condition must be a Bool.");
+            throw_type_error(node_if.pos, "If condition must be a Bool. ");
         }
         
         // labels
@@ -112,6 +122,56 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         }
 
         write(c.output_file, "\n" + label_merge + ":\n");
+        return void_result();
+    }
+
+    if (base.type == NODE_WHILE) {
+        let node_while -> WhileNode = node;
+        let label_cond -> String = next_label(c);
+        let label_body -> String = next_label(c);
+        let label_end  -> String = next_label(c);
+
+        // push loop stack
+        let current_scope -> LoopScope = LoopScope(label_cond=label_cond, label_end=label_end, parent=c.loop_stack);
+        c.loop_stack = current_scope;
+
+        write(c.output_file, c.indent + "br label %" + label_cond + "\n"); // go to condition
+        // condition block
+        write(c.output_file, "\n" + label_cond + ":\n"); 
+        let cond_res -> CompileResult = compile_node(c, node_while.condition);
+
+        if (cond_res.type != TYPE_BOOL) {throw_type_error(node_while.pos, "condition must be a Bool. ");}
+        write(c.output_file, c.indent + "br i1 " + cond_res.reg + ", label %" + label_body + ", label %" + label_end + "\n");
+        write(c.output_file, "\n" + label_body + ":\n");
+        compile_node(c, node_while.body);
+
+        write(c.output_file, c.indent + "br label %" + label_cond + "\n"); // loop back
+        write(c.output_file, "\n" + label_end + ":\n"); // end block
+
+        // pop loop stack
+        c.loop_stack = current_scope.parent;
+        return void_result();
+    }
+
+    // BreakNode
+    if (base.type == NODE_BREAK) {
+        let n_break -> BreakNode = node;
+        if (c.loop_stack == null) {throw_invalid_syntax(n_break.pos, "'break' outside of loop. ");}
+
+        let scope -> LoopScope = c.loop_stack;
+
+        write(c.output_file, c.indent + "br label %" + scope.label_end + "\n");
+        return void_result();
+    }
+
+    // ContinueNode
+    if (base.type == NODE_CONTINUE) {
+        let n_cont -> ContinueNode = node;
+        if (c.loop_stack == null) {throw_invalid_syntax(n_cont.pos, "'continue' outside of loop. ");}
+
+        let scope -> LoopScope = c.loop_stack;
+
+        write(c.output_file, c.indent + "br label %" + scope.label_cond + "\n");
         return void_result();
     }
 
@@ -198,6 +258,29 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         
         write(c.output_file, c.indent + val_reg + " = load " + llvm_ty_str + ", " + llvm_ty_str + "* " + info.reg + "\n");
         return CompileResult(reg=val_reg, type=info.type);
+    }
+
+    if (base.type == NODE_VAR_ASSIGN) {
+        let n_assign -> VarAssignNode = node;
+        let var_name -> String = n_assign.name_tok.value;
+
+        let info -> SymbolInfo = map_get(c.symbol_table, var_name);
+        if (info == null) {
+            throw_name_error(n_assign.pos, "Cannot assign to undefined variable '" + var_name + "'. ");
+        }
+
+        let val_res -> CompileResult = compile_node(c, n_assign.value);
+        
+        // strict type check
+        if (info.type != val_res.type) {
+            throw_type_error(n_assign.pos, "Type mismatch in assignment. Expected " + get_llvm_type_str(info.type) + ", got " + get_llvm_type_str(val_res.type));
+        }
+        
+        // store
+        let ty_str -> String = get_llvm_type_str(info.type);
+        write(c.output_file, c.indent + "store " + ty_str + " " + val_res.reg + ", " + ty_str + "* " + info.reg + "\n");
+        
+        return void_result(); // return void
     }
 
     // IntNode
@@ -342,11 +425,11 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         if (is_cmp == 1) {
             if (left.type == TYPE_BOOL || right.type == TYPE_BOOL) {
                 if (left.type != right.type) {
-                    throw_type_error(b.pos, "Cannot compare Bool with other types.");
+                    throw_type_error(b.pos, "Cannot compare Bool with other types. ");
                 }
                 
                 if (op_type != TOK_EE && op_type != TOK_NE) {
-                    throw_type_error(b.pos, "Operator '" + get_token_name(op_type) + "' is not defined for type Bool.");
+                    throw_type_error(b.pos, "Operator '" + get_token_name(op_type) + "' is not defined for type Bool. ");
                 }
 
                 let res_reg -> String = next_reg(c);

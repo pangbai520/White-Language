@@ -41,6 +41,10 @@ const TOK_ELSE          -> Int = 35; // else
 const TOK_LBRACE        -> Int = 36; // {
 const TOK_RBRACE        -> Int = 37; // }
 
+const TOK_WHILE         -> Int = 38; // while
+const TOK_BREAK         -> Int = 39; // break
+const TOK_CONTINUE      -> Int = 40; // continue    but why am i writing so many useless comments O.O
+
 
 func get_token_name(type -> Int) -> String {
     if (type == TOK_INT) { return "INT"; }
@@ -74,6 +78,10 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_ELSE)   { return "else"; }
     if (type == TOK_LBRACE) { return "{"; }
     if (type == TOK_RBRACE) { return "}"; }
+
+    if (type == TOK_WHILE) { return "while"; }
+    if (type == TOK_BREAK) { return "break"; }
+    if (type == TOK_CONTINUE) { return "continue"; }
     return "EOF";
 }
 

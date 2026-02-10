@@ -1,14 +1,10 @@
 let a -> Int = 10;
 
 
-if (true) {
+if true {
+    a++;
     a++;
 }
 
-if (false) {
-    a++;
-} else {
-    a++;
-}
 
 a;

@@ -137,6 +137,30 @@ func logic_or(p -> Parser) -> Struct {
     return left;
 }
 
+func assignment(p -> Parser) -> Struct {
+    let left -> Struct = logic_or(p);
+
+    if (p.current_tok.type == TOK_ASSIGN) {
+        let op_tok -> Token = p.current_tok;
+        advance(p); // skip '='
+        
+        // a = b = c
+        let right -> Struct = assignment(p);
+
+        let base -> BaseNode = left;
+        if (base.type == NODE_VAR_ACCESS) {
+            let v_node -> VarAccessNode = left;
+            let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+            return VarAssignNode(type=NODE_VAR_ASSIGN, name_tok=v_node.name_tok, value=right, pos=pos);
+        } else {
+            let err_pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+            throw_invalid_syntax(err_pos, "Invalid assignment target. Only variables can be assigned.");
+        }
+    }
+    
+    return left;
+}
+
 func factor(p -> Parser) -> Struct {
     let tok -> Token = p.current_tok;
     
@@ -152,7 +176,7 @@ func factor(p -> Parser) -> Struct {
 }
 
 func expression(p -> Parser) -> Struct {
-    return logic_or(p);
+    return assignment(p);
 }
 
 func term(p -> Parser) -> Struct {
@@ -242,16 +266,16 @@ func parse_block(p -> Parser) -> Struct {
     while (p.current_tok.type != TOK_RBRACE && p.current_tok.type != TOK_EOF) {
         let stmt -> Struct = statement(p);
         let base -> BaseNode = stmt;
-        let is_compound -> Int = 0;
+        let is_compound -> Bool = false;
 
-        if (base.type == NODE_IF || base.type == NODE_BLOCK) {
-            is_compound = 1;
+        if (base.type == NODE_IF || base.type == NODE_BLOCK || base.type == NODE_WHILE) {
+            is_compound = true;
         }
 
         if (p.current_tok.type == TOK_SEMICOLON) {
             advance(p);
         } else {
-            if (is_compound == 0) {
+            if !is_compound {
                 let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
                 throw_invalid_syntax(err_pos, "Expected ';' after statement in block. ");
             }
@@ -273,7 +297,7 @@ func if_stmt(p -> Parser) -> Struct {
     let if_tok -> Token = p.current_tok;
     advance(p); // skip 'if'
     
-    let cond -> Struct = expression(p);
+    let cond -> Struct = atom(p);
     let body -> Struct = parse_block(p);
 
     let else_body -> Struct = null;
@@ -291,10 +315,35 @@ func if_stmt(p -> Parser) -> Struct {
     return IfNode(type=NODE_IF, condition=cond, body=body, else_body=else_body, pos=pos);
 }
 
+func while_stmt(p -> Parser) -> Struct {
+    let while_tok -> Token = p.current_tok;
+    advance(p); // skip 'while'
+    let cond -> Struct = atom(p);
+    let body -> Struct = parse_block(p);
+
+    let pos -> Position = Position(idx=0, ln=while_tok.line, col=while_tok.col, text=p.lexer.text);
+    return WhileNode(type=NODE_WHILE, condition=cond, body=body, pos=pos);
+}
+func break_stmt(p -> Parser) -> Struct {
+    let tok -> Token = p.current_tok;
+    advance(p);
+    let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+    return BreakNode(type=NODE_BREAK, pos=pos);
+}
+func continue_stmt(p -> Parser) -> Struct {
+    let tok -> Token = p.current_tok;
+    advance(p);
+    let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+    return ContinueNode(type=NODE_CONTINUE, pos=pos);
+}
+
 func statement(p -> Parser) -> Struct {
     if (p.current_tok.type == TOK_LET) {return var_decl(p);}
     if (p.current_tok.type == TOK_IF)  { return if_stmt(p);}
+    if (p.current_tok.type == TOK_WHILE) { return while_stmt(p);}
     if (p.current_tok.type == TOK_LBRACE) { return parse_block(p);}
+    if (p.current_tok.type == TOK_BREAK) { return break_stmt(p); }
+    if (p.current_tok.type == TOK_CONTINUE) { return continue_stmt(p); }
 
     return expression(p);
 }
@@ -306,15 +355,15 @@ func parse(p -> Parser) -> Struct {
     while (p.current_tok.type != TOK_EOF) {
         let stmt -> Struct = statement(p);
         let base -> BaseNode = stmt;
-        let is_compound -> Int = 0;
-        if (base.type == NODE_IF || base.type == NODE_BLOCK) {
-            is_compound = 1;
+        let is_compound -> Bool = false;
+        if (base.type == NODE_IF || base.type == NODE_BLOCK || base.type == NODE_WHILE) {
+            is_compound = true;
         }
 
         if (p.current_tok.type == TOK_SEMICOLON) {
             advance(p);
         } else {
-            if (is_compound == 0) {
+            if !is_compound {
                 let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
                 throw_invalid_syntax(err_pos, "Expected ';' after statement. ");
             }
