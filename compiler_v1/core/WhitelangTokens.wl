@@ -1,5 +1,4 @@
 // core/WhitelangTokens.wl
-
 const TOK_EOF           -> Int = 0;  // end of file
 const TOK_INT           -> Int = 1;  // Integer
 const TOK_FLOAT         -> Int = 2;  // Decimals
@@ -37,6 +36,11 @@ const TOK_NOT           -> Int = 31; // !
 const TOK_TRUE          -> Int = 32;
 const TOK_FALSE         -> Int = 33;
 
+const TOK_IF            -> Int = 34; // if
+const TOK_ELSE          -> Int = 35; // else
+const TOK_LBRACE        -> Int = 36; // {
+const TOK_RBRACE        -> Int = 37; // }
+
 
 func get_token_name(type -> Int) -> String {
     if (type == TOK_INT) { return "INT"; }
@@ -65,6 +69,11 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_ASSIGN) { return "="; }
     if (type == TOK_IDENTIFIER) { return "IDENTIFIER"; }
     if (type == TOK_SEMICOLON)  { return ";"; }
+
+    if (type == TOK_IF)     { return "if"; }
+    if (type == TOK_ELSE)   { return "else"; }
+    if (type == TOK_LBRACE) { return "{"; }
+    if (type == TOK_RBRACE) { return "}"; }
     return "EOF";
 }
 

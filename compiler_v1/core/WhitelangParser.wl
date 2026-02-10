@@ -228,10 +228,74 @@ func var_decl(p -> Parser) -> Struct {
     return VarDeclareNode(type=NODE_VAR_DECL, name_tok=name_tok, type_tok=type_tok, value=val_node, pos=pos);
 }
 
-func statement(p -> Parser) -> Struct {
-    if (p.current_tok.type == TOK_LET) {
-        return var_decl(p);
+func parse_block(p -> Parser) -> Struct {
+    // '{'
+    if (p.current_tok.type != TOK_LBRACE) {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected '{' to start a block. ");
     }
+    advance(p); // skip {
+
+    let head -> StmtListNode = null;
+    let curr -> StmtListNode = null;
+
+    while (p.current_tok.type != TOK_RBRACE && p.current_tok.type != TOK_EOF) {
+        let stmt -> Struct = statement(p);
+        let base -> BaseNode = stmt;
+        let is_compound -> Int = 0;
+
+        if (base.type == NODE_IF || base.type == NODE_BLOCK) {
+            is_compound = 1;
+        }
+
+        if (p.current_tok.type == TOK_SEMICOLON) {
+            advance(p);
+        } else {
+            if (is_compound == 0) {
+                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                throw_invalid_syntax(err_pos, "Expected ';' after statement in block. ");
+            }
+        }
+        let node -> StmtListNode = StmtListNode(stmt=stmt, next=null);
+        if (head == null) { head = node; curr = node; } 
+        else { curr.next = node; curr = node; }
+    }
+    if (p.current_tok.type != TOK_RBRACE) {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected '}' to close block. ");
+    }
+    advance(p); // skip }
+
+    return BlockNode(type=NODE_BLOCK, stmts=head);
+}
+
+func if_stmt(p -> Parser) -> Struct {
+    let if_tok -> Token = p.current_tok;
+    advance(p); // skip 'if'
+    
+    let cond -> Struct = expression(p);
+    let body -> Struct = parse_block(p);
+
+    let else_body -> Struct = null;
+    if (p.current_tok.type == TOK_ELSE) {
+        advance(p); // skip 'else'
+        
+        if (p.current_tok.type == TOK_IF) { // else if
+            else_body = if_stmt(p);
+        } else {
+            else_body = parse_block(p);
+        }
+    }
+    
+    let pos -> Position = Position(idx=0, ln=if_tok.line, col=if_tok.col, text=p.lexer.text);
+    return IfNode(type=NODE_IF, condition=cond, body=body, else_body=else_body, pos=pos);
+}
+
+func statement(p -> Parser) -> Struct {
+    if (p.current_tok.type == TOK_LET) {return var_decl(p);}
+    if (p.current_tok.type == TOK_IF)  { return if_stmt(p);}
+    if (p.current_tok.type == TOK_LBRACE) { return parse_block(p);}
+
     return expression(p);
 }
 
@@ -240,32 +304,26 @@ func parse(p -> Parser) -> Struct {
     let curr -> StmtListNode = null;
     
     while (p.current_tok.type != TOK_EOF) {
-        let stmt_pos_ln -> Int = p.current_tok.line;
-        let stmt_pos_col -> Int = p.current_tok.col;
-
         let stmt -> Struct = statement(p);
+        let base -> BaseNode = stmt;
+        let is_compound -> Int = 0;
+        if (base.type == NODE_IF || base.type == NODE_BLOCK) {
+            is_compound = 1;
+        }
 
-        if (p.current_tok.type != TOK_SEMICOLON) {
-            let err_pos -> Position = Position(
-                idx=0, 
-                ln=p.current_tok.line, 
-                col=p.current_tok.col, 
-                text=p.lexer.text
-            );
-            throw_invalid_syntax(err_pos, "Expected ';' after statement. ");
+        if (p.current_tok.type == TOK_SEMICOLON) {
+            advance(p);
+        } else {
+            if (is_compound == 0) {
+                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                throw_invalid_syntax(err_pos, "Expected ';' after statement. ");
+            }
         }
 
         let node -> StmtListNode = StmtListNode(stmt=stmt, next=null);
-        if (head == null) {
-            head = node;
-            curr = node;
-        } else {
-            curr.next = node;
-            curr = node;
-        }
-
-        advance(p);
+        if (head == null) { head = node; curr = node; } 
+        else { curr.next = node; curr = node; }
     }
-    
+
     return BlockNode(type=NODE_BLOCK, stmts=head);
 }

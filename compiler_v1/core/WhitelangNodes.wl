@@ -10,6 +10,7 @@ const NODE_VAR_ACCESS -> Int = 6; // x
 const NODE_BLOCK      -> Int = 7; // { stmt1; stmt2; ... }
 const NODE_POSTFIX    -> Int = 8; // a++, a--
 const NODE_BOOL       -> Int = 9;
+const NODE_IF         -> Int = 10;
 
 struct BaseNode(type -> Int) // Used to read node type
 
@@ -76,4 +77,12 @@ struct StmtListNode(
 struct BlockNode(
     type  -> Int,      // NODE_BLOCK
     stmts -> Struct   // StmtListNode head node
+)
+
+struct IfNode(
+    type      -> Int,       // NODE_IF
+    condition -> Struct,    // Boolean expression
+    body      -> Struct,    // BlockNode
+    else_body -> Struct,    // BlockNode or IfNode (else if) or null
+    pos       -> Position
 )

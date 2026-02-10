@@ -10,6 +10,7 @@ import "WhitelangExceptions.wl"
 const TYPE_INT   -> Int = 1;
 const TYPE_FLOAT -> Int = 2;
 const TYPE_BOOL  -> Int = 3;
+const TYPE_VOID  -> Int = 4;
 
 // Result wrapper to track both register name and its LLVM type
 struct CompileResult(
@@ -47,7 +48,6 @@ func next_reg(c -> Compiler) -> String {
     return name;
 }
 
-
 func promote_to_float(c -> Compiler, res -> CompileResult) -> CompileResult {
     if (res.type == TYPE_FLOAT) { return res; }
     
@@ -57,7 +57,6 @@ func promote_to_float(c -> Compiler, res -> CompileResult) -> CompileResult {
     return CompileResult(reg=n_reg, type=TYPE_FLOAT);
 }
 
-
 func get_llvm_type_str(type_id -> Int) -> String {
     if (type_id == TYPE_INT)   { return "i32"; }
     if (type_id == TYPE_FLOAT) { return "double"; }
@@ -65,9 +64,56 @@ func get_llvm_type_str(type_id -> Int) -> String {
     return ""; // error case
 }
 
+func next_label(c -> Compiler) -> String {
+    let name -> String = "L" + c.reg_count;
+    c.reg_count = c.reg_count + 1;
+    return name;
+}
+
+func void_result() -> CompileResult {
+    return CompileResult(reg="", type=TYPE_VOID);
+}
+
 
 func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     let base -> BaseNode = node;
+
+    // IfNode
+    if (base.type == NODE_IF) {
+        let node_if -> IfNode = node;
+        let cond_res -> CompileResult = compile_node(c, node_if.condition);
+        if (cond_res.type != TYPE_BOOL) {
+            throw_type_error(node_if.pos, "If condition must be a Bool.");
+        }
+        
+        // labels
+        let label_then -> String = next_label(c);
+        let label_else -> String = next_label(c);
+        let label_merge -> String = next_label(c);
+        
+        // condition branch
+        let target_else -> String = label_else;
+        if (node_if.else_body == null) {
+            target_else = label_merge;
+        }
+        
+        write(c.output_file, c.indent + "br i1 " + cond_res.reg + ", label %" + label_then + ", label %" + target_else + "\n");
+        
+        // then block
+        write(c.output_file, "\n" + label_then + ":\n");
+        compile_node(c, node_if.body);
+        write(c.output_file, c.indent + "br label %" + label_merge + "\n");
+        
+        // else
+        if (node_if.else_body != null) {
+            write(c.output_file, "\n" + label_else + ":\n");
+            compile_node(c, node_if.else_body);
+            write(c.output_file, c.indent + "br label %" + label_merge + "\n");
+        }
+
+        write(c.output_file, "\n" + label_merge + ":\n");
+        return void_result();
+    }
 
     // BlockNode
     if (base.type == NODE_BLOCK) { // {...}
@@ -78,6 +124,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             last_res = compile_node(c, curr.stmt);
             curr = curr.next;
         }
+        if (last_res == null) { return void_result();}
         return last_res;
     }
 
@@ -407,6 +454,13 @@ func compile_start(c -> Compiler) -> Void {
 
 // Output
 func compile_end(c -> Compiler, last -> CompileResult) -> Void {
+    if (last == null || last.type == TYPE_VOID) {
+        write(c.output_file, c.indent + "ret i32 0\n");
+        write(c.output_file, "}\n\n");
+        close(c.output_file);
+        return;
+    }
+
     let fmt -> String = "%d\\0A\\00";
     let type_str -> String = "i32";
 

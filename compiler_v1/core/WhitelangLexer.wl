@@ -111,6 +111,12 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "false") {
         return Token(type=TOK_FALSE, value=value, line=start_line, col=start_col);
     }
+    if (value == "if") {
+        return Token(type=TOK_IF, value=value, line=start_line, col=start_col);
+    }
+    if (value == "else") {
+        return Token(type=TOK_ELSE, value=value, line=start_line, col=start_col);
+    }
     
     return Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }
@@ -206,11 +212,42 @@ func get_next_token(l -> Lexer) -> Token {
             throw_illegal_char(l.pos, "Expected '|' after '|'.");
         }
 
-        if (char == 47) { advance(l); return Token(type=TOK_DIV,       value="/", line=char_line, col=char_col); }
+        if (char == 47) { 
+            advance(l); 
+            // '//'
+            if (l.current_char == 47) {
+                while (l.current_char != 0 && l.current_char != 10) {
+                    advance(l);
+                }
+                continue; // ignore comments
+            }
+
+            // /* ... */
+            if (l.current_char == 42) { // *
+                advance(l); // skip '*''
+                let comment_closed -> Int = 0;
+                
+                while (l.current_char != 0 && comment_closed == 0) {
+                    if (l.current_char == 42) { // find '*'
+                        advance(l);
+                        if (l.current_char == 47) { // and find '/'
+                            advance(l);
+                            comment_closed = 1;
+                        }
+                    } else {advance(l);}
+                }
+                if (comment_closed == 0) {throw_illegal_char(l.pos, "Unterminated block comment.");}
+                continue; // ignore comments
+            }
+            return Token(type=TOK_DIV, value="/", line=char_line, col=char_col); 
+        }
+
         if (char == 37) { advance(l); return Token(type=TOK_MOD,       value="%", line=char_line, col=char_col); }
         if (char == 40) { advance(l); return Token(type=TOK_LPAREN,    value="(", line=char_line, col=char_col); }
         if (char == 41) { advance(l); return Token(type=TOK_RPAREN,    value=")", line=char_line, col=char_col); }
         if (char == 59) { advance(l); return Token(type=TOK_SEMICOLON, value=";", line=char_line, col=char_col); }
+        if (char == 123) { advance(l); return Token(type=TOK_LBRACE,   value="{", line=char_line, col=char_col); }
+        if (char == 125) { advance(l); return Token(type=TOK_RBRACE,   value="}", line=char_line, col=char_col); }
 
         // Trigger visual error reporting and stop compilation
         throw_illegal_char(l.pos, "unknown character '" + char + "'. ");
