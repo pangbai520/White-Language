@@ -1,1 +1,1 @@
-*.wl = WhiteLanguage
+*.wl linguist-detectable=false
