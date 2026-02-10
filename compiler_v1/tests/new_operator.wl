@@ -1,5 +1,4 @@
-let a->Int = 5;
-let b->Float = 5.5;
+let a->Int = 2;
+let b->Int = 3;
 
-a % b;
-c++;
+a ** b;

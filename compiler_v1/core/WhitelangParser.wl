@@ -21,13 +21,27 @@ func atom(p -> Parser) -> Struct {
     // Integer literals
     if (tok.type == TOK_INT) {
         advance(p);
-        return IntNode(type=NODE_INT, tok=tok);
+        let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+        return IntNode(type=NODE_INT, tok=tok, pos=pos);
     }
 
     // Floating-point literals
     if (tok.type == TOK_FLOAT) {
         advance(p);
-        return FloatNode(type=NODE_FLOAT, tok=tok);
+        let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+        return FloatNode(type=NODE_FLOAT, tok=tok, pos=pos);
+    }
+
+    // Boolean
+    if (tok.type == TOK_TRUE) { 
+        advance(p);
+        let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+        return BooleanNode(type=NODE_BOOL, tok=tok, value=1, pos=pos); 
+    }
+    if (tok.type == TOK_FALSE) { 
+        advance(p);
+        let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+        return BooleanNode(type=NODE_BOOL, tok=tok, value=0, pos=pos); 
     }
     
     // Variable access
@@ -40,7 +54,7 @@ func atom(p -> Parser) -> Struct {
     // Parenthesized expressions
     if (tok.type == TOK_LPAREN) {
         advance(p);
-        let node -> Struct = arith_expr(p);
+        let node -> Struct = expression(p);
         
         if (p.current_tok.type != TOK_RPAREN) {
             let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
@@ -74,10 +88,52 @@ func power(p -> Parser) -> Struct {
         let op_tok -> Token = p.current_tok;
         advance(p);
         let right -> Struct = factor(p);
-        
-        return BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right);
+        let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+        return BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
     }
     
+    return left;
+}
+
+func comp_expr(p -> Parser) -> Struct {
+    // '!a+b' means '(!a)+b', not '!(a+b)' (unlike in Python)
+    let left -> Struct = arith_expr(p);
+
+    while (p.current_tok.type == TOK_EE || p.current_tok.type == TOK_NE || 
+           p.current_tok.type == TOK_LT || p.current_tok.type == TOK_GT ||
+           p.current_tok.type == TOK_LTE || p.current_tok.type == TOK_GTE) {
+        let op_tok -> Token = p.current_tok;
+        advance(p);
+        let right -> Struct = arith_expr(p);
+        let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+        left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
+    }
+    return left;
+}
+
+func logic_and(p -> Parser) -> Struct {
+    let left -> Struct = comp_expr(p);
+
+    while (p.current_tok.type == TOK_AND) {
+        let op_tok -> Token = p.current_tok;
+        advance(p);
+        let right -> Struct = comp_expr(p);
+        let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+        left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
+    }
+    return left;
+}
+
+func logic_or(p -> Parser) -> Struct {
+    let left -> Struct = logic_and(p);
+
+    while (p.current_tok.type == TOK_OR) {
+        let op_tok -> Token = p.current_tok;
+        advance(p);
+        let right -> Struct = logic_and(p);
+        let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+        left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
+    }
     return left;
 }
 
@@ -85,7 +141,7 @@ func factor(p -> Parser) -> Struct {
     let tok -> Token = p.current_tok;
     
     // -5, +3.14, --2
-    if (tok.type == TOK_PLUS || tok.type == TOK_SUB) {
+    if (tok.type == TOK_PLUS || tok.type == TOK_SUB || tok.type == TOK_NOT) {
         advance(p);
         let node -> Struct = factor(p);
         let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
@@ -93,6 +149,10 @@ func factor(p -> Parser) -> Struct {
     }
     
     return power(p);
+}
+
+func expression(p -> Parser) -> Struct {
+    return logic_or(p);
 }
 
 func term(p -> Parser) -> Struct {
@@ -103,7 +163,8 @@ func term(p -> Parser) -> Struct {
         let op_tok -> Token = p.current_tok;
         advance(p);
         let right -> Struct = factor(p);
-        left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right);
+        let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+        left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
     }
     
     return left;
@@ -117,7 +178,8 @@ func arith_expr(p -> Parser) -> Struct {
         let op_tok -> Token = p.current_tok;
         advance(p);
         let right -> Struct = term(p);
-        left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right);
+        let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+        left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
     }
     
     return left;
@@ -160,7 +222,7 @@ func var_decl(p -> Parser) -> Struct {
 
     let val_ln -> Int = p.current_tok.line;
     let val_col -> Int = p.current_tok.col;
-    let val_node -> Struct = arith_expr(p);
+    let val_node -> Struct = expression(p);
     let pos -> Position = Position(idx=0, ln=val_ln, col=val_col, text=text_ref);
     
     return VarDeclareNode(type=NODE_VAR_DECL, name_tok=name_tok, type_tok=type_tok, value=val_node, pos=pos);
@@ -170,7 +232,7 @@ func statement(p -> Parser) -> Struct {
     if (p.current_tok.type == TOK_LET) {
         return var_decl(p);
     }
-    return arith_expr(p);
+    return expression(p);
 }
 
 func parse(p -> Parser) -> Struct {

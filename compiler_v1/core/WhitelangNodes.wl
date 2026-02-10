@@ -9,24 +9,35 @@ const NODE_VAR_DECL   -> Int = 5; // let identi -> Type = ...
 const NODE_VAR_ACCESS -> Int = 6; // x
 const NODE_BLOCK      -> Int = 7; // { stmt1; stmt2; ... }
 const NODE_POSTFIX    -> Int = 8; // a++, a--
+const NODE_BOOL       -> Int = 9;
 
 struct BaseNode(type -> Int) // Used to read node type
 
 struct IntNode(
     type  -> Int,
-    tok   -> Token  // Storing token instead of just value
+    tok   -> Token,
+    pos   -> Position
 )
 
 struct FloatNode(
     type  -> Int,
-    tok   -> Token
+    tok   -> Token, 
+    pos   -> Position
+)
+
+struct BooleanNode(
+    type -> Int, 
+    tok -> Token,
+    value -> Int, // 1 for true, 0 for false
+    pos   -> Position
 )
 
 struct BinOpNode(
     type     -> Int,
     left     -> Struct,
     op_tok   -> Token,    // Token object
-    right    -> Struct
+    right    -> Struct, 
+    pos      -> Position
 )
 
 struct UnaryOpNode(
