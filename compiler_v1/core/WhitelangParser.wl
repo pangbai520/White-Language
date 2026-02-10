@@ -11,6 +11,36 @@ struct Parser(
     current_tok -> Token
 )
 
+func parse(p -> Parser) -> Struct {
+    let head -> StmtListNode = null;
+    let curr -> StmtListNode = null;
+    
+    while (p.current_tok.type != TOK_EOF) {
+        let stmt -> Struct = null;
+        
+        if (p.current_tok.type == TOK_FUNC) {
+            stmt = func_def(p);
+        } else if (p.current_tok.type == TOK_LET) {
+            stmt = var_decl(p);
+            if (p.current_tok.type == TOK_SEMICOLON) {
+                advance(p);
+            } else {
+                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                throw_invalid_syntax(err_pos, "Expected ';' after global variable declaration.");
+            }
+        } else {
+            let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+            throw_invalid_syntax(err_pos, "Top level code must be function definitions or global variables. Found: " + get_token_name(p.current_tok.type));
+        }
+        
+        let node -> StmtListNode = StmtListNode(stmt=stmt, next=null);
+        if (head == null) { head = node; curr = node; } 
+        else { curr.next = node; curr = node; }
+    }
+    
+    return BlockNode(type=NODE_BLOCK, stmts=head);
+}
+
 func advance(p -> Parser) -> Void {
     p.current_tok = get_next_token(p.lexer);
 }
@@ -63,6 +93,13 @@ func atom(p -> Parser) -> Struct {
         advance(p);
         let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
         return BooleanNode(type=NODE_BOOL, tok=tok, value=0, pos=pos); 
+    }
+
+    // String
+    if (tok.type == TOK_STR_LIT) {
+        advance(p);
+        let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+        return StringNode(type=NODE_STRING, tok=tok, pos=pos);
     }
     
     // Variable access
@@ -203,13 +240,12 @@ func logic_or(p -> Parser) -> Struct {
 func assignment(p -> Parser) -> Struct {
     let left -> Struct = logic_or(p);
 
+    // =
     if (p.current_tok.type == TOK_ASSIGN) {
         let op_tok -> Token = p.current_tok;
         advance(p); // skip '='
-        
-        // a = b = c
         let right -> Struct = assignment(p);
-
+        
         let base -> BaseNode = left;
         if (base.type == NODE_VAR_ACCESS) {
             let v_node -> VarAccessNode = left;
@@ -217,10 +253,38 @@ func assignment(p -> Parser) -> Struct {
             return VarAssignNode(type=NODE_VAR_ASSIGN, name_tok=v_node.name_tok, value=right, pos=pos);
         } else {
             let err_pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
-            throw_invalid_syntax(err_pos, "Invalid assignment target. Only variables can be assigned. ");
+            throw_invalid_syntax(err_pos, "Invalid assignment target.");
         }
     }
     
+    // += -= ...
+    let op_type -> Int = p.current_tok.type;
+    if (op_type == TOK_PLUS_ASSIGN || op_type == TOK_SUB_ASSIGN || 
+        op_type == TOK_MUL_ASSIGN || op_type == TOK_DIV_ASSIGN || 
+        op_type == TOK_MOD_ASSIGN || op_type == TOK_POW_ASSIGN) {
+        let op_tok -> Token = p.current_tok;
+        advance(p);
+        let right -> Struct = assignment(p);
+
+        let base -> BaseNode = left;
+        if (base.type != NODE_VAR_ACCESS) {
+            let err_pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+            throw_invalid_syntax(err_pos, "Invalid compound assignment target.");
+        }
+        let bin_op_type -> Int = 0;
+        if (op_type == TOK_PLUS_ASSIGN) { bin_op_type = TOK_PLUS; }
+        if (op_type == TOK_SUB_ASSIGN)  { bin_op_type = TOK_SUB; }
+        if (op_type == TOK_MUL_ASSIGN)  { bin_op_type = TOK_MUL; }
+        if (op_type == TOK_DIV_ASSIGN)  { bin_op_type = TOK_DIV; }
+        if (op_type == TOK_MOD_ASSIGN)  { bin_op_type = TOK_MOD; }
+        if (op_type == TOK_POW_ASSIGN)  { bin_op_type = TOK_POW; }
+        let bin_tok -> Token = Token(type=bin_op_type, value="compound_op", line=op_tok.line, col=op_tok.col);
+        let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+        let bin_node -> BinOpNode = BinOpNode(type=NODE_BINOP, left=left, op_tok=bin_tok, right=right, pos=pos);
+        let v_node -> VarAccessNode = left;
+        return VarAssignNode(type=NODE_VAR_ASSIGN, name_tok=v_node.name_tok, value=bin_node, pos=pos);
+    }
+
     return left;
 }
 
@@ -332,7 +396,7 @@ func parse_block(p -> Parser) -> Struct {
         let base -> BaseNode = stmt;
         let is_compound -> Bool = false;
 
-        if (base.type == NODE_IF || base.type == NODE_BLOCK || base.type == NODE_WHILE) {
+        if (base.type == NODE_IF || base.type == NODE_BLOCK || base.type == NODE_WHILE || base.type == NODE_FOR) {
             is_compound = true;
         }
 
@@ -464,34 +528,126 @@ func statement(p -> Parser) -> Struct {
     if (p.current_tok.type == TOK_CONTINUE) { return continue_stmt(p); }
     if (p.current_tok.type == TOK_FOR) { return for_stmt(p); }
 
+    if (p.current_tok.type == TOK_RETURN) { return return_stmt(p); }
+
     return expression(p);
 }
 
-func parse(p -> Parser) -> Struct {
-    let head -> StmtListNode = null;
-    let curr -> StmtListNode = null;
-    
-    while (p.current_tok.type != TOK_EOF) {
-        let stmt -> Struct = statement(p);
-        let base -> BaseNode = stmt;
-        let is_compound -> Bool = false;
-        if (base.type == NODE_IF || base.type == NODE_BLOCK || base.type == NODE_WHILE || base.type == NODE_FOR) {
-            is_compound = true;
-        }
 
-        if (p.current_tok.type == TOK_SEMICOLON) {
-            advance(p);
-        } else {
-            if !is_compound {
-                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
-                throw_invalid_syntax(err_pos, "Expected ';' after statement. ");
-            }
-        }
-
-        let node -> StmtListNode = StmtListNode(stmt=stmt, next=null);
-        if (head == null) { head = node; curr = node; } 
-        else { curr.next = node; curr = node; }
+func parse_params(p -> Parser) -> Struct {
+    if (p.current_tok.type == TOK_RPAREN) {
+        return null;
     }
 
-    return BlockNode(type=NODE_BLOCK, stmts=head);
+    let parse_one_param -> Struct = null;
+    
+    let head -> ParamListNode = null;
+    let curr -> ParamListNode = null;
+
+    if (p.current_tok.type != TOK_IDENTIFIER) {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected parameter name.");
+    }
+    let name_tok -> Token = p.current_tok;
+    advance(p);
+
+    if (p.current_tok.type != TOK_TYPE_ARROW) {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected '->' after parameter name.");
+    }
+    advance(p);
+    
+    let type_tok -> Token = p.current_tok;
+    let tt -> Int = p.current_tok.type;
+    if (tt == TOK_T_INT || tt == TOK_T_FLOAT || tt == TOK_T_STRING || tt == TOK_T_BOOL || tt == TOK_T_VOID) {
+        advance(p);
+    } else {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected type in parameter definition.");
+    }
+    
+    let pos -> Position = Position(idx=0, ln=name_tok.line, col=name_tok.col, text=p.lexer.text);
+    let p_node -> ParamNode = ParamNode(type=NODE_PARAM, name_tok=name_tok, type_tok=type_tok, pos=pos);
+    
+    head = ParamListNode(param=p_node, next=null);
+    curr = head;
+    
+    while (p.current_tok.type == TOK_COMMA) {
+        advance(p); // skip ','
+        
+        let n_tok -> Token = p.current_tok;
+        advance(p); // name
+        advance(p); // ->
+        let t_tok -> Token = p.current_tok;
+        advance(p); // type
+        
+        let next_p -> ParamNode = ParamNode(type=NODE_PARAM, name_tok=n_tok, type_tok=t_tok, pos=pos);
+        let list_node -> ParamListNode = ParamListNode(param=next_p, next=null);
+        curr.next = list_node;
+        curr = list_node;
+    }
+    
+    return head;
+}
+
+func func_def(p -> Parser) -> Struct {
+    let func_tok -> Token = p.current_tok;
+    advance(p); // skip 'func'
+    
+    if (p.current_tok.type != TOK_IDENTIFIER) {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected function name.");
+    }
+    let name_tok -> Token = p.current_tok;
+    advance(p);
+    
+    // ( params )
+    if (p.current_tok.type != TOK_LPAREN) {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected '(' after function name.");
+    }
+    advance(p); // skip '('
+    
+    let params -> Struct = parse_params(p);
+    
+    if (p.current_tok.type != TOK_RPAREN) {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected ')' after parameters.");
+    }
+    advance(p); // skip ')'
+    
+    // -> RetType
+    if (p.current_tok.type != TOK_TYPE_ARROW) {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected '->' for return type.");
+    }
+    advance(p);
+    
+    let ret_tok -> Token = p.current_tok;
+    let tt -> Int = p.current_tok.type;
+    if (tt == TOK_T_INT || tt == TOK_T_FLOAT || tt == TOK_T_STRING || tt == TOK_T_BOOL || tt == TOK_T_VOID) {
+        advance(p);
+    } else {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected return type.");
+    }
+    
+    // Body { ... }
+    let body -> Struct = parse_block(p);
+    
+    let pos -> Position = Position(idx=0, ln=func_tok.line, col=func_tok.col, text=p.lexer.text);
+    return FunctionDefNode(type=NODE_FUNC_DEF, name_tok=name_tok, params=params, ret_type_tok=ret_tok, body=body, pos=pos);
+}
+
+func return_stmt(p -> Parser) -> Struct {
+    let ret_tok -> Token = p.current_tok;
+    advance(p); // skip 'return'
+    
+    let val -> Struct = null;
+    if (p.current_tok.type != TOK_SEMICOLON) {
+        val = expression(p);
+    }
+    
+    let pos -> Position = Position(idx=0, ln=ret_tok.line, col=ret_tok.col, text=p.lexer.text);
+    return ReturnNode(type=NODE_RETURN, value=val, pos=pos);
 }

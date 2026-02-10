@@ -47,6 +47,17 @@ const TOK_CONTINUE      -> Int = 40; // continue    but why am i writing so many
 const TOK_FOR           -> Int = 41;
 
 const TOK_COMMA         -> Int = 42;
+const TOK_FUNC          -> Int = 43; // func
+const TOK_RETURN        -> Int = 44; // return
+// These things are fucking insane, absolutely have to make enum [TODO]
+const TOK_STR_LIT       -> Int = 45;
+
+const TOK_PLUS_ASSIGN   -> Int = 46; // +=
+const TOK_SUB_ASSIGN    -> Int = 47; // -=
+const TOK_MUL_ASSIGN    -> Int = 48; // *=
+const TOK_DIV_ASSIGN    -> Int = 49; // /=
+const TOK_MOD_ASSIGN    -> Int = 50; // %=
+const TOK_POW_ASSIGN    -> Int = 51; // **=
 
 
 func get_token_name(type -> Int) -> String {
@@ -89,7 +100,16 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_FOR)      { return "for"; }
 
     if (type == TOK_COMMA)    { return ","; }
+    if (type == TOK_FUNC)       { return "func"; }
+    if (type == TOK_RETURN)     { return "return"; }
+    if (type == TOK_STR_LIT)    { return "STRING_LITERAL"; }
 
+    if (type == TOK_PLUS_ASSIGN) { return "+="; }
+    if (type == TOK_SUB_ASSIGN)  { return "-="; }
+    if (type == TOK_MUL_ASSIGN)  { return "*="; }
+    if (type == TOK_DIV_ASSIGN)  { return "/="; }
+    if (type == TOK_MOD_ASSIGN)  { return "%="; }
+    if (type == TOK_POW_ASSIGN)  { return "**="; }
 
     return "EOF";
 }

@@ -41,6 +41,33 @@ func advance(l -> Lexer) -> Void {
     }
 }
 
+func get_string(l -> Lexer) -> Token {
+    let start_ln -> Int = l.pos.ln;
+    let start_col -> Int = l.pos.col;
+
+    advance(l); // skip opening "
+    
+    let start_idx -> Int = l.pos.idx;
+
+    while (l.current_char != 34 && l.current_char != 0) { // " and \
+        if (l.current_char == 92) { 
+            advance(l); // skip \
+            if (l.current_char != 0) { advance(l); }
+        } else {
+            advance(l);
+        }
+    }
+    
+    let content -> String = l.text.slice(start_idx, l.pos.idx);
+    
+    if (l.current_char == 34) {
+        advance(l); // skip closing "
+        return Token(type=TOK_STR_LIT, value=content, line=start_ln, col=start_col);
+    }
+    
+    throw_illegal_char(l.pos, "Unterminated string literal.");
+    return Token(type=TOK_EOF, value="", line=0, col=0);
+}
 
 func get_number(l -> Lexer) -> Token {
     let start_line -> Int = l.pos.ln;
@@ -89,6 +116,8 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "break") { return Token(type=TOK_BREAK, value=value, line=start_line, col=start_col); }
     if (value == "continue") { return Token(type=TOK_CONTINUE, value=value, line=start_line, col=start_col); }
     if (value == "for")      { return Token(type=TOK_FOR, value=value, line=start_line, col=start_col); }
+    if (value == "func")     { return Token(type=TOK_FUNC, value=value, line=start_line, col=start_col); }
+    if (value == "return")   { return Token(type=TOK_RETURN, value=value, line=start_line, col=start_col); }
     
     return Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }
@@ -97,19 +126,24 @@ func get_identifier(l -> Lexer) -> Token {
 func handle_slash(l -> Lexer) -> Token {
     let line -> Int = l.pos.ln;
     let col  -> Int = l.pos.col;
-    advance(l);
+    advance(l); // skip first /
 
+    // /=
+    if (l.current_char == 61) {
+        advance(l);
+        return Token(type=TOK_DIV_ASSIGN, value="/=", line=line, col=col);
+    }
+
+    // //
     if (l.current_char == 47) {
-        while (l.current_char != 0 && l.current_char != 10) {
-            advance(l);
-        }
+        while (l.current_char != 0 && l.current_char != 10) { advance(l); }
         return null;
     }
 
+    // /*  */
     if (l.current_char == 42) {
         advance(l);
         let comment_closed -> Int = 0;
-        
         while (l.current_char != 0 && comment_closed == 0) {
             if (l.current_char == 42) {
                 advance(l);
@@ -117,17 +151,13 @@ func handle_slash(l -> Lexer) -> Token {
                     advance(l);
                     comment_closed = 1;
                 }
-            } else {
-                advance(l);
-            }
+            } else { advance(l); }
         }
-        if (comment_closed == 0) {
-            throw_illegal_char(l.pos, "Unterminated block comment.");
-        }
+        if (comment_closed == 0) { throw_illegal_char(l.pos, "Unterminated block comment."); }
         return null;
     }
 
-    return Token(type=TOK_DIV, value="/", line=line, col=col); 
+    return Token(type=TOK_DIV, value="/", line=line, col=col);
 }
 
 
@@ -150,34 +180,50 @@ func get_next_token(l -> Lexer) -> Token {
         let char_line -> Int  = l.pos.ln;
         let char_col  -> Int  = l.pos.col;
 
-        // /, //, /*
+        if (char == 34) {
+            return get_string(l);
+        }
+
+        // + and ++ and +=
+        if (char == 43) { 
+            advance(l);
+            if (l.current_char == 61) { advance(l); return Token(type=TOK_PLUS_ASSIGN, value="+=", line=char_line, col=char_col); } // +=
+            if (l.current_char == 43) { advance(l); return Token(type=TOK_INC, value="++", line=char_line, col=char_col); } // ++
+            return Token(type=TOK_PLUS, value="+", line=char_line, col=char_col); 
+        }
+
+        // - and -- and -> and -=
+        if (char == 45) { 
+            advance(l); 
+            if (l.current_char == 61) { advance(l); return Token(type=TOK_SUB_ASSIGN, value="-=", line=char_line, col=char_col); } // -=
+            if (l.current_char == 62) { advance(l); return Token(type=TOK_TYPE_ARROW, value="->", line=char_line, col=char_col); } // ->
+            if (l.current_char == 45) { advance(l); return Token(type=TOK_DEC, value="--", line=char_line, col=char_col); } // --
+            return Token(type=TOK_SUB, value="-", line=char_line, col=char_col); 
+        }
+
+        // * *= ** **=
+        if (char == 42) { 
+            advance(l); 
+            if (l.current_char == 61) { advance(l); return Token(type=TOK_MUL_ASSIGN, value="*=", line=char_line, col=char_col); } // *=
+            if (l.current_char == 42) { 
+                advance(l); 
+                if (l.current_char == 61) { advance(l); return Token(type=TOK_POW_ASSIGN, value="**=", line=char_line, col=char_col); } // **=
+                return Token(type=TOK_POW, value="**", line=char_line, col=char_col); // **
+            }
+            return Token(type=TOK_MUL, value="*", line=char_line, col=char_col); 
+        }
+
+        // / /= // /*
         if (char == 47) {
             let tok -> Token = handle_slash(l);
             if (tok == null) { continue; }
             return tok;
         }
 
-
-        // + and ++
-        if (char == 43) { 
-            advance(l);
-            if (l.current_char == 43) { advance(l); return Token(type=TOK_INC, value="++", line=char_line, col=char_col); }
-            return Token(type=TOK_PLUS, value="+", line=char_line, col=char_col); 
-        }
-
-        // - and -- and ->
-        if (char == 45) { 
+        if (char == 37) { 
             advance(l); 
-            if (l.current_char == 62) { advance(l); return Token(type=TOK_TYPE_ARROW, value="->", line=char_line, col=char_col); }
-            if (l.current_char == 45) { advance(l); return Token(type=TOK_DEC, value="--", line=char_line, col=char_col); }
-            return Token(type=TOK_SUB, value="-", line=char_line, col=char_col); 
-        }
-
-        // * and **
-        if (char == 42) { 
-            advance(l); 
-            if (l.current_char == 42) { advance(l); return Token(type=TOK_POW, value="**", line=char_line, col=char_col); }
-            return Token(type=TOK_MUL, value="*", line=char_line, col=char_col); 
+            if (l.current_char == 61) { advance(l); return Token(type=TOK_MOD_ASSIGN, value="%=", line=char_line, col=char_col); } // %=
+            return Token(type=TOK_MOD, value="%", line=char_line, col=char_col); 
         }
 
         // ! and !=
@@ -223,7 +269,6 @@ func get_next_token(l -> Lexer) -> Token {
         }
 
         // Single char tokens
-        if (char == 37) { advance(l);  return Token(type=TOK_MOD,      value="%", line=char_line, col=char_col); }
         if (char == 40) { advance(l);  return Token(type=TOK_LPAREN,   value="(", line=char_line, col=char_col); }
         if (char == 41) { advance(l);  return Token(type=TOK_RPAREN,   value=")", line=char_line, col=char_col); }
         if (char == 59) { advance(l);  return Token(type=TOK_SEMICOLON,value=";", line=char_line, col=char_col); }

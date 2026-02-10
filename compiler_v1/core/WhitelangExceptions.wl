@@ -86,3 +86,8 @@ func throw_type_error(pos -> Position, details -> String) -> Void {
 func throw_missing_initializer(pos -> Position, details -> String) -> Void {
     report_error(pos, "MissingInitializer", details);
 }
+
+func throw_missing_main_function() -> Void {
+    builtin.print("MissingMainFunction: No 'main' function defined.");
+    exit(1);
+}

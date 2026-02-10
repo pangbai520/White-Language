@@ -17,6 +17,11 @@ const NODE_BREAK      -> Int = 13;
 const NODE_CONTINUE   -> Int = 14;
 const NODE_FOR        -> Int = 15;
 const NODE_CALL       -> Int = 16; // func()
+const NODE_FUNC_DEF   -> Int = 17; // func foo
+const NODE_RETURN     -> Int = 18; // return ...
+const NODE_PARAM      -> Int = 19; // func foo(...)
+const NODE_STRING     -> Int = 20;
+
 
 struct BaseNode(type -> Int) // Used to read node type
 
@@ -37,6 +42,12 @@ struct BooleanNode(
     tok -> Token,
     value -> Int, // 1 for true, 0 for false
     pos   -> Position
+)
+
+struct StringNode(
+    type -> Int,    // NODE_STRING
+    tok  -> Token,  // TOK_STR_LIT
+    pos  -> Position
 )
 
 struct BinOpNode(
@@ -136,4 +147,35 @@ struct CallNode(
 struct ArgNode(
     val  -> Struct, // expression
     next -> Struct  // next parameter
+)
+
+struct ParamNode(
+    type     -> Int,    // NODE_PARAM
+    name_tok -> Token,
+    type_tok -> Token,
+    pos      -> Position
+)
+
+
+struct ParamListNode(
+    param -> Struct, // ParamNode
+    next  -> Struct
+)
+
+
+// func name(params...) -> RetType { body }
+struct FunctionDefNode(
+    type     -> Int,    // NODE_FUNC_DEF
+    name_tok -> Token,
+    params   -> Struct, // ParamListNode
+    ret_type_tok -> Token,
+    body     -> Struct,
+    pos      -> Position
+)
+
+
+struct ReturnNode(
+    type  -> Int,       // NODE_RETURN
+    value -> Struct,
+    pos   -> Position
 )
