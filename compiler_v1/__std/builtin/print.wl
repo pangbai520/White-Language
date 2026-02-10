@@ -1,4 +1,8 @@
 // std/builtin/print.wl
+//
+// Standard print Library.
+// This file implements multiple print_X variants to allow print to work with arbitrary objects.
+
 extern func printf(fmt -> String, ...) -> Int from "C";
 
 func print_i(n -> Int) -> Void {

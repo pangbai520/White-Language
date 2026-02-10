@@ -3,6 +3,8 @@ import "builtin"
 import "WhitelangTokens.wl"
 import "WhitelangExceptions.wl"
 
+extern func strcmp(s1 -> String, s2 -> String) -> Int from "C";
+
 struct Lexer(
     text -> String,
     pos  -> Position, // Using Position object for tracking
@@ -17,6 +19,12 @@ func is_space(c -> Byte) -> Bool {
 func is_digit(c -> Byte) -> Bool {
     let b -> Int = c;
     return (b >= 48) && (b <= 57); // 0~9
+}
+
+func is_alpha(c -> Byte) -> Bool {
+    // [TODO]: Future support for Chinese variable names
+    let b -> Int = c;
+    return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b == 95); // a~z, A~Z, _
 }
 
 func new_lexer(text -> String) -> Lexer {
@@ -65,6 +73,39 @@ func get_number(l -> Lexer) -> Token {
     return Token(type=TOK_INT, value=value, line=start_line, col=start_col);
 }
 
+func get_identifier(l -> Lexer) -> Token {
+    let start_line -> Int = l.pos.ln;
+    let start_col  -> Int = l.pos.col;
+    let start_pos  -> Int = l.pos.idx;
+
+    while (l.current_char != 0 && (is_alpha(l.current_char) || is_digit(l.current_char))) {
+        advance(l);
+    }
+
+    let value -> String = l.text.slice(start_pos, l.pos.idx);
+
+    if (value == "let") {
+        return Token(type=TOK_LET, value=value, line=start_line, col=start_col);
+    }
+    if (value == "Int") {
+        return Token(type=TOK_T_INT, value=value, line=start_line, col=start_col);
+    }
+    if (value == "Float") {
+        return Token(type=TOK_T_FLOAT, value=value, line=start_line, col=start_col);
+    }
+    if (value == "String") {
+        return Token(type=TOK_T_STRING, value=value, line=start_line, col=start_col);
+    }
+    if (value == "Bool") {
+        return Token(type=TOK_T_BOOL, value=value, line=start_line, col=start_col);
+    }
+    if (value == "Void") {
+        return Token(type=TOK_T_VOID, value=value, line=start_line, col=start_col);
+    }
+    
+    return Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
+}
+
 func get_next_token(l -> Lexer) -> Token {
     while (l.current_char != 0) {
         if (is_space(l.current_char)) {
@@ -76,20 +117,33 @@ func get_next_token(l -> Lexer) -> Token {
             return get_number(l);
         }
 
+        if (is_alpha(l.current_char)) {
+            return get_identifier(l);
+        }
+
         let char   -> Byte = l.current_char;
         let c_line -> Int = l.pos.ln;
         let c_col  -> Int = l.pos.col;
 
         // Operator handling
-        if (char == 43) { advance(l); return Token(type=TOK_PLUS,   value="+", line=c_line, col=c_col); }
-        if (char == 45) { advance(l); return Token(type=TOK_SUB,    value="-", line=c_line, col=c_col); }
+        if (char == 43) { advance(l); return Token(type=TOK_PLUS, value="+", line=c_line, col=c_col); }
+        if (char == 45) { 
+            advance(l); 
+            if (l.current_char == 62) {
+                advance(l);
+                return Token(type=TOK_TYPE_ARROW, value="->", line=c_line, col=c_col);
+            }
+            return Token(type=TOK_SUB, value="-", line=c_line, col=c_col); 
+        }
         if (char == 42) { advance(l); return Token(type=TOK_MUL,    value="*", line=c_line, col=c_col); }
         if (char == 47) { advance(l); return Token(type=TOK_DIV,    value="/", line=c_line, col=c_col); }
         if (char == 40) { advance(l); return Token(type=TOK_LPAREN, value="(", line=c_line, col=c_col); }
         if (char == 41) { advance(l); return Token(type=TOK_RPAREN, value=")", line=c_line, col=c_col); }
+        if (char == 61) { advance(l); return Token(type=TOK_ASSIGN, value="=", line=c_line, col=c_col); }
+        if (char == 59) { advance(l); return Token(type=TOK_SEMICOLON, value=";", line=c_line, col=c_col); }
 
         // Trigger visual error reporting and stop compilation
-        throw_illegal_char(l.pos, "unknow character '" + char + "'");
+        throw_illegal_char(l.pos, "unknow character '" + char + "'. ");
     }
 
     return Token(type=TOK_EOF, value="", line=l.pos.ln, col=l.pos.col);

@@ -1,9 +1,10 @@
 // core/WhitelangCompiler.wl
-
 import "file_io"
 import "map"
 import "WhitelangTokens.wl"
 import "WhitelangNodes.wl"
+import "WhitelangExceptions.wl"
+
 
 // Type constants for internal tracking
 const TYPE_INT   -> Int = 1;
@@ -13,6 +14,11 @@ const TYPE_FLOAT -> Int = 2;
 struct CompileResult(
     reg  -> String,
     type -> Int
+)
+
+struct SymbolInfo(
+    reg  -> String, // Pointer register (e.g.: %t1)
+    type -> Int     // Variable type
 )
 
 struct Compiler(
@@ -54,6 +60,78 @@ func promote_to_float(c -> Compiler, res -> CompileResult) -> CompileResult {
 func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     let base -> BaseNode = node;
 
+    if (base.type == NODE_BLOCK) { // {...}
+        let b -> BlockNode = node;
+        let curr -> StmtListNode = b.stmts;
+        let last_res -> CompileResult = null;
+        
+        while (curr != null) {
+            last_res = compile_node(c, curr.stmt);
+            curr = curr.next;
+        }
+        return last_res;
+    }
+
+    if (base.type == NODE_VAR_DECL) {
+        let v -> VarDeclareNode = node;
+        
+        // llvm type mapping
+        let llvm_ty_str -> String = "";
+        let target_type_id -> Int = 0;
+        if (v.var_type == "Int") {
+            llvm_ty_str = "i32";
+            target_type_id = TYPE_INT;
+        } else if (v.var_type == "Float") {
+            llvm_ty_str = "double";
+            target_type_id = TYPE_FLOAT;
+        } else {
+            throw_type_error(v.pos, "Unknown or unsupported type '" + v.var_type + "' in compiler backend.");
+        }
+        
+        // allocate stack memory
+        let ptr_reg -> String = next_reg(c);
+        write(c.output_file, c.indent + ptr_reg + " = alloca " + llvm_ty_str + "\n");
+        
+        // r-value
+        let val_res -> CompileResult = compile_node(c, v.value);
+        
+        // type checking
+        if (target_type_id != val_res.type) {
+            let type_name_got -> String = "Int";
+            if (val_res.type == TYPE_FLOAT) { type_name_got = "Float"; }
+            throw_type_error(v.pos, "Cannot assign type '" + type_name_got + "' to variable of type '" + v.var_type + "'. ");
+        }
+
+        // store
+        write(c.output_file, c.indent + "store " + llvm_ty_str + " " + val_res.reg + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
+        
+        // register to symbol table
+        let info -> SymbolInfo = SymbolInfo(reg=ptr_reg, type=target_type_id);
+        map_put(c.symbol_table, v.name, info);
+        
+        return val_res; // assigned value
+    }
+
+    if (base.type == NODE_VAR_ACCESS) {
+        let v -> VarAccessNode = node;
+        
+        // LUT
+        let info -> SymbolInfo = map_get(c.symbol_table, v.name);
+        
+        if (info == null) {
+            throw_name_error(v.pos, "Undefined variable '" + v.name + "'. ");
+        }
+        
+        // load value
+        let val_reg -> String = next_reg(c);
+        let llvm_ty_str -> String = "i32";
+        if (info.type == TYPE_FLOAT) { llvm_ty_str = "double"; }
+        
+        write(c.output_file, c.indent + val_reg + " = load " + llvm_ty_str + ", " + llvm_ty_str + "* " + info.reg + "\n");
+        
+        return CompileResult(reg=val_reg, type=info.type);
+    }
+
     // Int
     if (base.type == NODE_INT) {
         let n -> IntNode = node;
@@ -63,11 +141,10 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     // Float
     if (base.type == NODE_FLOAT) {
         let n -> FloatNode = node;
-        // Note: LLVM requires decimal point in float constants
         return CompileResult(reg=n.value, type=TYPE_FLOAT);
     }
 
-    // Unary op (Negative numbers)
+    // Unary op
     if (base.type == NODE_UNARYOP) {
         let u -> UnaryOpNode = node;
         let operand -> CompileResult = compile_node(c, u.node);

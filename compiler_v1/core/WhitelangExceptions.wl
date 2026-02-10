@@ -75,6 +75,10 @@ func throw_invalid_syntax(pos -> Position, details -> String) -> Void {
     report_error(pos, "InvalidSyntax", details);
 }
 
-func throw_name_error(pos->Position, details -> String) -> Void {
+func throw_name_error(pos -> Position, details -> String) -> Void {
     report_error(pos, "NameError", details);
+}
+
+func throw_type_error(pos -> Position, details -> String) -> Void {
+    report_error(pos, "TypeError", details);
 }
