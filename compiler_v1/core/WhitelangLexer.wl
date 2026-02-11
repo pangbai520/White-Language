@@ -44,30 +44,46 @@ func advance(l -> Lexer) -> Void {
 func get_string(l -> Lexer) -> Token {
     let start_ln -> Int = l.pos.ln;
     let start_col -> Int = l.pos.col;
-
+    
     advance(l); // skip opening "
     
-    let start_idx -> Int = l.pos.idx;
-
-    while (l.current_char != 34 && l.current_char != 0) { // " and \
-        if (l.current_char == 92) { 
-            advance(l); // skip \
-            if (l.current_char != 0) { advance(l); }
+    let result -> String = "";
+    
+    // " and \
+    while (l.current_char != 34 && l.current_char != 0) {
+        if (l.current_char == 92) { // \
+            advance(l); 
+            if (l.current_char == 110) { // 'n' -> newline
+                result = result + "\n";
+            } else if (l.current_char == 116) { // 't' -> tab
+                result = result + "\t";
+            } else if (l.current_char == 114) { // 'r' -> return
+                result = result + "\r";
+            } else if (l.current_char == 34) { // '"' -> "
+                result = result + "\"";
+            } else if (l.current_char == 92) { // '\' -> \
+                result = result + "\\";
+            } else {
+                let idx -> Int = l.pos.idx;
+                result = result + l.text.slice(idx, idx + 1); 
+            }
+            advance(l); // consume the escaped char
         } else {
+            let idx -> Int = l.pos.idx;
+            result = result + l.text.slice(idx, idx + 1);
             advance(l);
         }
     }
     
-    let content -> String = l.text.slice(start_idx, l.pos.idx);
-    
     if (l.current_char == 34) {
         advance(l); // skip closing "
-        return Token(type=TOK_STR_LIT, value=content, line=start_ln, col=start_col);
+        return Token(type=TOK_STR_LIT, value=result, line=start_ln, col=start_col);
     }
     
-    throw_illegal_char(l.pos, "Unterminated string literal.");
+    throw_illegal_char(l.pos, "Unterminated string literal. ");
     return Token(type=TOK_EOF, value="", line=0, col=0);
 }
+
 
 func get_number(l -> Lexer) -> Token {
     let start_line -> Int = l.pos.ln;

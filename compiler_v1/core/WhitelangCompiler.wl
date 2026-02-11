@@ -1,4 +1,5 @@
 // core/WhitelangCompiler.wl
+import "builtin"
 import "file_io"
 import "map"
 import "WhitelangTokens.wl"
@@ -142,6 +143,31 @@ func find_symbol(c -> Compiler, name -> String) -> SymbolInfo {
     return map_get(c.global_symbol_table, name);
 }
 
+func string_escape(s -> String) -> String {
+    let res -> String = "";
+    let i -> Int = 0;
+    let len -> Int = s.length();
+    
+    while (i < len) {
+        let b -> Byte = s[i];
+        let code -> Int = b;
+        
+        if (code == 34) { // "
+            res = res + "\\22";
+        } else if (code == 92) { // \
+            res = res + "\\5C";
+        } else if (code == 10) { // \n
+            res = res + "\\0A";
+        } else if (code == 13) { // \r
+            res = res + "\\0D";
+        } else {
+            res = res + s.slice(i, i + 1);
+        }
+        i = i + 1;
+    }
+    return res;
+}
+
 
 func enter_scope(c -> Compiler) -> Void {
     let new_scope -> Scope = Scope(table=map_new(32), parent=c.symbol_table);
@@ -250,6 +276,10 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
 
     // local var
     let ptr_reg -> String = next_reg(c);
+    // FIXME: Potential STACK OVERFLOW
+    // Current implementation generates 'alloca' inside the loop body
+    // This causes stack space to grow on every iteration
+    // TODO: Move alloca to the function's entry block
     write(c.output_file, c.indent + ptr_reg + " = alloca " + llvm_ty_str + "\n");
     
     if (node.value != null) {
@@ -400,10 +430,12 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     while (curr_p != null) {
         let p -> ParamNode = curr_p.param;
         let p_type -> String = p.type_tok.value;
-        let p_id -> Int = TYPE_INT;
-        if (p_type == "Float") { p_id = TYPE_FLOAT; }
-        if (p_type == "Bool")  { p_id = TYPE_BOOL; }
-        if (p_type == "String") { p_id = TYPE_STRING; }
+        let p_id -> Int = 0; // a invalid value
+        if (p_type == "Int") { p_id = TYPE_INT; }
+        else if (p_type == "Float") { p_id = TYPE_FLOAT; }
+        else if (p_type == "Bool")  { p_id = TYPE_BOOL; }
+        else if (p_type == "String") { p_id = TYPE_STRING; }
+        else { throw_type_error(p.pos, "Unknown parameter type '" + p_type + "'. "); }
         
         let t_node -> TypeListNode = TypeListNode(type=p_id, next=null);
         if (arg_types_head == null) { arg_types_head = t_node; arg_types_curr = t_node; }
@@ -421,11 +453,12 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     while (curr != null) {
         let p -> ParamNode = curr.param;
         let p_type -> String = p.type_tok.value;
-        let p_llvm_type -> String = "i32";
+        let p_llvm_type -> String = "";
         if (p_type == "Int") { p_llvm_type = "i32"; }
-        if (p_type == "Float") { p_llvm_type = "double"; }
-        if (p_type == "Bool") { p_llvm_type = "i1"; }
-        if (p_type == "String") { p_llvm_type = "i8*"; }
+        else if (p_type == "Float") { p_llvm_type = "double"; }
+        else if (p_type == "Bool") { p_llvm_type = "i1"; }
+        else if (p_type == "String") { p_llvm_type = "i8*"; }
+        else { throw_type_error(p.pos, "Unknown parameter type '" + p_type + "'. "); }
         
         if (arg_idx > 0) { params_str = params_str + ", "; }
         params_str = params_str + p_llvm_type + " %arg" + arg_idx;
@@ -450,11 +483,13 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         let p_name -> String = p.name_tok.value;
         let p_type -> String = p.type_tok.value;
         
-        let target_type_id -> Int = TYPE_INT;
-        let llvm_ty -> String = "i32";
-        if (p_type == "Float") { target_type_id = TYPE_FLOAT; llvm_ty = "double"; }
-        if (p_type == "Bool")  { target_type_id = TYPE_BOOL;  llvm_ty = "i1"; }
-        if (p_type == "String") { target_type_id = TYPE_STRING; llvm_ty = "i8*"; }
+        let target_type_id -> Int = 0;
+        let llvm_ty -> String = "";
+        if (p_type == "Int") { target_type_id = TYPE_INT; llvm_ty = "i32"; }
+        else if (p_type == "Float") { target_type_id = TYPE_FLOAT; llvm_ty = "double"; }
+        else if (p_type == "Bool")  { target_type_id = TYPE_BOOL;  llvm_ty = "i1"; }
+        else if (p_type == "String") { target_type_id = TYPE_STRING; llvm_ty = "i8*"; }
+        else { throw_type_error(p.pos, "Unknown parameter type '" + p_type + "'. "); }
         
         let addr_reg -> String = next_reg(c); 
         write(c.output_file, c.indent + addr_reg + " = alloca " + llvm_ty + "\n");
@@ -521,16 +556,101 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
         write(c.output_file, c.indent + "ret void\n");
     }
     
-    let dead -> String = next_label(c);
-    write(c.output_file, "\n" + dead + ": ; Unreachable\n");
-    
     return void_result();
 }
 
 func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
     let left -> CompileResult = compile_node(c, node.left);
-    let right -> CompileResult = compile_node(c, node.right);
     let op_type -> Int = node.op_tok.type; 
+
+    if (op_type == TOK_AND || op_type == TOK_OR) {
+        if (left.type != TYPE_BOOL) {
+            throw_type_error(node.pos, "Logic operators '&&' and '||' require Bool operands. ");
+        }
+        let label_rhs -> String = next_label(c);
+        let label_merge -> String = next_label(c);
+        let res_ptr -> String = next_reg(c);
+        write(c.output_file, c.indent + res_ptr + " = alloca i1\n");
+        write(c.output_file, c.indent + "store i1 " + left.reg + ", i1* " + res_ptr + "\n");
+        
+        if (op_type == TOK_AND) {
+            write(c.output_file, c.indent + "br i1 " + left.reg + ", label %" + label_rhs + ", label %" + label_merge + "\n");
+        } else {
+            write(c.output_file, c.indent + "br i1 " + left.reg + ", label %" + label_merge + ", label %" + label_rhs + "\n");
+        }
+
+        write(c.output_file, "\n" + label_rhs + ":\n");
+        let right_res -> CompileResult = compile_node(c, node.right);
+        if (right_res.type != TYPE_BOOL) { throw_type_error(node.pos, "Right operand must be Bool."); }
+        write(c.output_file, c.indent + "store i1 " + right_res.reg + ", i1* " + res_ptr + "\n");
+        write(c.output_file, c.indent + "br label %" + label_merge + "\n");
+
+        write(c.output_file, "\n" + label_merge + ":\n");
+        let final_reg -> String = next_reg(c);
+        write(c.output_file, c.indent + final_reg + " = load i1, i1* " + res_ptr + "\n");
+        return CompileResult(reg=final_reg, type=TYPE_BOOL);
+    }
+
+    let right -> CompileResult = compile_node(c, node.right);
+
+    // String
+    if (left.type == TYPE_STRING || right.type == TYPE_STRING) {
+        if (left.type != right.type) {
+            throw_type_error(node.pos, "Cannot operate on String with other types.");
+        }
+
+        if (op_type == TOK_PLUS) {
+            // get str length
+            let len1 -> String = next_reg(c);
+            write(c.output_file, c.indent + len1 + " = call i32 @strlen(i8* " + left.reg + ")\n");
+            
+            let len2 -> String = next_reg(c);
+            write(c.output_file, c.indent + len2 + " = call i32 @strlen(i8* " + right.reg + ")\n");
+            
+            // total length
+            let sum_len -> String = next_reg(c);
+            write(c.output_file, c.indent + sum_len + " = add i32 " + len1 + ", " + len2 + "\n");
+            
+            // for \0
+            let total_size -> String = next_reg(c);
+            write(c.output_file, c.indent + total_size + " = add i32 " + sum_len + ", 1\n");
+            
+            // malloc(total_size)
+            let new_str_ptr -> String = next_reg(c);
+            write(c.output_file, c.indent + new_str_ptr + " = call i8* @malloc(i32 " + total_size + ")\n");
+            
+            // strcpy(new_ptr, left) -> null
+            let ign1 -> String = next_reg(c);
+            write(c.output_file, c.indent + ign1 + " = call i8* @strcpy(i8* " + new_str_ptr + ", i8* " + left.reg + ")\n");
+            
+            // strcat(new_ptr, right) -> null
+            let ign2 -> String = next_reg(c);
+            write(c.output_file, c.indent + ign2 + " = call i8* @strcat(i8* " + new_str_ptr + ", i8* " + right.reg + ")\n");
+            
+            return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
+        }
+
+
+        let allowed -> Int = 0;
+        if (op_type == TOK_EE) { allowed = 1; }
+        if (op_type == TOK_NE) { allowed = 1; }
+        
+        if (allowed == 0) {
+            throw_type_error(node.pos, "Arithmetic operations on Strings are not supported (except +).");
+        }
+
+        let cmp_val -> String = next_reg(c);
+        write(c.output_file, c.indent + cmp_val + " = call i32 @strcmp(i8* " + left.reg + ", i8* " + right.reg + ")\n");
+
+        let res_reg -> String = next_reg(c);
+        let op_code -> String = "icmp eq";
+
+        if (op_type == TOK_NE) { op_code = "icmp ne"; }
+
+        write(c.output_file, c.indent + res_reg + " = " + op_code + " i32 " + cmp_val + ", 0\n");
+        
+        return CompileResult(reg=res_reg, type=TYPE_BOOL);
+    }
 
     if (op_type == TOK_POW) {
         left = promote_to_float(c, left);
@@ -538,18 +658,6 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         let res_reg -> String = next_reg(c);
         write(c.output_file, c.indent + res_reg + " = call double @llvm.pow.f64(double " + left.reg + ", double " + right.reg + ")\n");
         return CompileResult(reg=res_reg, type=TYPE_FLOAT);
-    }
-
-    if (op_type == TOK_AND || op_type == TOK_OR) {
-        if (left.type != TYPE_BOOL || right.type != TYPE_BOOL) {
-            throw_type_error(node.pos, "Logic operators '&&' and '||' require Bool operands. ");
-        }
-        let res_reg -> String = next_reg(c);
-        let op_code -> String = "and";
-        if (op_type == TOK_OR) { op_code = "or"; }
-        
-        write(c.output_file, c.indent + res_reg + " = " + op_code + " i1 " + left.reg + ", " + right.reg + "\n");
-        return CompileResult(reg=res_reg, type=TYPE_BOOL);
     }
 
     let is_cmp -> Int = 0;
@@ -562,12 +670,8 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
 
     if (is_cmp == 1) {
         if (left.type == TYPE_BOOL || right.type == TYPE_BOOL) {
-            if (left.type != right.type) {
-                throw_type_error(node.pos, "Cannot compare Bool with other types. ");
-            }
-            if (op_type != TOK_EE && op_type != TOK_NE) {
-                throw_type_error(node.pos, "Operator '" + get_token_name(op_type) + "' is not defined for type Bool. ");
-            }
+            if (left.type != right.type) { throw_type_error(node.pos, "Cannot compare Bool with other types."); }
+            if (op_type != TOK_EE && op_type != TOK_NE) { throw_type_error(node.pos, "Invalid Bool comparison."); }
             let res_reg -> String = next_reg(c);
             let op_code -> String = "icmp eq";
             if (op_type == TOK_NE) { op_code = "icmp ne"; }
@@ -589,28 +693,19 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         if (cmp_mode == TYPE_FLOAT) {
             type_str = "double";
             if (op_type == TOK_EE) { op_code = "fcmp oeq"; }
-            if (op_type == TOK_NE) { op_code = "fcmp one"; }
-            if (op_type == TOK_GT) { op_code = "fcmp ogt"; }
-            if (op_type == TOK_LT) { op_code = "fcmp olt"; }
-            if (op_type == TOK_GTE) { op_code = "fcmp oge"; }
-            if (op_type == TOK_LTE) { op_code = "fcmp ole"; }
+            else if (op_type == TOK_NE) { op_code = "fcmp one"; }
+            else if (op_type == TOK_GT) { op_code = "fcmp ogt"; }
+            else if (op_type == TOK_LT) { op_code = "fcmp olt"; }
+            else if (op_type == TOK_GTE) { op_code = "fcmp oge"; }
+            else if (op_type == TOK_LTE) { op_code = "fcmp ole"; }
         } else {
-            if (cmp_mode == TYPE_BOOL) { type_str = "i1"; }
+            // Int
             if (op_type == TOK_EE) { op_code = "icmp eq"; }
-            if (op_type == TOK_NE) { op_code = "icmp ne"; }
-            if (op_type == TOK_GT) { op_code = "icmp sgt"; }
-            if (op_type == TOK_LT) { op_code = "icmp slt"; }
-            if (op_type == TOK_GTE) { op_code = "icmp sge"; }
-            if (op_type == TOK_LTE) { op_code = "icmp sle"; }
-            if (cmp_mode == TYPE_BOOL) {
-                if (op_type != TOK_EE && op_type != TOK_NE) {
-                    throw_type_error(node.pos, "Operator '" + get_token_name(op_type) + "' is not defined for type Bool. ");
-                }
-                if (op_type == TOK_GT) { op_code = "icmp ugt"; }
-                if (op_type == TOK_LT) { op_code = "icmp ult"; }
-                if (op_type == TOK_GTE) { op_code = "icmp uge"; }
-                if (op_type == TOK_LTE) { op_code = "icmp ule"; }
-            }
+            else if (op_type == TOK_NE) { op_code = "icmp ne"; }
+            else if (op_type == TOK_GT) { op_code = "icmp sgt"; }
+            else if (op_type == TOK_LT) { op_code = "icmp slt"; }
+            else if (op_type == TOK_GTE) { op_code = "icmp sge"; }
+            else if (op_type == TOK_LTE) { op_code = "icmp sle"; }
         }
         
         write(c.output_file, c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
@@ -635,21 +730,19 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
     
     if (target_type == TYPE_INT) {
         if (op_type == TOK_PLUS)  { op_code = "add"; }
-        if (op_type == TOK_SUB)   { op_code = "sub"; }
-        if (op_type == TOK_MUL)   { op_code = "mul"; }
-        if (op_type == TOK_DIV)   { op_code = "sdiv"; }
-        if (op_type == TOK_MOD)   { op_code = "srem"; } 
+        else if (op_type == TOK_SUB)   { op_code = "sub"; }
+        else if (op_type == TOK_MUL)   { op_code = "mul"; }
+        else if (op_type == TOK_DIV)   { op_code = "sdiv"; }
+        else if (op_type == TOK_MOD)   { op_code = "srem"; } 
     } else {
         if (op_type == TOK_PLUS)  { op_code = "fadd"; }
-        if (op_type == TOK_SUB)   { op_code = "fsub"; }
-        if (op_type == TOK_MUL)   { op_code = "fmul"; }
-        if (op_type == TOK_DIV)   { op_code = "fdiv"; }
-        if (op_type == TOK_MOD)   { op_code = "frem"; } 
+        else if (op_type == TOK_SUB)   { op_code = "fsub"; }
+        else if (op_type == TOK_MUL)   { op_code = "fmul"; }
+        else if (op_type == TOK_DIV)   { op_code = "fdiv"; }
+        else if (op_type == TOK_MOD)   { op_code = "frem"; } 
     }
 
-    let ir -> String = c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n";
-    write(c.output_file, ir);
-    
+    write(c.output_file, c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
     return CompileResult(reg=res_reg, type=target_type);
 }
 
@@ -957,6 +1050,12 @@ func compile_start(c -> Compiler) -> Void {
     write(c.output_file, "declare i32 @printf(i8*, ...)\n");
     write(c.output_file, "declare double @llvm.pow.f64(double, double)\n\n");
     
+    write(c.output_file, "declare i8* @malloc(i32)\n");
+    write(c.output_file, "declare i32 @strlen(i8*)\n");
+    write(c.output_file, "declare i8* @strcpy(i8*, i8*)\n");
+    write(c.output_file, "declare i8* @strcat(i8*, i8*)\n\n");
+    write(c.output_file, "declare i32 @strcmp(i8*, i8*)\n\n");
+    
     write(c.output_file, "@.fmt_int = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\"\n");
     write(c.output_file, "@.fmt_float = private unnamed_addr constant [4 x i8] c\"%f\\0A\\00\"\n");
     write(c.output_file, "@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n\n");
@@ -970,9 +1069,12 @@ func compile_end(c -> Compiler, last -> CompileResult) -> Void {
 
     while (curr != null) {
         let val -> String = curr.value;
+        let escaped_val -> String = string_escape(val);
+        
         let id -> Int = curr.id;
-        let len -> Int = val.length() + 1;
-        let def -> String = "@.str." + id + " = private unnamed_addr constant [" + len + " x i8] c\"" + val + "\\00\"\n";
+        let len -> Int = val.length() + 1; 
+        
+        let def -> String = "@.str." + id + " = private unnamed_addr constant [" + len + " x i8] c\"" + escaped_val + "\\00\"\n";
         write(c.output_file, def);
         
         curr = curr.next;
