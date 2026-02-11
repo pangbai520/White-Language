@@ -59,6 +59,10 @@ const TOK_DIV_ASSIGN    -> Int = 49; // /=
 const TOK_MOD_ASSIGN    -> Int = 50; // %=
 const TOK_POW_ASSIGN    -> Int = 51; // **=
 
+const TOK_STRUCT -> Int = 52;
+const TOK_THIS          -> Int = 53; // this
+const TOK_DOT           -> Int = 54; // .
+
 
 func get_token_name(type -> Int) -> String {
     if (type == TOK_INT) { return "INT"; }
@@ -110,6 +114,10 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_DIV_ASSIGN)  { return "/="; }
     if (type == TOK_MOD_ASSIGN)  { return "%="; }
     if (type == TOK_POW_ASSIGN)  { return "**="; }
+
+    if (type == TOK_STRUCT)  { return "struct"; }
+    if (type == TOK_THIS)  { return "this"; }
+    if (type == TOK_DOT)  { return "."; }
 
     return "EOF";
 }

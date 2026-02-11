@@ -19,7 +19,7 @@ func get_output_name(input_name -> String) -> String {
 
 
 func main() -> Int {
-    let input_filename -> String = "./tests/string.wl"; // Input source code file
+    let input_filename -> String = "./tests/struct.wl"; // Input source code file
     let f_in -> File = file_io.open(input_filename, "r");
     if (f_in == null) {
         builtin.print("Error: Could not open input file " + input_filename);
@@ -42,13 +42,8 @@ func main() -> Int {
     
     // compile
     let output_filename -> String = get_output_name(input_filename);
-
     let compiler -> Compiler = new_compiler(output_filename);
-    compile_start(compiler); // Header required for compiling LLVM
-    
-    let result_reg -> CompileResult = compile_node(compiler, ast);
-    
-    compile_end(compiler, result_reg);
+    compile(compiler, ast);
 
     builtin.print("Success! Generated: " + output_filename);
     return 0;

@@ -45,19 +45,37 @@ struct StringConstant(
     next  -> Struct
 )
 
+struct FieldInfo(
+    name      -> String,
+    type      -> Int,
+    llvm_type -> String,
+    offset    -> Int,   // for getelementptr
+    next      -> Struct 
+)
+struct StructInfo(
+    name      -> String,
+    type_id   -> Int,
+    fields    -> Struct,
+    llvm_name -> String,
+    init_body -> Struct
+)
+
 struct Compiler(
     output_file -> File,
     reg_count   -> Int, 
     symbol_table -> Scope,
     global_symbol_table -> HashMap,
     func_table   -> HashMap,
+    struct_table -> HashMap,
+    struct_id_map -> HashMap,
     indent      -> String, 
     loop_stack   -> Struct, 
     scope_depth  -> Int,
     has_main     -> Int,
     current_ret_type -> Int,
     string_list -> Struct,
-    str_count   -> Int
+    str_count   -> Int,
+    type_counter -> Int // custom type
 )
 
 
@@ -79,13 +97,16 @@ func new_compiler(out_path -> String) -> Compiler {
         symbol_table = root_scope,
         global_symbol_table = map_new(32),
         func_table = map_new(32),
+        struct_table = map_new(32),
+        struct_id_map = map_new(32),
         indent = "  ",
         loop_stack = null,
         scope_depth = 0,
         has_main = 0,
         current_ret_type = TYPE_VOID,
         string_list = null,
-        str_count = 0
+        str_count = 0,
+        type_counter = 100
     );
 }
 
@@ -104,12 +125,18 @@ func promote_to_float(c -> Compiler, res -> CompileResult) -> CompileResult {
     return CompileResult(reg=n_reg, type=TYPE_FLOAT);
 }
 
-func get_llvm_type_str(type_id -> Int) -> String {
+func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_INT)   { return "i32"; }
     if (type_id == TYPE_FLOAT) { return "double"; }
     if (type_id == TYPE_BOOL)  { return "i1"; }
     if (type_id == TYPE_VOID)  { return "void"; }
     if (type_id == TYPE_STRING) { return "i8*"; }
+    if (type_id >= 100) {
+        let s_info -> StructInfo = map_get(c.struct_id_map, "" + type_id);
+        if (s_info != null) {
+            return s_info.llvm_name + "*";
+        }
+    }
     return ""; 
 }
 
@@ -163,12 +190,34 @@ func string_escape(s -> String) -> String {
         } else {
             res = res + s.slice(i, i + 1);
         }
-        i = i + 1;
+        i += 1;
     }
     return res;
 }
 
+func find_field(s_info -> StructInfo, name -> String) -> FieldInfo {
+    if (s_info == null) { return null; }
+    let curr -> FieldInfo = s_info.fields;
+    while (curr != null) {
+        if (curr.name == name) { return curr; }
+        curr = curr.next;
+    }
+    return null;
+}
 
+func get_field_by_index(s_info -> StructInfo, index -> Int) -> FieldInfo {
+    let curr -> FieldInfo = s_info.fields;
+    let i -> Int = 0;
+    while (curr != null) {
+        if (i == index) { return curr; }
+        curr = curr.next;
+        i += 1;
+    }
+    return null;
+}
+
+
+// === SCOPE ===
 func enter_scope(c -> Compiler) -> Void {
     let new_scope -> Scope = Scope(table=map_new(32), parent=c.symbol_table);
     c.symbol_table = new_scope;
@@ -181,6 +230,33 @@ func exit_scope(c -> Compiler) -> Void {
     c.scope_depth = c.scope_depth - 1;
 }
 
+
+func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
+    let block -> BlockNode = node;
+    let curr -> StmtListNode = block.stmts;
+    while (curr != null) {
+        let base -> BaseNode = curr.stmt;
+        if (base.type == NODE_STRUCT_DEF) {
+            let n -> StructDefNode = curr.stmt;
+            let s_name -> String = n.name_tok.value;
+            let new_id -> Int = c.type_counter;
+            c.type_counter = c.type_counter + 1;
+            let info -> StructInfo = StructInfo(
+                name = s_name,
+                type_id = new_id,
+                fields = null, 
+                llvm_name = "%struct." + s_name,
+                init_body = n.body
+            );
+
+            map_put(c.struct_table, s_name, info);
+            map_put(c.struct_id_map, "" + new_id, info); 
+        }
+        curr = curr.next;
+    }
+}
+
+// === COMPILE ===
 func compile_block(c -> Compiler, node -> BlockNode) -> CompileResult {
     let is_root -> Int = 0;
     if (c.scope_depth == 0) {
@@ -226,7 +302,13 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
     } else if (type_name == "Void") {
         throw_type_error(node.pos, "Cannot declare variable of type 'Void'. ");
     } else {
-        throw_type_error(node.pos, "Unknown type '" + type_name + "'. ");
+        let s_info -> StructInfo = map_get(c.struct_table, type_name);
+        if (s_info != null) {
+            llvm_ty_str = s_info.llvm_name + "*";
+            target_type_id = s_info.type_id;
+        } else {
+            throw_type_error(node.pos, "Unknown type '" + type_name + "'. ");
+        }
     }
     
     let var_name -> String = node.name_tok.value;
@@ -294,10 +376,17 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         }
         write(c.output_file, c.indent + "store " + llvm_ty_str + " " + val_res.reg + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
     } else {
-        let zero -> String = "0";
-        if (target_type_id == TYPE_STRING) { zero = "null"; }
-        if (target_type_id == TYPE_FLOAT) { zero = "0.0"; }
-        write(c.output_file, c.indent + "store " + llvm_ty_str + " " + zero + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
+        if (target_type_id >= 100) {
+            let s_info -> StructInfo = map_get(c.struct_table, type_name);
+            let fake_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=null, pos=node.pos);
+            let init_res -> CompileResult = compile_struct_init(c, s_info, fake_call);
+            write(c.output_file, c.indent + "store " + llvm_ty_str + " " + init_res.reg + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
+        } else {
+            let zero -> String = "0";
+            if (target_type_id == TYPE_STRING) { zero = "null"; }
+            if (target_type_id == TYPE_FLOAT) { zero = "0.0"; }
+            write(c.output_file, c.indent + "store " + llvm_ty_str + " " + zero + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
+        }
     }
     
     // store in local table (current scope)
@@ -463,7 +552,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         if (arg_idx > 0) { params_str = params_str + ", "; }
         params_str = params_str + p_llvm_type + " %arg" + arg_idx;
         
-        arg_idx = arg_idx + 1;
+        arg_idx += 1;
         curr = curr.next;
     }
     
@@ -497,7 +586,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         let curr_scope -> Scope = c.symbol_table;
         map_put(curr_scope.table, p_name, SymbolInfo(reg=addr_reg, type=target_type_id));
         
-        arg_idx = arg_idx + 1;
+        arg_idx += 1;
         curr = curr.next;
     }
     
@@ -531,7 +620,7 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
 
         let res -> CompileResult = compile_node(c, node.value);
         let ret_val_reg -> String = res.reg;
-        let target_ty -> String = get_llvm_type_str(c.current_ret_type);
+        let target_ty -> String = get_llvm_type_str(c, c.current_ret_type);
 
         if (res.type != c.current_ret_type) {
             // Bool -> Int
@@ -557,6 +646,172 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
     }
     
     return void_result();
+}
+
+func compile_struct_def(c -> Compiler, node -> StructDefNode) -> CompileResult {
+    let struct_name -> String = node.name_tok.value;
+    let info -> StructInfo = map_get(c.struct_table, struct_name);
+    if (info == null) {
+        throw_type_error(node.pos, "Struct info missing for '" + struct_name + "'.");
+    }
+
+    let llvm_body -> String = "";
+    let field_head -> FieldInfo = null;
+    let field_curr -> FieldInfo = null;
+    let curr_field_node -> ParamListNode = node.fields; 
+    let idx -> Int = 0;
+    
+    while (curr_field_node != null) {
+        let p -> ParamNode = curr_field_node.param;
+        let f_name -> String = p.name_tok.value;
+        let f_type_str -> String = p.type_tok.value;
+        
+        let f_type_id -> Int = 0;
+        let f_llvm_type -> String = "";
+
+        if (f_type_str == "Int") { f_type_id = TYPE_INT; f_llvm_type = "i32"; }
+        else if (f_type_str == "Float") { f_type_id = TYPE_FLOAT; f_llvm_type = "double"; }
+        else if (f_type_str == "Bool") { f_type_id = TYPE_BOOL; f_llvm_type = "i1"; }
+        else if (f_type_str == "String") { f_type_id = TYPE_STRING; f_llvm_type = "i8*"; }
+        else {
+            let target_s -> StructInfo = map_get(c.struct_table, f_type_str);
+            if (target_s != null) {
+                f_type_id = target_s.type_id;
+                f_llvm_type = target_s.llvm_name + "*";
+            } else {
+                // TODO: Supports nesting other structs
+                throw_type_error(node.pos, "Unknown field type '" + f_type_str + "'.");
+            }
+        }
+
+        if (idx > 0) { llvm_body = llvm_body + ", "; }
+        llvm_body = llvm_body + f_llvm_type;
+
+        let new_field -> FieldInfo = FieldInfo(name=f_name, type=f_type_id, llvm_type=f_llvm_type, offset=idx, next=null);
+        if (field_head == null) { field_head = new_field; field_curr = new_field; }
+        else { field_curr.next = new_field; field_curr = new_field; }
+        
+        idx = idx + 1;
+        curr_field_node = curr_field_node.next;
+    }
+
+    info.fields = field_head;
+
+    // %struct.Point = type { i32, i32 }
+    let def_str -> String = info.llvm_name + " = type { " + llvm_body + " }\n\n";
+    write(c.output_file, def_str);
+    
+    return void_result();
+}
+func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode) -> CompileResult {
+    let size_ptr -> String = next_reg(c);
+    write(c.output_file, c.indent + size_ptr + " = getelementptr " + s_info.llvm_name + ", " + s_info.llvm_name + "* null, i64 1\n");
+    let size_i64 -> String = next_reg(c);
+    write(c.output_file, c.indent + size_i64 + " = ptrtoint " + s_info.llvm_name + "* " + size_ptr + " to i64\n");
+    
+    let raw_mem -> String = next_reg(c);
+    write(c.output_file, c.indent + raw_mem + " = call i8* @malloc(i64 " + size_i64 + ")\n");
+    let obj_ptr -> String = next_reg(c);
+    write(c.output_file, c.indent + obj_ptr + " = bitcast i8* " + raw_mem + " to " + s_info.llvm_name + "*\n");
+
+    let f_curr -> FieldInfo = s_info.fields;
+    while (f_curr != null) {
+        let f_ptr -> String = next_reg(c);
+        write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_ptr + ", i32 0, i32 " + f_curr.offset + "\n");
+        
+        let zero_val -> String = "0";
+        if (f_curr.type == TYPE_FLOAT) { zero_val = "0.0"; }
+        else if (f_curr.type == TYPE_STRING || f_curr.type >= 100) { zero_val = "null"; }
+        
+        write(c.output_file, c.indent + "store " + f_curr.llvm_type + " " + zero_val + ", " + f_curr.llvm_type + "* " + f_ptr + "\n");
+
+        if (f_curr.type >= 100) {
+            let sub_s_info -> StructInfo = map_get(c.struct_id_map, "" + f_curr.type);
+            let fake_call -> CallNode = CallNode(type=16, callee=null, args=null, pos=n_call.pos); 
+            let sub_init -> CompileResult = compile_struct_init(c, sub_s_info, fake_call);
+            write(c.output_file, c.indent + "store " + f_curr.llvm_type + " " + sub_init.reg + ", " + f_curr.llvm_type + "* " + f_ptr + "\n");
+        }
+
+        f_curr = f_curr.next;
+    }
+
+    if (s_info.init_body != null) {
+        enter_scope(c);
+        let this_ptr_addr -> String = next_reg(c);
+        let struct_ptr_ty -> String = s_info.llvm_name + "*";
+        
+        // %t_this = alloca %struct.Entity*
+        write(c.output_file, c.indent + this_ptr_addr + " = alloca " + struct_ptr_ty + "\n");
+        // store %struct.Entity* %obj_ptr, %struct.Entity** %t_this
+        write(c.output_file, c.indent + "store " + struct_ptr_ty + " " + obj_ptr + ", " + struct_ptr_ty + "* " + this_ptr_addr + "\n");
+        map_put(c.symbol_table.table, "this", SymbolInfo(reg=this_ptr_addr, type=s_info.type_id));
+        compile_node(c, s_info.init_body);
+        exit_scope(c);
+    }
+
+    let arg_curr -> ArgNode = n_call.args;
+    let arg_idx -> Int = 0;
+    while (arg_curr != null) {
+        let val_res -> CompileResult = compile_node(c, arg_curr.val);
+        let target_f -> FieldInfo = null;
+        if (arg_curr.name != null) { target_f = find_field(s_info, arg_curr.name); } 
+        else { target_f = get_field_by_index(s_info, arg_idx); }
+
+        if (target_f != null) {
+            let f_ptr -> String = next_reg(c);
+            write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_ptr + ", i32 0, i32 " + target_f.offset + "\n");
+            write(c.output_file, c.indent + "store " + target_f.llvm_type + " " + val_res.reg + ", " + target_f.llvm_type + "* " + f_ptr + "\n");
+        }
+        arg_curr = arg_curr.next;
+        arg_idx = arg_idx + 1;
+    }
+    return CompileResult(reg=obj_ptr, type=s_info.type_id);
+}
+
+func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResult {
+    let obj_res -> CompileResult = compile_node(c, node.obj);
+
+    let s_info -> StructInfo = map_get(c.struct_id_map, "" + obj_res.type);
+    if (s_info == null) {
+        throw_type_error(node.pos, "Cannot access field on non-struct type.");
+    }
+    
+    let field -> FieldInfo = find_field(s_info, node.field_name);
+    if (field == null) {
+        throw_name_error(node.pos, "Field '" + node.field_name + "' not found in struct '" + s_info.name + "'.");
+    }
+    
+    let f_ptr -> String = next_reg(c);
+    write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_res.reg + ", i32 0, i32 " + field.offset + "\n");
+    
+    let val_reg -> String = next_reg(c);
+    write(c.output_file, c.indent + val_reg + " = load " + field.llvm_type + ", " + field.llvm_type + "* " + f_ptr + "\n");
+    
+    return CompileResult(reg=val_reg, type=field.type);
+}
+
+func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResult {
+    let obj_res -> CompileResult = compile_node(c, node.obj);
+    let val_res -> CompileResult = compile_node(c, node.value);
+
+    let s_info -> StructInfo = map_get(c.struct_id_map, "" + obj_res.type);
+    if (s_info == null) {
+        throw_type_error(node.pos, "Cannot assign field to non-struct type.");
+    }
+    let field -> FieldInfo = find_field(s_info, node.field_name);
+    if (field == null) {
+        throw_name_error(node.pos, "Field '" + node.field_name + "' not found in struct '" + s_info.name + "'.");
+    }
+
+    if (field.type != val_res.type) {
+        throw_type_error(node.pos, "Type mismatch in field assignment.");
+    }
+    
+    let f_ptr -> String = next_reg(c);
+    write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_res.reg + ", i32 0, i32 " + field.offset + "\n");
+    write(c.output_file, c.indent + "store " + field.llvm_type + " " + val_res.reg + ", " + field.llvm_type + "* " + f_ptr + "\n");
+    
+    return val_res;
 }
 
 func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
@@ -606,18 +861,24 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
             
             let len2 -> String = next_reg(c);
             write(c.output_file, c.indent + len2 + " = call i32 @strlen(i8* " + right.reg + ")\n");
+
+            // upgrade to i64
+            let len1_64 -> String = next_reg(c);
+            write(c.output_file, c.indent + len1_64 + " = zext i32 " + len1 + " to i64\n");
+            let len2_64 -> String = next_reg(c);
+            write(c.output_file, c.indent + len2_64 + " = zext i32 " + len2 + " to i64\n");
             
             // total length
             let sum_len -> String = next_reg(c);
-            write(c.output_file, c.indent + sum_len + " = add i32 " + len1 + ", " + len2 + "\n");
+            write(c.output_file, c.indent + sum_len + " = add i64 " + len1_64 + ", " + len2_64 + "\n");
             
             // for \0
             let total_size -> String = next_reg(c);
-            write(c.output_file, c.indent + total_size + " = add i32 " + sum_len + ", 1\n");
+            write(c.output_file, c.indent + total_size + " = add i64 " + sum_len + ", 1\n");
             
             // malloc(total_size)
             let new_str_ptr -> String = next_reg(c);
-            write(c.output_file, c.indent + new_str_ptr + " = call i8* @malloc(i32 " + total_size + ")\n");
+            write(c.output_file, c.indent + new_str_ptr + " = call i8* @malloc(i64 " + total_size + ")\n");
             
             // strcpy(new_ptr, left) -> null
             let ign1 -> String = next_reg(c);
@@ -776,6 +1037,9 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_BINOP)    { return compile_binop(c, node); }
     if (base.type == NODE_FUNC_DEF) { return compile_func_def(c, node); }
     if (base.type == NODE_RETURN)   { return compile_return(c, node); }
+    if (base.type == NODE_STRUCT_DEF) { return compile_struct_def(c, node); }
+    if (base.type == NODE_FIELD_ACCESS) { return compile_field_access(c, node); }
+    if (base.type == NODE_FIELD_ASSIGN) { return compile_field_assign(c, node); }
 
     if (base.type == NODE_INT) {
         let n -> IntNode = node;
@@ -804,7 +1068,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         }
         
         let val_reg -> String = next_reg(c);
-        let llvm_ty_str -> String = get_llvm_type_str(info.type);
+        let llvm_ty_str -> String = get_llvm_type_str(c, info.type);
         if (llvm_ty_str == "") {
             throw_type_error(v.pos, "Variable '" + var_name + "' has invalid internal type ID. ");
         }
@@ -829,10 +1093,11 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         }
 
         if (info.type != val_res.type) {
-            throw_type_error(n_assign.pos, "Type mismatch in assignment. Expected " + get_llvm_type_str(info.type) + ", got " + get_llvm_type_str(val_res.type));
+            throw_type_error(n_assign.pos, "Type mismatch in assignment. Expected " + get_llvm_type_str(c, info.type) + ", got " 
+            + get_llvm_type_str(c, val_res.type));
         }
         
-        let ty_str -> String = get_llvm_type_str(info.type);
+        let ty_str -> String = get_llvm_type_str(c, info.type);
         write(c.output_file, c.indent + "store " + ty_str + " " + val_res.reg + ", " + ty_str + "* " + info.reg + "\n");
         
         return val_res; 
@@ -876,7 +1141,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 } else if (arg_res.type == TYPE_INT) {
                     // pass
                 } else {
-                    throw_type_error(n_call.pos, "Cannot print type " + get_llvm_type_str(arg_res.type));
+                    throw_type_error(n_call.pos, "Cannot print type " + get_llvm_type_str(c, arg_res.type));
                 }
 
                 let use_fmt -> String = "@.fmt_int";
@@ -889,10 +1154,13 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 return void_result();
             }
 
-            // General Function Call
             let func_info -> FuncInfo = map_get(c.func_table, func_name);
             if (func_info == null) {
-                throw_name_error(n_call.pos, "Undefined function '" + func_name + "'. ");
+                let s_info -> StructInfo = map_get(c.struct_table, func_name);
+                if (s_info != null) {
+                    return compile_struct_init(c, s_info, n_call);
+                }
+                throw_name_error(n_call.pos, "Undefined function or struct '" + func_name + "'.");
             }
 
             let args_str -> String = "";
@@ -917,7 +1185,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                     throw_type_error(n_call.pos, "Argument type mismatch.");
                 }
 
-                let ty_str -> String = get_llvm_type_str(arg_val.type);
+                let ty_str -> String = get_llvm_type_str(c, arg_val.type);
                 if (first == 0) { args_str = args_str + ", "; }
                 args_str = args_str + ty_str + " " + arg_val.reg;
                 first = 0;
@@ -930,7 +1198,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 throw_type_error(n_call.pos, "Too few arguments.");
             }
 
-            let ret_type_str -> String = get_llvm_type_str(func_info.ret_type);
+            let ret_type_str -> String = get_llvm_type_str(c, func_info.ret_type);
             let call_res_reg -> String = "";
             
             if (func_info.ret_type == TYPE_VOID) {
@@ -992,7 +1260,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         }
 
         let old_val_reg -> String = next_reg(c);
-        let type_str -> String = get_llvm_type_str(info.type);
+        let type_str -> String = get_llvm_type_str(c, info.type);
         
         write(c.output_file, c.indent + old_val_reg + " = load " + type_str + ", " + type_str + "* " + info.reg + "\n");
 
@@ -1050,15 +1318,32 @@ func compile_start(c -> Compiler) -> Void {
     write(c.output_file, "declare i32 @printf(i8*, ...)\n");
     write(c.output_file, "declare double @llvm.pow.f64(double, double)\n\n");
     
-    write(c.output_file, "declare i8* @malloc(i32)\n");
+    write(c.output_file, "declare i8* @malloc(i64)\n");
     write(c.output_file, "declare i32 @strlen(i8*)\n");
     write(c.output_file, "declare i8* @strcpy(i8*, i8*)\n");
     write(c.output_file, "declare i8* @strcat(i8*, i8*)\n\n");
     write(c.output_file, "declare i32 @strcmp(i8*, i8*)\n\n");
+    write(c.output_file, "declare void @free(i8*)\n");
     
     write(c.output_file, "@.fmt_int = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\"\n");
     write(c.output_file, "@.fmt_float = private unnamed_addr constant [4 x i8] c\"%f\\0A\\00\"\n");
     write(c.output_file, "@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n\n");
+}
+
+func compile(c -> Compiler, node -> Struct) -> Void {
+    compile_start(c);
+    pre_register_structs(c, node);
+
+    let block -> BlockNode = node;
+    let curr -> StmtListNode = block.stmts;
+    let last_res -> CompileResult = null;
+    
+    while (curr != null) {
+        last_res = compile_node(c, curr.stmt);
+        curr = curr.next;
+    }
+
+    compile_end(c, last_res);
 }
 
 func compile_end(c -> Compiler, last -> CompileResult) -> Void {

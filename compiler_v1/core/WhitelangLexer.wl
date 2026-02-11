@@ -100,6 +100,13 @@ func get_number(l -> Lexer) -> Token {
     }
     
     let value -> String = l.text.slice(start_pos, l.pos.idx);
+
+    if (value.length() > 0) {
+        if (value[0] == 46) { // 46 是 '.' 的 ASCII
+            value = "0" + value;
+        }
+    }
+
     if (dot_count == 1) {
         return Token(type=TOK_FLOAT, value=value, line=start_line, col=start_col);
     }
@@ -134,6 +141,8 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "for")      { return Token(type=TOK_FOR, value=value, line=start_line, col=start_col); }
     if (value == "func")     { return Token(type=TOK_FUNC, value=value, line=start_line, col=start_col); }
     if (value == "return")   { return Token(type=TOK_RETURN, value=value, line=start_line, col=start_col); }
+    if (value == "struct") { return Token(type=TOK_STRUCT, value=value, line=start_line, col=start_col); }
+    if (value == "this")   { return Token(type=TOK_THIS, value=value, line=start_line, col=start_col); }
     
     return Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }
@@ -198,6 +207,17 @@ func get_next_token(l -> Lexer) -> Token {
 
         if (char == 34) {
             return get_string(l);
+        }
+
+        if (char == 46) { // .
+            if (l.pos.idx + 1 < l.text.length()) {
+                if (is_digit(l.text[l.pos.idx + 1])) {
+                    return get_number(l);
+                }
+            }
+            advance(l);
+
+            return Token(type=TOK_DOT, value=".", line=char_line, col=char_col);
         }
 
         // + and ++ and +=

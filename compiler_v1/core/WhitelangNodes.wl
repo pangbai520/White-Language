@@ -21,6 +21,9 @@ const NODE_FUNC_DEF   -> Int = 17; // func foo
 const NODE_RETURN     -> Int = 18; // return ...
 const NODE_PARAM      -> Int = 19; // func foo(...)
 const NODE_STRING     -> Int = 20;
+const NODE_STRUCT_DEF -> Int = 21;
+const NODE_FIELD_ACCESS->Int = 22;
+const NODE_FIELD_ASSIGN->Int = 23;
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -146,6 +149,7 @@ struct CallNode(
 
 struct ArgNode(
     val  -> Struct, // expression
+    name -> String,
     next -> Struct  // next parameter
 )
 
@@ -178,4 +182,26 @@ struct ReturnNode(
     type  -> Int,       // NODE_RETURN
     value -> Struct,
     pos   -> Position
+)
+
+struct StructDefNode(
+    type     -> Int,    // NODE_STRUCT_DEF
+    name_tok -> Token,
+    fields   -> Struct,
+    body     -> Struct,
+    pos      -> Position
+)
+
+struct FieldAccessNode(
+    type -> Int,      // NODE_FIELD_ACCESS
+    obj -> Struct,
+    field_name -> String,
+    pos -> Position
+)
+
+struct FieldAssignNode(type -> Int,
+    obj -> Struct,      // NODE_FIELD_ASSIGN
+    field_name -> String,
+    value -> Struct,
+    pos -> Position
 )
