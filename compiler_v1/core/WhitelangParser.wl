@@ -11,6 +11,11 @@ struct Parser(
     current_tok -> Token
 )
 
+struct TypedIdent(
+    name_tok -> Token,
+    type_node -> Struct
+)
+
 func parse(p -> Parser) -> Struct {
     let head -> StmtListNode = null;
     let curr -> StmtListNode = null;
@@ -46,6 +51,7 @@ func parse(p -> Parser) -> Struct {
 func advance(p -> Parser) -> Void {
     p.current_tok = get_next_token(p.lexer);
 }
+
 func peek_type(p -> Parser) -> Int {
     let l -> Lexer = p.lexer;
     
@@ -66,6 +72,101 @@ func peek_type(p -> Parser) -> Int {
     l.current_char = save_char;
     
     return type;
+}
+
+func String_to_Int(s -> String) -> Int {
+    let res -> Int = 0;
+    let i -> Int = 0;
+    while (i < s.length()) {
+        let code -> Int = s[i];
+        if (code >= 48 && code <= 57) {
+            res = res * 10 + (code - 48);
+        }
+        i = i + 1;
+    }
+    return res;
+}
+
+
+func parse_return_type(p -> Parser) -> Struct {
+    // Support 'ptr' in type position (e.g. -> ptr Int) for compatibility
+    if (p.current_tok.type == TOK_PTR) {
+        let start_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        advance(p); // skip ptr
+
+        let level -> Int = 1;
+        if (p.current_tok.type == TOK_MUL) {
+            advance(p);
+            if (p.current_tok.type == TOK_INT) {
+                level = String_to_Int(p.current_tok.value);
+                advance(p);
+            } else {
+                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                throw_invalid_syntax(err_pos, "Expected pointer level.");
+            }
+        }
+
+        let base -> Struct = parse_return_type(p);
+        return PointerTypeNode(type=NODE_PTR_TYPE, base_type=base, level=level, pos=start_pos);
+    }
+
+    let tok -> Token = p.current_tok;
+    let tt -> Int = p.current_tok.type;
+    
+    if (tt == TOK_T_INT || tt == TOK_T_FLOAT || tt == TOK_T_STRING || tt == TOK_T_BOOL || tt == TOK_T_VOID || tt == TOK_IDENTIFIER) {
+        advance(p);
+        let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+        return VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
+    }
+    
+    let err_pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+    throw_invalid_syntax(err_pos, "Expected type name.");
+    return null;
+}
+
+// parse "ptr(opt *N) name -> Type"
+func parse_typed_identifier_param(p -> Parser) -> Struct {
+    let is_ptr -> Int = 0;
+    let level -> Int = 0;
+    let start_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+
+    if (p.current_tok.type == TOK_PTR) {
+        is_ptr = 1;
+        level = 1;
+        advance(p); // skip ptr
+
+        if (p.current_tok.type == TOK_MUL) {
+            advance(p);
+            if (p.current_tok.type == TOK_INT) {
+                level = String_to_Int(p.current_tok.value);
+                advance(p);
+            } else {
+                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                throw_invalid_syntax(err_pos, "Expected pointer level.");
+            }
+        }
+    }
+
+    if (p.current_tok.type != TOK_IDENTIFIER) {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected identifier.");
+    }
+    let name_tok -> Token = p.current_tok;
+    advance(p);
+
+    if (p.current_tok.type != TOK_TYPE_ARROW) {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected '->'.");
+    }
+    advance(p);
+
+    let type_node -> Struct = parse_return_type(p);
+
+    if (is_ptr == 1) {
+        type_node = PointerTypeNode(type=NODE_PTR_TYPE, base_type=type_node, level=level, pos=start_pos);
+    }
+
+    return TypedIdent(name_tok=name_tok, type_node=type_node);
 }
 
 func atom(p -> Parser) -> Struct {
@@ -174,7 +275,6 @@ func postfix_expr(p -> Parser) -> Struct {
             node = PostfixOpNode(type=NODE_POSTFIX, node=node, op_tok=op_tok, pos=pos);
         }
 
-        // corresponding to Python: elif tok.type == TokenType.LPAREN: ... node = CallNode(node, args)
         else if (p.current_tok.type == TOK_LPAREN) {
             let paren_tok -> Token = p.current_tok; // '('
             advance(p); // skip '('
@@ -188,7 +288,6 @@ func postfix_expr(p -> Parser) -> Struct {
             advance(p); // skip ')'
 
             let pos -> Position = Position(idx=0, ln=paren_tok.line, col=paren_tok.col, text=p.lexer.text);
-
             node = CallNode(type=NODE_CALL, callee=node, args=args, pos=pos);
         }
 
@@ -208,6 +307,47 @@ func postfix_expr(p -> Parser) -> Struct {
     return node;
 }
 
+func unary_expr(p -> Parser) -> Struct {
+    let tok -> Token = p.current_tok;
+
+    // ref x
+    if (tok.type == TOK_REF) {
+        advance(p);
+        let node -> Struct = unary_expr(p);
+        let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+        return RefNode(type=NODE_REF, node=node, pos=pos);
+    }
+    
+    // deref x or deref*N x
+    if (tok.type == TOK_DEREF) {
+        advance(p);
+        let level -> Int = 1;
+        if (p.current_tok.type == TOK_MUL) {
+            advance(p);
+            if (p.current_tok.type == TOK_INT) {
+                level = String_to_Int(p.current_tok.value);
+                advance(p);
+            } else {
+                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                throw_invalid_syntax(err_pos, "Expected dereference level.");
+            }
+        }
+        let node -> Struct = unary_expr(p);
+        let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+        return DerefNode(type=NODE_DEREF, node=node, level=level, pos=pos);
+    }
+    
+    // -5, +3.14, !b
+    if (tok.type == TOK_PLUS || tok.type == TOK_SUB || tok.type == TOK_NOT) {
+        advance(p);
+        let node -> Struct = unary_expr(p); // recursive
+        let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+        return UnaryOpNode(type=NODE_UNARYOP, op_tok=tok, node=node, pos=pos);
+    }
+    
+    return power(p);
+}
+
 func power(p -> Parser) -> Struct {
     let left -> Struct = postfix_expr(p);
 
@@ -223,7 +363,6 @@ func power(p -> Parser) -> Struct {
 }
 
 func comp_expr(p -> Parser) -> Struct {
-    // '!a+b' means '(!a)+b', not '!(a+b)' (unlike in Python)
     let left -> Struct = arith_expr(p);
 
     while (p.current_tok.type == TOK_EE || p.current_tok.type == TOK_NE || 
@@ -282,13 +421,16 @@ func assignment(p -> Parser) -> Struct {
             let f_node -> FieldAccessNode = left;
             let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
             return FieldAssignNode(type=NODE_FIELD_ASSIGN, obj=f_node.obj, field_name=f_node.field_name, value=right, pos=pos);
+        } else if (base.type == NODE_DEREF) {
+            let d_node -> DerefNode = left;
+            let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+            return PtrAssignNode(type=NODE_PTR_ASSIGN, pointer=d_node, value=right, pos=pos);
         } else {
             let err_pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
             throw_invalid_syntax(err_pos, "Invalid assignment target.");
         }
     }
-    
-    // += -= ...
+
     let op_type -> Int = p.current_tok.type;
     if (op_type == TOK_PLUS_ASSIGN || op_type == TOK_SUB_ASSIGN || 
         op_type == TOK_MUL_ASSIGN || op_type == TOK_DIV_ASSIGN || 
@@ -320,17 +462,7 @@ func assignment(p -> Parser) -> Struct {
 }
 
 func factor(p -> Parser) -> Struct {
-    let tok -> Token = p.current_tok;
-    
-    // -5, +3.14, --2
-    if (tok.type == TOK_PLUS || tok.type == TOK_SUB || tok.type == TOK_NOT) {
-        advance(p);
-        let node -> Struct = factor(p);
-        let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
-        return UnaryOpNode(type=NODE_UNARYOP, op_tok=tok, node=node, pos=pos);
-    }
-    
-    return power(p);
+    return unary_expr(p);
 }
 
 func expression(p -> Parser) -> Struct {
@@ -368,28 +500,9 @@ func arith_expr(p -> Parser) -> Struct {
 }
 
 func var_decl_core(p -> Parser) -> Struct {
-    let text_ref -> String = p.lexer.text;
-    if (p.current_tok.type != TOK_IDENTIFIER) {
-        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
-        throw_invalid_syntax(err_pos, "Expected variable name. ");
-    }
-    let name_tok -> Token = p.current_tok;
-    advance(p);
+    let start_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
 
-    if (p.current_tok.type != TOK_TYPE_ARROW) {
-        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
-        throw_invalid_syntax(err_pos, "Expected '->' after variable name. ");
-    }
-    advance(p);
-
-    let type_tok -> Token = p.current_tok;
-    let tt -> Int = p.current_tok.type;
-    if (tt == TOK_T_INT || tt == TOK_T_FLOAT || tt == TOK_T_STRING || tt == TOK_T_BOOL || tt == TOK_T_VOID || tt == TOK_IDENTIFIER) {
-        advance(p);
-    } else {
-        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
-        throw_invalid_syntax(err_pos, "Expected type name (Int, Float, etc.), got " + get_token_name(tt));
-    }
+    let tid -> TypedIdent = parse_typed_identifier_param(p);
 
     let val_node -> Struct = null;
     if (p.current_tok.type == TOK_ASSIGN) {
@@ -397,15 +510,13 @@ func var_decl_core(p -> Parser) -> Struct {
         val_node = expression(p);
     }
     
-    let pos -> Position = Position(idx=0, ln=name_tok.line, col=name_tok.col, text=text_ref);
-    return VarDeclareNode(type=NODE_VAR_DECL, name_tok=name_tok, type_tok=type_tok, value=val_node, pos=pos);
+    return VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=val_node, pos=start_pos);
 }
 
 func var_decl(p -> Parser) -> Struct {
     advance(p); // skip 'let'
     return var_decl_core(p);
 }
-
 
 func parse_block(p -> Parser) -> Struct {
     // '{'
@@ -479,12 +590,14 @@ func while_stmt(p -> Parser) -> Struct {
     let pos -> Position = Position(idx=0, ln=while_tok.line, col=while_tok.col, text=p.lexer.text);
     return WhileNode(type=NODE_WHILE, condition=cond, body=body, pos=pos);
 }
+
 func break_stmt(p -> Parser) -> Struct {
     let tok -> Token = p.current_tok;
     advance(p);
     let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
     return BreakNode(type=NODE_BREAK, pos=pos);
 }
+
 func continue_stmt(p -> Parser) -> Struct {
     let tok -> Token = p.current_tok;
     advance(p);
@@ -506,8 +619,10 @@ func for_stmt(p -> Parser) -> Struct {
     if (p.current_tok.type == TOK_SEMICOLON) {
         init = null;
     } else {
-        if (p.current_tok.type == TOK_IDENTIFIER && peek_type(p) == TOK_TYPE_ARROW) {
-            init = var_decl_core(p); // i -> Int = 0
+        if (p.current_tok.type == TOK_LET) {
+            init = var_decl(p);
+        } else if ((p.current_tok.type == TOK_IDENTIFIER && peek_type(p) == TOK_TYPE_ARROW) || (p.current_tok.type == TOK_PTR)) {
+            init = var_decl_core(p); 
         } else {
             init = expression(p);    // i = 0
         }
@@ -565,36 +680,12 @@ func parse_params(p -> Parser) -> Struct {
     if (p.current_tok.type == TOK_RPAREN) {
         return null;
     }
-
-    let parse_one_param -> Struct = null;
-    
     let head -> ParamListNode = null;
     let curr -> ParamListNode = null;
+    let tid -> TypedIdent = parse_typed_identifier_param(p);
+    let pos -> Position = Position(idx=0, ln=tid.name_tok.line, col=tid.name_tok.col, text=p.lexer.text);
 
-    if (p.current_tok.type != TOK_IDENTIFIER) {
-        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
-        throw_invalid_syntax(err_pos, "Expected parameter name.");
-    }
-    let name_tok -> Token = p.current_tok;
-    advance(p);
-
-    if (p.current_tok.type != TOK_TYPE_ARROW) {
-        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
-        throw_invalid_syntax(err_pos, "Expected '->' after parameter name.");
-    }
-    advance(p);
-    
-    let type_tok -> Token = p.current_tok;
-    let tt -> Int = p.current_tok.type;
-    if (tt == TOK_T_INT || tt == TOK_T_FLOAT || tt == TOK_T_STRING || tt == TOK_T_BOOL || tt == TOK_T_VOID || tt == TOK_IDENTIFIER) {
-        advance(p);
-    } else {
-        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
-        throw_invalid_syntax(err_pos, "Expected type in parameter definition.");
-    }
-    
-    let pos -> Position = Position(idx=0, ln=name_tok.line, col=name_tok.col, text=p.lexer.text);
-    let p_node -> ParamNode = ParamNode(type=NODE_PARAM, name_tok=name_tok, type_tok=type_tok, pos=pos);
+    let p_node -> ParamNode = ParamNode(type=NODE_PARAM, name_tok=tid.name_tok, type_tok=tid.type_node, pos=pos);
     
     head = ParamListNode(param=p_node, next=null);
     curr = head;
@@ -602,13 +693,10 @@ func parse_params(p -> Parser) -> Struct {
     while (p.current_tok.type == TOK_COMMA) {
         advance(p); // skip ','
         
-        let n_tok -> Token = p.current_tok;
-        advance(p); // name
-        advance(p); // ->
-        let t_tok -> Token = p.current_tok;
-        advance(p); // type
+        let next_tid -> TypedIdent = parse_typed_identifier_param(p);
+        let next_pos -> Position = Position(idx=0, ln=next_tid.name_tok.line, col=next_tid.name_tok.col, text=p.lexer.text);
         
-        let next_p -> ParamNode = ParamNode(type=NODE_PARAM, name_tok=n_tok, type_tok=t_tok, pos=pos);
+        let next_p -> ParamNode = ParamNode(type=NODE_PARAM, name_tok=next_tid.name_tok, type_tok=next_tid.type_node, pos=next_pos);
         let list_node -> ParamListNode = ParamListNode(param=next_p, next=null);
         curr.next = list_node;
         curr = list_node;
@@ -627,8 +715,7 @@ func func_def(p -> Parser) -> Struct {
     }
     let name_tok -> Token = p.current_tok;
     advance(p);
-    
-    // ( params )
+
     if (p.current_tok.type != TOK_LPAREN) {
         let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
         throw_invalid_syntax(err_pos, "Expected '(' after function name.");
@@ -649,26 +736,18 @@ func func_def(p -> Parser) -> Struct {
         throw_invalid_syntax(err_pos, "Expected '->' for return type.");
     }
     advance(p);
-    
-    let ret_tok -> Token = p.current_tok;
-    let tt -> Int = p.current_tok.type;
-    if (tt == TOK_T_INT || tt == TOK_T_FLOAT || tt == TOK_T_STRING || tt == TOK_T_BOOL || tt == TOK_T_VOID || tt == TOK_IDENTIFIER) {
-        advance(p);
-    } else {
-        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
-        throw_invalid_syntax(err_pos, "Expected return type.");
-    }
-    
-    // Body { ... }
+
+    let ret_type_node -> Struct = parse_return_type(p);
+
     let body -> Struct = parse_block(p);
     
     let pos -> Position = Position(idx=0, ln=func_tok.line, col=func_tok.col, text=p.lexer.text);
-    return FunctionDefNode(type=NODE_FUNC_DEF, name_tok=name_tok, params=params, ret_type_tok=ret_tok, body=body, pos=pos);
+    return FunctionDefNode(type=NODE_FUNC_DEF, name_tok=name_tok, params=params, ret_type_tok=ret_type_node, body=body, pos=pos);
 }
 
 func return_stmt(p -> Parser) -> Struct {
     let ret_tok -> Token = p.current_tok;
-    advance(p); // skip 'return'
+    advance(p);
     
     let val -> Struct = null;
     if (p.current_tok.type != TOK_SEMICOLON) {

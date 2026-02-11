@@ -102,7 +102,7 @@ func get_number(l -> Lexer) -> Token {
     let value -> String = l.text.slice(start_pos, l.pos.idx);
 
     if (value.length() > 0) {
-        if (value[0] == 46) { // 46 是 '.' 的 ASCII
+        if (value[0] == 46) { // .
             value = "0" + value;
         }
     }
@@ -143,6 +143,9 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "return")   { return Token(type=TOK_RETURN, value=value, line=start_line, col=start_col); }
     if (value == "struct") { return Token(type=TOK_STRUCT, value=value, line=start_line, col=start_col); }
     if (value == "this")   { return Token(type=TOK_THIS, value=value, line=start_line, col=start_col); }
+    if (value == "ptr") { return Token(type=TOK_PTR, value=value, line=start_line, col=start_col); }
+    if (value == "ref") { return Token(type=TOK_REF, value=value, line=start_line, col=start_col); }
+    if (value == "deref") { return Token(type=TOK_DEREF, value=value, line=start_line, col=start_col); }
     
     return Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }

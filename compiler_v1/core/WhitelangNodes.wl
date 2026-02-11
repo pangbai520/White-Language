@@ -24,6 +24,10 @@ const NODE_STRING     -> Int = 20;
 const NODE_STRUCT_DEF -> Int = 21;
 const NODE_FIELD_ACCESS->Int = 22;
 const NODE_FIELD_ASSIGN->Int = 23;
+const NODE_PTR_TYPE -> Int = 24;
+const NODE_REF      -> Int = 25;
+const NODE_DEREF    -> Int = 26;
+const NODE_PTR_ASSIGN -> Int = 27;
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -78,7 +82,7 @@ struct PostfixOpNode(
 struct VarDeclareNode(
     type         -> Int,    // NODE_VAR_DECL
     name_tok     -> Token,  // Variable Name Token
-    type_tok     -> Token,  // Type Name Token
+    type_node     -> Struct,  // Type Name Token
     value        -> Struct, 
     pos          -> Position    // Error position
 )
@@ -156,7 +160,7 @@ struct ArgNode(
 struct ParamNode(
     type     -> Int,    // NODE_PARAM
     name_tok -> Token,
-    type_tok -> Token,
+    type_tok -> Struct,
     pos      -> Position
 )
 
@@ -172,7 +176,7 @@ struct FunctionDefNode(
     type     -> Int,    // NODE_FUNC_DEF
     name_tok -> Token,
     params   -> Struct, // ParamListNode
-    ret_type_tok -> Token,
+    ret_type_tok -> Struct,
     body     -> Struct,
     pos      -> Position
 )
@@ -204,4 +208,29 @@ struct FieldAssignNode(type -> Int,
     field_name -> String,
     value -> Struct,
     pos -> Position
+)
+
+
+struct PointerTypeNode(
+    type      -> Int,    // NODE_PTR_TYPE
+    base_type -> Struct,
+    level     -> Int,    // depth
+    pos       -> Position
+)
+struct RefNode(
+    type -> Int, // NODE_REF
+    node -> Struct,
+    pos  -> Position
+)
+struct DerefNode(
+    type  -> Int, // NODE_DEREF
+    node  -> Struct,
+    level -> Int,
+    pos   -> Position
+)
+struct PtrAssignNode(
+    type  -> Int, // NODE_PTR_ASSIGN
+    pointer   -> Struct, // DerefNode
+    value -> Struct,
+    pos   -> Position
 )

@@ -63,6 +63,10 @@ const TOK_STRUCT -> Int = 52;
 const TOK_THIS          -> Int = 53; // this
 const TOK_DOT           -> Int = 54; // .
 
+const TOK_PTR           -> Int = 54; // ptr
+const TOK_REF           -> Int = 55; // ref
+const TOK_DEREF         -> Int = 56; // deref
+
 
 func get_token_name(type -> Int) -> String {
     if (type == TOK_INT) { return "INT"; }
@@ -118,6 +122,10 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_STRUCT)  { return "struct"; }
     if (type == TOK_THIS)  { return "this"; }
     if (type == TOK_DOT)  { return "."; }
+
+    if (type == TOK_PTR)  { return "ptr"; }
+    if (type == TOK_REF)  { return "ref"; }
+    if (type == TOK_DEREF)  { return "deref"; }
 
     return "EOF";
 }
