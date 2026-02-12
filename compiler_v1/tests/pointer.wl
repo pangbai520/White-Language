@@ -1,11 +1,18 @@
+struct Test()
+
 func main() -> Int {
-    let a -> Int = 10;
-    let ptr p -> Int = ref a; // 取地址
-    
-    pseudo_print(deref p);    // 输出 10
-    
-    deref p = 20;             // 指针赋值
-    pseudo_print(a);          // 输出 20 (原值被修改)
-    
+    let ptr p->Int = nullptr;
+    let a->Int = 0;
+    pseudo_print("Old value of a: " + a);
+    p = ref a;
+    deref p = 114514;
+    pseudo_print("New value of a:" + a);
+
+    // 报错测试
+    // pseudo_print(deref nullptr);
+
+    // nullptr测试
+    // let b->Int = nullptr;
+    let b->Test = nullptr;
     return 0;
 }

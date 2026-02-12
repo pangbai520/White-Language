@@ -89,7 +89,6 @@ func String_to_Int(s -> String) -> Int {
 
 
 func parse_return_type(p -> Parser) -> Struct {
-    // Support 'ptr' in type position (e.g. -> ptr Int) for compatibility
     if (p.current_tok.type == TOK_PTR) {
         let start_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
         advance(p); // skip ptr
@@ -203,6 +202,13 @@ func atom(p -> Parser) -> Struct {
         advance(p);
         let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
         return StringNode(type=NODE_STRING, tok=tok, pos=pos);
+    }
+
+    // nullptr
+    if (tok.type == TOK_NULLPTR) {
+        advance(p);
+        let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+        return NullPtrNode(type=NODE_NULLPTR, pos=pos);
     }
     
     // Variable access
@@ -435,15 +441,11 @@ func assignment(p -> Parser) -> Struct {
     if (op_type == TOK_PLUS_ASSIGN || op_type == TOK_SUB_ASSIGN || 
         op_type == TOK_MUL_ASSIGN || op_type == TOK_DIV_ASSIGN || 
         op_type == TOK_MOD_ASSIGN || op_type == TOK_POW_ASSIGN) {
+        
         let op_tok -> Token = p.current_tok;
         advance(p);
         let right -> Struct = assignment(p);
 
-        let base -> BaseNode = left;
-        if (base.type != NODE_VAR_ACCESS) {
-            let err_pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
-            throw_invalid_syntax(err_pos, "Invalid compound assignment target.");
-        }
         let bin_op_type -> Int = 0;
         if (op_type == TOK_PLUS_ASSIGN) { bin_op_type = TOK_PLUS; }
         if (op_type == TOK_SUB_ASSIGN)  { bin_op_type = TOK_SUB; }
@@ -451,11 +453,34 @@ func assignment(p -> Parser) -> Struct {
         if (op_type == TOK_DIV_ASSIGN)  { bin_op_type = TOK_DIV; }
         if (op_type == TOK_MOD_ASSIGN)  { bin_op_type = TOK_MOD; }
         if (op_type == TOK_POW_ASSIGN)  { bin_op_type = TOK_POW; }
+        
         let bin_tok -> Token = Token(type=bin_op_type, value="compound_op", line=op_tok.line, col=op_tok.col);
         let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+
         let bin_node -> BinOpNode = BinOpNode(type=NODE_BINOP, left=left, op_tok=bin_tok, right=right, pos=pos);
-        let v_node -> VarAccessNode = left;
-        return VarAssignNode(type=NODE_VAR_ASSIGN, name_tok=v_node.name_tok, value=bin_node, pos=pos);
+
+        let base -> BaseNode = left;
+        
+        // a += 1
+        if (base.type == NODE_VAR_ACCESS) {
+            let v_node -> VarAccessNode = left;
+            return VarAssignNode(type=NODE_VAR_ASSIGN, name_tok=v_node.name_tok, value=bin_node, pos=pos);
+        } 
+        // s.x += 1
+        else if (base.type == NODE_FIELD_ACCESS) {
+            let f_node -> FieldAccessNode = left;
+            return FieldAssignNode(type=NODE_FIELD_ASSIGN, obj=f_node.obj, field_name=f_node.field_name, value=bin_node, pos=pos);
+        }
+        // (deref p) += 1
+        else if (base.type == NODE_DEREF) {
+            let d_node -> DerefNode = left;
+            return PtrAssignNode(type=NODE_PTR_ASSIGN, pointer=d_node, value=bin_node, pos=pos);
+        }
+
+        else {
+            let err_pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+            throw_invalid_syntax(err_pos, "Invalid compound assignment target. Only variables, fields, and pointers are supported.");
+        }
     }
 
     return left;

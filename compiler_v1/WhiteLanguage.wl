@@ -19,8 +19,8 @@ func get_output_name(input_name -> String) -> String {
 
 
 func main() -> Int {
-    let input_filename -> String = "./tests/pointer.wl"; // Input source code file
-    let f_in -> File = file_io.open(input_filename, "r");
+    let input_filename -> String = "./tests/stress_test2.wl"; // Input source code file
+    let f_in -> File = file_io.open(input_filename, "rb");
     if (f_in == null) {
         builtin.print("Error: Could not open input file " + input_filename);
         return 1;

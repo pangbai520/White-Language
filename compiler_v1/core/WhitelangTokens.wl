@@ -59,13 +59,15 @@ const TOK_DIV_ASSIGN    -> Int = 49; // /=
 const TOK_MOD_ASSIGN    -> Int = 50; // %=
 const TOK_POW_ASSIGN    -> Int = 51; // **=
 
-const TOK_STRUCT -> Int = 52;
+const TOK_STRUCT        -> Int = 52;
 const TOK_THIS          -> Int = 53; // this
-const TOK_DOT           -> Int = 54; // .
+const TOK_DOT           -> Int = 53; // .
 
-const TOK_PTR           -> Int = 54; // ptr
-const TOK_REF           -> Int = 55; // ref
-const TOK_DEREF         -> Int = 56; // deref
+const TOK_PTR           -> Int = 55; // ptr
+const TOK_REF           -> Int = 56; // ref
+const TOK_DEREF         -> Int = 57; // deref
+
+const TOK_NULLPTR       -> Int = 58;
 
 
 func get_token_name(type -> Int) -> String {
@@ -126,6 +128,8 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_PTR)  { return "ptr"; }
     if (type == TOK_REF)  { return "ref"; }
     if (type == TOK_DEREF)  { return "deref"; }
+
+    if (type == TOK_NULLPTR)  { return "nullptr"; }
 
     return "EOF";
 }

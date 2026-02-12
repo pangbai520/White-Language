@@ -1,33 +1,34 @@
 // core/WhitelangNodes.wl
 import "WhitelangTokens.wl"
 
-const NODE_INT        -> Int = 1;
-const NODE_FLOAT      -> Int = 2;
-const NODE_BINOP      -> Int = 3;
-const NODE_UNARYOP    -> Int = 4;
-const NODE_VAR_DECL   -> Int = 5; // let identi -> Type = ...
-const NODE_VAR_ACCESS -> Int = 6; // x
-const NODE_VAR_ASSIGN -> Int = 7;
-const NODE_BLOCK      -> Int = 8; // { stmt1; stmt2; ... }
-const NODE_POSTFIX    -> Int = 9; // a++, a--
-const NODE_BOOL       -> Int = 10;
-const NODE_IF         -> Int = 11;
-const NODE_WHILE      -> Int = 12;
-const NODE_BREAK      -> Int = 13;
-const NODE_CONTINUE   -> Int = 14;
-const NODE_FOR        -> Int = 15;
-const NODE_CALL       -> Int = 16; // func()
-const NODE_FUNC_DEF   -> Int = 17; // func foo
-const NODE_RETURN     -> Int = 18; // return ...
-const NODE_PARAM      -> Int = 19; // func foo(...)
-const NODE_STRING     -> Int = 20;
-const NODE_STRUCT_DEF -> Int = 21;
-const NODE_FIELD_ACCESS->Int = 22;
-const NODE_FIELD_ASSIGN->Int = 23;
-const NODE_PTR_TYPE -> Int = 24;
-const NODE_REF      -> Int = 25;
-const NODE_DEREF    -> Int = 26;
-const NODE_PTR_ASSIGN -> Int = 27;
+const NODE_INT            -> Int = 1;
+const NODE_FLOAT          -> Int = 2;
+const NODE_BINOP          -> Int = 3;
+const NODE_UNARYOP        -> Int = 4;
+const NODE_VAR_DECL       -> Int = 5; // let identi -> Type = ...
+const NODE_VAR_ACCESS     -> Int = 6; // x
+const NODE_VAR_ASSIGN     -> Int = 7;
+const NODE_BLOCK          -> Int = 8; // { stmt1; stmt2; ... }
+const NODE_POSTFIX        -> Int = 9; // a++, a--
+const NODE_BOOL           -> Int = 10;
+const NODE_IF             -> Int = 11;
+const NODE_WHILE          -> Int = 12;
+const NODE_BREAK          -> Int = 13;
+const NODE_CONTINUE       -> Int = 14;
+const NODE_FOR            -> Int = 15;
+const NODE_CALL           -> Int = 16; // func()
+const NODE_FUNC_DEF       -> Int = 17; // func foo
+const NODE_RETURN         -> Int = 18; // return ...
+const NODE_PARAM          -> Int = 19; // func foo(...)
+const NODE_STRING         -> Int = 20;
+const NODE_STRUCT_DEF     -> Int = 21;
+const NODE_FIELD_ACCESS   ->Int = 22;
+const NODE_FIELD_ASSIGN   ->Int = 23;
+const NODE_PTR_TYPE       -> Int = 24;
+const NODE_REF            -> Int = 25;
+const NODE_DEREF          -> Int = 26;
+const NODE_PTR_ASSIGN     -> Int = 27;
+const NODE_NULLPTR        -> Int = 28;
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -233,4 +234,8 @@ struct PtrAssignNode(
     pointer   -> Struct, // DerefNode
     value -> Struct,
     pos   -> Position
+)
+struct NullPtrNode(
+    type -> Int,      // NODE_NULLPTR
+    pos  -> Position
 )

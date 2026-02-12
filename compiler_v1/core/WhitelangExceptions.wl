@@ -87,7 +87,11 @@ func throw_missing_initializer(pos -> Position, details -> String) -> Void {
     report_error(pos, "MissingInitializer", details);
 }
 
-func throw_missing_main_function() -> Void {
+func throw_null_dereference_error(pos -> Position, details -> String) -> Void {
+    report_error(pos, "NullDereferenceException", details);
+}
+
+func throw_missing_main_function() -> Void { // special
     builtin.print("MissingMainFunction: No 'main' function defined.");
     exit(1);
 }

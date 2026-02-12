@@ -56,6 +56,9 @@ func hash_djb2(key -> String) -> Int {
     }
 
     let final_hash -> Int = hash;
+    if (final_hash < 0) {
+        final_hash = 0 - final_hash; // absolute value
+    }
     return final_hash;
 }
 
@@ -74,6 +77,7 @@ func map_new(capacity -> Int) -> HashMap {
 func map_put(self -> HashMap, key -> String, val -> Struct) -> Void {
     let h -> Int = hash_djb2(key);
     let idx -> Int = h % self.capacity;
+    if (idx < 0) { idx = 0 - idx; }
     let current -> MapEntry = self.buckets[idx];
     let iter -> MapEntry = current;
     while (iter != null) {
