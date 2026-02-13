@@ -89,6 +89,7 @@ func String_to_Int(s -> String) -> Int {
 
 
 func parse_return_type(p -> Parser) -> Struct {
+    // Support 'ptr' in type position (e.g. -> ptr Int) for compatibility
     if (p.current_tok.type == TOK_PTR) {
         let start_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
         advance(p); // skip ptr
@@ -113,6 +114,26 @@ func parse_return_type(p -> Parser) -> Struct {
     let tt -> Int = p.current_tok.type;
     
     if (tt == TOK_T_INT || tt == TOK_T_FLOAT || tt == TOK_T_STRING || tt == TOK_T_BOOL || tt == TOK_T_VOID || tt == TOK_IDENTIFIER) {
+        if (tok.value == "Function") {
+            advance(p); // skip Function
+            if (p.current_tok.type == TOK_LPAREN) {
+                advance(p); // skip '('
+                let ret_ty -> Struct = parse_return_type(p);
+                if (p.current_tok.type != TOK_RPAREN) {
+                    let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                    throw_invalid_syntax(err_pos, "Expected ')' after Function return type.");
+                }
+                advance(p); // skip ')'
+
+                let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+                return FunctionTypeNode(type=NODE_FUNCTION_TYPE, return_type=ret_ty, pos=pos);
+            }
+
+            // 如果没有 '('，那就是泛型 Function (退化为 VarAccessNode)
+            let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+            return VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
+        }
+
         advance(p);
         let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
         return VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);

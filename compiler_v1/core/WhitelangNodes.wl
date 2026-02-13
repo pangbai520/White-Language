@@ -29,6 +29,7 @@ const NODE_REF            -> Int = 25;
 const NODE_DEREF          -> Int = 26;
 const NODE_PTR_ASSIGN     -> Int = 27;
 const NODE_NULLPTR        -> Int = 28;
+const NODE_FUNCTION_TYPE  -> Int = 29;
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -182,11 +183,17 @@ struct FunctionDefNode(
     pos      -> Position
 )
 
-
 struct ReturnNode(
     type  -> Int,       // NODE_RETURN
     value -> Struct,
     pos   -> Position
+)
+
+// Function(Type)
+struct FunctionTypeNode(
+    type        -> Int,    // NODE_FUNCTION_TYPE
+    return_type -> Struct,
+    pos         -> Position
 )
 
 struct StructDefNode(
