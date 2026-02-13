@@ -68,6 +68,8 @@ const TOK_REF           -> Int = 56; // ref
 const TOK_DEREF         -> Int = 57; // deref
 
 const TOK_NULLPTR       -> Int = 58;
+const TOK_NULL          -> Int = 59;
+const TOK_IS            -> Int = 60;
 
 
 func get_token_name(type -> Int) -> String {
@@ -130,6 +132,8 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_DEREF)  { return "deref"; }
 
     if (type == TOK_NULLPTR)  { return "nullptr"; }
+    if (type == TOK_NULL)     { return "null"; }
+    if (type == TOK_IS)  { return "is"; }
 
     return "EOF";
 }

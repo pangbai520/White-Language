@@ -147,6 +147,8 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "ref") { return Token(type=TOK_REF, value=value, line=start_line, col=start_col); }
     if (value == "deref") { return Token(type=TOK_DEREF, value=value, line=start_line, col=start_col); }
     if (value == "nullptr") { return Token(type=TOK_NULLPTR, value=value, line=start_line, col=start_col); }
+    if (value == "null") { return Token(type=TOK_NULL, value=value, line=start_line, col=start_col); }
+    if (value == "is") { return Token(type=TOK_IS, value=value, line=start_line, col=start_col); }
     
     return Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }

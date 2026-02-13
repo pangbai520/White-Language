@@ -22,14 +22,17 @@ const NODE_RETURN         -> Int = 18; // return ...
 const NODE_PARAM          -> Int = 19; // func foo(...)
 const NODE_STRING         -> Int = 20;
 const NODE_STRUCT_DEF     -> Int = 21;
-const NODE_FIELD_ACCESS   ->Int = 22;
-const NODE_FIELD_ASSIGN   ->Int = 23;
+const NODE_FIELD_ACCESS   -> Int = 22;
+const NODE_FIELD_ASSIGN   -> Int = 23;
 const NODE_PTR_TYPE       -> Int = 24;
 const NODE_REF            -> Int = 25;
 const NODE_DEREF          -> Int = 26;
 const NODE_PTR_ASSIGN     -> Int = 27;
 const NODE_NULLPTR        -> Int = 28;
 const NODE_FUNCTION_TYPE  -> Int = 29;
+const NODE_NULL           -> Int = 30;
+const NODE_IS             -> Int = 32; // is ...
+const NODE_IS_NOT         -> Int = 33; // is !...
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -244,5 +247,10 @@ struct PtrAssignNode(
 )
 struct NullPtrNode(
     type -> Int,      // NODE_NULLPTR
+    pos  -> Position
+)
+
+struct NullNode(
+    type -> Int,
     pos  -> Position
 )

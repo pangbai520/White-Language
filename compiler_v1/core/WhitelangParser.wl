@@ -231,6 +231,12 @@ func atom(p -> Parser) -> Struct {
         let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
         return NullPtrNode(type=NODE_NULLPTR, pos=pos);
     }
+
+    if (tok.type == TOK_NULL) {
+        advance(p);
+        let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+        return NullNode(type=NODE_NULL, pos=pos);
+    }
     
     // Variable access
     if (tok.type == TOK_IDENTIFIER) {
@@ -392,14 +398,35 @@ func power(p -> Parser) -> Struct {
 func comp_expr(p -> Parser) -> Struct {
     let left -> Struct = arith_expr(p);
 
-    while (p.current_tok.type == TOK_EE || p.current_tok.type == TOK_NE || 
-           p.current_tok.type == TOK_LT || p.current_tok.type == TOK_GT ||
-           p.current_tok.type == TOK_LTE || p.current_tok.type == TOK_GTE) {
+    while (p.current_tok.type == TOK_EE  || p.current_tok.type == TOK_NE  || 
+           p.current_tok.type == TOK_LT  || p.current_tok.type == TOK_GT  ||
+           p.current_tok.type == TOK_LTE || p.current_tok.type == TOK_GTE ||
+           p.current_tok.type == TOK_IS) {
         let op_tok -> Token = p.current_tok;
-        advance(p);
-        let right -> Struct = arith_expr(p);
-        let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
-        left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
+        let node_type -> Int = NODE_BINOP; // 默认为普通二元操作
+
+        if (op_tok.type == TOK_IS) {
+            advance(p); // skip 'is'
+            if (p.current_tok.type == TOK_NOT) {
+                let not_tok -> Token = p.current_tok;
+                advance(p); // skip '!'
+                op_tok = Token(type=TOK_IS, value="is !", line=op_tok.line, col=op_tok.col);
+                node_type = NODE_IS_NOT;
+            } else {
+                node_type = NODE_IS;
+            }
+            
+            let right -> Struct = arith_expr(p);
+            let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+            left = BinOpNode(type=node_type, left=left, op_tok=op_tok, right=right, pos=pos);
+            
+            // continue loop
+        } else {
+            advance(p);
+            let right -> Struct = arith_expr(p);
+            let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+            left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
+        }
     }
     return left;
 }
