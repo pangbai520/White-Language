@@ -11,6 +11,7 @@ func output(f -> Function(String)) -> Void {
 }
 
 func main() -> Int {
+    let str->Function(String) = return_str;
     output(return_str);
     return 0;
 }

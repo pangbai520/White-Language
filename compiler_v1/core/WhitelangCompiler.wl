@@ -169,14 +169,33 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     return "i8*"; // unknow type
 }
 
-func get_type_name(type_id -> Int) -> String {
+func get_type_name(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_INT)   { return "Int"; }
     if (type_id == TYPE_FLOAT) { return "Float"; }
     if (type_id == TYPE_BOOL)  { return "Bool"; }
     if (type_id == TYPE_VOID)  { return "Void"; }
     if (type_id == TYPE_STRING) { return "String"; }
+    if (type_id == TYPE_NULL)   { return "nullptr"; }
     if (type_id == TYPE_GENERIC_STRUCT) { return "Struct"; }
     if (type_id == TYPE_GENERIC_FUNCTION) { return "Function"; }
+
+    if (type_id >= 100) {
+        let f_info -> SymbolInfo = map_get(c.func_ret_map, "" + type_id);
+        if (f_info is !null) {
+            return "Function(" + get_type_name(c, f_info.type) + ")";
+        }
+
+        let s_info -> StructInfo = map_get(c.struct_id_map, "" + type_id);
+        if (s_info is !null) {
+            return s_info.name;
+        }
+
+        let ptr_info -> SymbolInfo = map_get(c.ptr_base_map, "" + type_id);
+        if (ptr_info is !null) {
+            return "Ptr<" + get_type_name(c, ptr_info.type) + ">";
+        }
+    }
+    
     return "Unknown";
 }
 
@@ -372,7 +391,7 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
         write(c.output_file, c.indent + ptr_false + " = getelementptr [6 x i8], [6 x i8]* @.str_false, i32 0, i32 0\n");
         
         let res_reg -> String = next_reg(c);
-        // select i1 %cond, type %v1, type %v2
+        // LLVM select 指令: select i1 %cond, type %v1, type %v2
         write(c.output_file, c.indent + res_reg + " = select i1 " + res.reg + ", i8* " + ptr_true + ", i8* " + ptr_false + "\n");
         return CompileResult(reg=res_reg, type=TYPE_STRING);
     }
@@ -547,6 +566,24 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 val_res.type = TYPE_GENERIC_STRUCT;
             }
 
+            if (val_res.type == TYPE_GENERIC_STRUCT && target_type_id >= 100) {
+                 if (map_get(c.struct_id_map, "" + target_type_id) is !null) {
+                    let cast_reg -> String = next_reg(c);
+                    let dest_ty -> String = get_llvm_type_str(c, target_type_id);
+                    // i8* -> %struct.Test*
+                    write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + val_res.reg + " to " + dest_ty + "\n");
+                    
+                    val_res.reg = cast_reg;
+                    val_res.type = target_type_id;
+                 }
+            }
+
+            if (val_res.type == TYPE_GENERIC_FUNCTION && target_type_id >= 100) {
+                 if (map_get(c.func_ret_map, "" + target_type_id) is !null) {
+                    val_res.type = target_type_id;
+                 }
+            }
+
             if (target_type_id == TYPE_GENERIC_FUNCTION && val_res.type >= 100) {
                 let f_check -> SymbolInfo = map_get(c.func_ret_map, "" + val_res.type);
                 if (f_check is !null) {
@@ -556,7 +593,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
             }
 
             if (target_type_id != val_res.type) {
-                throw_type_error(node.pos, "Cannot assign type '" + get_type_name(val_res.type) + "' to variable of type '" + get_type_name(target_type_id) + "'. ");
+                throw_type_error(node.pos, "Cannot assign type '" + get_type_name(c, val_res.type) + "' to variable of type '" + get_type_name(c, target_type_id) + "'. ");
             }
         }
         write(c.output_file, c.indent + "store " + llvm_ty_str + " " + val_res.reg + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
@@ -606,6 +643,20 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
             write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to i8*\n");
             val_res.reg = cast_reg;
             val_res.type = TYPE_GENERIC_STRUCT;
+        }
+        if (val_res.type == TYPE_GENERIC_STRUCT && info.type >= 100) {
+             if (map_get(c.struct_id_map, "" + info.type) is !null) {
+                let cast_reg -> String = next_reg(c);
+                let dest_ty -> String = get_llvm_type_str(c, info.type);
+                write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + val_res.reg + " to " + dest_ty + "\n");
+                val_res.reg = cast_reg;
+                val_res.type = info.type;
+             }
+        }
+        if (val_res.type == TYPE_GENERIC_FUNCTION && info.type >= 100) {
+             if (map_get(c.func_ret_map, "" + info.type) is !null) {
+                val_res.type = info.type;
+             }
         }
         if (info.type != val_res.type) {
             throw_type_error(node.pos, "Type mismatch in assignment.");
@@ -833,7 +884,8 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     let block -> BlockNode = node.body;
     let stmt_curr -> StmtListNode = block.stmts;
     let last_stmt -> Struct = null;
-
+    
+    // 遍历找到最后一个语句
     while (stmt_curr is !null) {
         last_stmt = stmt_curr.stmt;
         stmt_curr = stmt_curr.next;
@@ -895,10 +947,10 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
                     write(c.output_file, c.indent + cast_reg + " = zext i1 " + res.reg + " to i32\n");
                     ret_val_reg = cast_reg;
                 } else {
-                    throw_type_error(node.pos, "Type mismatch in return. Expected " + get_type_name(c.current_ret_type) + ", got Bool. ");
+                    throw_type_error(node.pos, "Type mismatch in return. Expected " + get_type_name(c, c.current_ret_type) + ", got Bool. ");
                 }
             } else {
-                throw_type_error(node.pos, "Type mismatch in return. Expected " + get_type_name(c.current_ret_type) + ", got " + get_type_name(res.type));
+                throw_type_error(node.pos, "Type mismatch in return. Expected " + get_type_name(c, c.current_ret_type) + ", got " + get_type_name(c, res.type));
             }
         }
 
@@ -973,6 +1025,16 @@ func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode
         else if (f_curr.type == TYPE_STRING || f_curr.type >= 100 || f_curr.type == TYPE_GENERIC_STRUCT || f_curr.type == TYPE_GENERIC_FUNCTION) { zero_val = "null"; }
         
         write(c.output_file, c.indent + "store " + f_curr.llvm_type + " " + zero_val + ", " + f_curr.llvm_type + "* " + f_ptr + "\n");
+
+        // if (f_curr.type >= 100) {
+        //     let sub_s_info -> StructInfo = map_get(c.struct_id_map, "" + f_curr.type);
+        //     if (sub_s_info is !null) {
+        //         let fake_call -> CallNode = CallNode(type=16, callee=null, args=null, pos=n_call.pos); 
+        //         let sub_init -> CompileResult = compile_struct_init(c, sub_s_info, fake_call);
+        //         write(c.output_file, c.indent + "store " + f_curr.llvm_type + " " + sub_init.reg + ", " + f_curr.llvm_type + "* " + f_ptr + "\n");
+        //     }
+        // }
+
         f_curr = f_curr.next;
     }
 
@@ -1131,7 +1193,7 @@ func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResu
         }
 
         if (field.type != val_res.type) {
-            throw_type_error(node.pos, "Type mismatch in field assignment. Expected " + get_type_name(field.type) + ", got " + get_type_name(val_res.type));
+            throw_type_error(node.pos, "Type mismatch in field assignment. Expected " + get_type_name(c, field.type) + ", got " + get_type_name(c, val_res.type));
         }
     }
     
@@ -1388,12 +1450,31 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_REF) {
         let r_node -> RefNode = node;
         let target -> BaseNode = r_node.node;
+        
         if (target.type != NODE_VAR_ACCESS) {
             throw_invalid_syntax(r_node.pos, "Cannot take ref of r-value.");
         }
+        
         let v -> VarAccessNode = r_node.node;
-        let info -> SymbolInfo = find_symbol(c, v.name_tok.value);
-        if (info == null) { throw_name_error(r_node.pos, "Unknown variable."); }
+        let name -> String = v.name_tok.value;
+
+        let info -> SymbolInfo = find_symbol(c, name);
+        
+        if (info == null) {
+            let f_info -> FuncInfo = map_get(c.func_table, name);
+            if (f_info is !null) {
+                let specific_type_id -> Int = get_func_type_id(c, f_info.ret_type);
+                let sig -> String = get_func_sig_str(c, f_info);
+                let func_ptr -> String = "@" + name;
+                
+                let cast_reg -> String = next_reg(c);
+                write(c.output_file, c.indent + cast_reg + " = bitcast " + sig + " " + func_ptr + " to i8*\n");
+                
+                return CompileResult(reg=cast_reg, type=specific_type_id);
+            }
+            
+            throw_name_error(r_node.pos, "Unknown variable or function '" + name + "'.");
+        }
 
         let ptr_id -> Int = get_ptr_type_id(c, info.type);
         return CompileResult(reg=info.reg, type=ptr_id);

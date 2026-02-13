@@ -19,7 +19,7 @@ func get_output_name(input_name -> String) -> String {
 
 
 func main() -> Int {
-    let input_filename -> String = "./tests/generic_func.wl"; // Input source code file
+    let input_filename -> String = "./tests/generics.wl"; // Input source code file
     let f_in -> File = file_io.open(input_filename, "rb");
     if (f_in == null) {
         builtin.print("Error: Could not open input file " + input_filename);
