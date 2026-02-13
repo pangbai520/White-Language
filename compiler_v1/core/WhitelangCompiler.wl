@@ -16,6 +16,8 @@ const TYPE_STRING -> Int = 5;
 const TYPE_NULL   -> Int = 6;
 const TYPE_GENERIC_STRUCT   -> Int = 7;
 const TYPE_GENERIC_FUNCTION -> Int = 8;
+const TYPE_LONG  -> Int = 9;
+const TYPE_BYTE  -> Int = 10;
 
 const TYPE_NULLPTR -> Int = 99;
 
@@ -140,6 +142,18 @@ func promote_to_float(c -> Compiler, res -> CompileResult) -> CompileResult {
     if (res.type == TYPE_FLOAT) { return res; }
     let input_reg -> String = res.reg;
 
+    if (res.type == TYPE_BYTE) {
+        let uitofp_reg -> String = next_reg(c);
+        write(c.output_file, c.indent + uitofp_reg + " = uitofp i8 " + input_reg + " to double\n");
+        return CompileResult(reg=uitofp_reg, type=TYPE_FLOAT);
+    }
+
+    if (res.type == TYPE_LONG) {
+        let sitofp_reg -> String = next_reg(c);
+        write(c.output_file, c.indent + sitofp_reg + " = sitofp i64 " + input_reg + " to double\n");
+        return CompileResult(reg=sitofp_reg, type=TYPE_FLOAT);
+    }
+
     if (res.type == TYPE_BOOL) {
         let zext_reg -> String = next_reg(c);
         write(c.output_file, c.indent + zext_reg + " = zext i1 " + input_reg + " to i32\n");
@@ -150,9 +164,43 @@ func promote_to_float(c -> Compiler, res -> CompileResult) -> CompileResult {
     write(c.output_file, c.indent + n_reg + " = sitofp i32 " + input_reg + " to double\n");
     return CompileResult(reg=n_reg, type=TYPE_FLOAT);
 }
+func promote_to_long(c -> Compiler, res -> CompileResult) -> CompileResult {
+    if (res.type == TYPE_LONG) { return res; }
+    let input_reg -> String = res.reg;
+
+    if (res.type == TYPE_BYTE) {
+        let zext_reg -> String = next_reg(c);
+        write(c.output_file, c.indent + zext_reg + " = zext i8 " + input_reg + " to i64\n");
+        return CompileResult(reg=zext_reg, type=TYPE_LONG);
+    }
+
+    if (res.type == TYPE_BOOL) {
+        let zext_reg -> String = next_reg(c);
+        write(c.output_file, c.indent + zext_reg + " = zext i1 " + input_reg + " to i64\n");
+        return CompileResult(reg=zext_reg, type=TYPE_LONG);
+    }
+
+    if (res.type == TYPE_INT) {
+        let n_reg -> String = next_reg(c);
+        // sext: sign extension
+        write(c.output_file, c.indent + n_reg + " = sext i32 " + input_reg + " to i64\n");
+        return CompileResult(reg=n_reg, type=TYPE_LONG);
+    }
+    
+    return res;
+}
+func promote_to_int(c -> Compiler, res -> CompileResult) -> CompileResult {
+    if (res.type != TYPE_BYTE) { return res; }
+    
+    let zext_reg -> String = next_reg(c);
+    write(c.output_file, c.indent + zext_reg + " = zext i8 " + res.reg + " to i32\n");
+    return CompileResult(reg=zext_reg, type=TYPE_INT);
+}
 
 func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_INT)   { return "i32"; }
+    if (type_id == TYPE_LONG)   { return "i64"; }
+    if (type_id == TYPE_BYTE)  { return "i8"; }
     if (type_id == TYPE_FLOAT) { return "double"; }
     if (type_id == TYPE_BOOL)  { return "i1"; }
     if (type_id == TYPE_VOID)  { return "void"; }
@@ -180,6 +228,8 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
 
 func get_type_name(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_INT)   { return "Int"; }
+    if (type_id == TYPE_LONG)  { return "Long"; }
+    if (type_id == TYPE_BYTE)  { return "Byte"; }
     if (type_id == TYPE_FLOAT) { return "Float"; }
     if (type_id == TYPE_BOOL)  { return "Bool"; }
     if (type_id == TYPE_VOID)  { return "Void"; }
@@ -345,6 +395,8 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         let name -> String = v.name_tok.value;
         
         if (name == "Int") { return TYPE_INT; }
+        if (name == "Long") { return TYPE_LONG; }
+        if (name == "Byte") { return TYPE_BYTE; }
         if (name == "Float") { return TYPE_FLOAT; }
         if (name == "Bool") { return TYPE_BOOL; }
         if (name == "String") { return TYPE_STRING; }
@@ -363,6 +415,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
 
 func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
     if (res.type == TYPE_STRING) { return res; }
+
     if (res.type == TYPE_INT) {
         let buf -> String = next_reg(c);
         write(c.output_file, c.indent + buf + " = alloca [20 x i8]\n");
@@ -374,6 +427,35 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
         
         // call sprintf(buf, "%d", val)
         write(c.output_file, c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 20, i8* " + fmt + ", i32 " + res.reg + ")\n");
+        return CompileResult(reg=buf_ptr, type=TYPE_STRING);
+    }
+
+    if (res.type == TYPE_LONG) {
+        let buf -> String = next_reg(c);
+        write(c.output_file, c.indent + buf + " = alloca [32 x i8]\n");
+        let buf_ptr -> String = next_reg(c);
+        write(c.output_file, c.indent + buf_ptr + " = getelementptr [32 x i8], [32 x i8]* " + buf + ", i32 0, i32 0\n");
+        
+        let fmt -> String = next_reg(c);
+        write(c.output_file, c.indent + fmt + " = getelementptr [5 x i8], [5 x i8]* @.fmt_long_simple, i32 0, i32 0\n");
+        
+        write(c.output_file, c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 32, i8* " + fmt + ", i64 " + res.reg + ")\n");
+        return CompileResult(reg=buf_ptr, type=TYPE_STRING);
+    }
+
+    if (res.type == TYPE_BYTE) {
+        let val_i32 -> String = next_reg(c);
+        write(c.output_file, c.indent + val_i32 + " = zext i8 " + res.reg + " to i32\n");
+        
+        let buf -> String = next_reg(c);
+        write(c.output_file, c.indent + buf + " = alloca [20 x i8]\n");
+        let buf_ptr -> String = next_reg(c);
+        write(c.output_file, c.indent + buf_ptr + " = getelementptr [20 x i8], [20 x i8]* " + buf + ", i32 0, i32 0\n");
+
+        let fmt -> String = next_reg(c);
+        write(c.output_file, c.indent + fmt + " = getelementptr [3 x i8], [3 x i8]* @.fmt_int_simple, i32 0, i32 0\n");
+        
+        write(c.output_file, c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 20, i8* " + fmt + ", i32 " + val_i32 + ")\n");
         return CompileResult(reg=buf_ptr, type=TYPE_STRING);
     }
 
@@ -642,13 +724,13 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 init_val_str = "null";
             }
             else if (val_node.type == NODE_NULL) {
-                 if (is_pointer_type(c, target_type_id) == true) {
-                    throw_type_error(node.pos, "Global 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
-                 }
-                 if (target_type_id == TYPE_INT || target_type_id == TYPE_FLOAT || target_type_id == TYPE_BOOL) {
-                    throw_type_error(node.pos, "Primitive types cannot be null.");
-                 }
-                 init_val_str = "null";
+                if (is_pointer_type(c, target_type_id) == true) {
+                throw_type_error(node.pos, "Global 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
+                }
+                if (target_type_id == TYPE_INT || target_type_id == TYPE_FLOAT || target_type_id == TYPE_BOOL) {
+                throw_type_error(node.pos, "Primitive types cannot be null.");
+                }
+                init_val_str = "null";
             }
             else if (val_node.type == NODE_INT) {
                 let n -> IntNode = node.value;
@@ -692,9 +774,19 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
             }
         }
         else {
+            if (target_type_id == TYPE_BYTE && val_res.type == TYPE_INT) {
+                let trunc_reg -> String = next_reg(c);
+                write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + val_res.reg + " to i8\n");
+                val_res.reg = trunc_reg;
+                val_res.type = TYPE_BYTE;
+            }
+            if (target_type_id == TYPE_LONG && val_res.type == TYPE_INT) {
+                val_res = promote_to_long(c, val_res);
+            }
             if (target_type_id == TYPE_FLOAT && val_res.type == TYPE_INT) {
                 val_res = promote_to_float(c, val_res);
             }
+
             if (target_type_id == TYPE_GENERIC_STRUCT && val_res.type >= 100) {
                 origin_id = val_res.type;
                 let cast_reg -> String = next_reg(c);
@@ -704,18 +796,18 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 val_res.type = TYPE_GENERIC_STRUCT;
             }
             if (val_res.type == TYPE_GENERIC_STRUCT && target_type_id >= 100) {
-                 if (map_get(c.struct_id_map, "" + target_type_id) is !null) {
+                if (map_get(c.struct_id_map, "" + target_type_id) is !null) {
                     let cast_reg -> String = next_reg(c);
                     let dest_ty -> String = get_llvm_type_str(c, target_type_id);
                     write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + val_res.reg + " to " + dest_ty + "\n");
                     val_res.reg = cast_reg;
                     val_res.type = target_type_id;
-                 }
+                }
             }
             if (val_res.type == TYPE_GENERIC_FUNCTION && target_type_id >= 100) {
-                 if (map_get(c.func_ret_map, "" + target_type_id) is !null) {
+                if (map_get(c.func_ret_map, "" + target_type_id) is !null) {
                     val_res.type = target_type_id;
-                 }
+                }
             }
             if (target_type_id == TYPE_GENERIC_FUNCTION && val_res.type >= 100) {
                 let f_check -> SymbolInfo = map_get(c.func_ret_map, "" + val_res.type);
@@ -796,6 +888,15 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
             throw_type_error(node.pos, "Primitive types cannot be null.");
         }
     } else {
+        if (info.type == TYPE_BYTE && val_res.type == TYPE_INT) {
+            let trunc_reg -> String = next_reg(c);
+            write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + val_res.reg + " to i8\n");
+            val_res.reg = trunc_reg;
+            val_res.type = TYPE_BYTE;
+        }
+        if (info.type == TYPE_LONG && val_res.type == TYPE_INT) {
+            val_res = promote_to_long(c, val_res);
+        }
         if (info.type == TYPE_FLOAT && val_res.type == TYPE_INT) {
             val_res = promote_to_float(c, val_res);
         }
@@ -1108,7 +1209,6 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         if (ret_type_id == TYPE_VOID) {
             write(c.output_file, c.indent + "ret void\n");
         } else {
-            // If execution falls through without return, return 0/0.0/false/null
             let zero_val -> String = "0";
             if (ret_type_id == TYPE_FLOAT) { zero_val = "0.0"; }
             else if (ret_type_id == TYPE_STRING || ret_type_id >= 100 || ret_type_id == TYPE_GENERIC_STRUCT || ret_type_id == TYPE_GENERIC_FUNCTION) { zero_val = "null"; }
@@ -1570,16 +1670,24 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
             return CompileResult(reg=res_reg, type=TYPE_BOOL);
         }
 
-        let cmp_mode -> Int = TYPE_INT;
+        let cmp_mode -> Int = TYPE_BYTE;
         if (left.type == TYPE_FLOAT || right.type == TYPE_FLOAT) {
             cmp_mode = TYPE_FLOAT;
             left = promote_to_float(c, left);
             right = promote_to_float(c, right);
+        } else if (left.type == TYPE_LONG || right.type == TYPE_LONG) {
+            cmp_mode = TYPE_LONG;
+            left = promote_to_long(c, left);
+            right = promote_to_long(c, right);
+        } else if (left.type == TYPE_INT || right.type == TYPE_INT) {
+            cmp_mode = TYPE_INT;
+            if (left.type == TYPE_BYTE) { left = promote_to_int(c, left); }
+            if (right.type == TYPE_BYTE) { right = promote_to_int(c, right); }
         }
 
         let res_reg -> String = next_reg(c);
         let op_code -> String = "";
-        let type_str -> String = "i32";
+        let type_str -> String = "i8";
         
         if (cmp_mode == TYPE_FLOAT) {
             type_str = "double";
@@ -1590,13 +1698,24 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
             else if (op_type == TOK_GTE) { op_code = "fcmp oge"; }
             else if (op_type == TOK_LTE) { op_code = "fcmp ole"; }
         } else {
-            // Int
+            // Int, Long, Byte
+            let suffix -> String = "u"; // default unsigned for Byte
+            
+            if (cmp_mode == TYPE_LONG) { 
+                type_str = "i64"; 
+                suffix = "s"; // signed for Long
+            }
+            else if (cmp_mode == TYPE_INT) { 
+                type_str = "i32"; 
+                suffix = "s"; // signed for Int
+            }
+            
             if (op_type == TOK_EE) { op_code = "icmp eq"; }
             else if (op_type == TOK_NE) { op_code = "icmp ne"; }
-            else if (op_type == TOK_GT) { op_code = "icmp sgt"; }
-            else if (op_type == TOK_LT) { op_code = "icmp slt"; }
-            else if (op_type == TOK_GTE) { op_code = "icmp sge"; }
-            else if (op_type == TOK_LTE) { op_code = "icmp sle"; }
+            else if (op_type == TOK_GT) { op_code = "icmp " + suffix + "gt"; }
+            else if (op_type == TOK_LT) { op_code = "icmp " + suffix + "lt"; }
+            else if (op_type == TOK_GTE) { op_code = "icmp " + suffix + "ge"; }
+            else if (op_type == TOK_LTE) { op_code = "icmp " + suffix + "le"; }
         }
         
         write(c.output_file, c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
@@ -1607,30 +1726,47 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         throw_type_error(node.pos, "Arithmetic operators cannot be used on Bool. ");
     }
 
-    let target_type -> Int = TYPE_INT;
+    let target_type -> Int = TYPE_BYTE;
+    
     if (left.type == TYPE_FLOAT || right.type == TYPE_FLOAT) {
         target_type = TYPE_FLOAT;
         left = promote_to_float(c, left);
         right = promote_to_float(c, right);
+    } else if (left.type == TYPE_LONG || right.type == TYPE_LONG) {
+        target_type = TYPE_LONG;
+        left = promote_to_long(c, left);
+        right = promote_to_long(c, right);
+    } else if (left.type == TYPE_INT || right.type == TYPE_INT) {
+        target_type = TYPE_INT;
+        if (left.type == TYPE_BYTE) { left = promote_to_int(c, left); }
+        if (right.type == TYPE_BYTE) { right = promote_to_int(c, right); }
     }
 
     let res_reg -> String = next_reg(c);
     let op_code -> String = "";
-    let type_str -> String = "i32";
-    if (target_type == TYPE_FLOAT) { type_str = "double"; }
+    let type_str -> String = "i8";
     
-    if (target_type == TYPE_INT) {
-        if (op_type == TOK_PLUS)  { op_code = "add"; }
-        else if (op_type == TOK_SUB)   { op_code = "sub"; }
-        else if (op_type == TOK_MUL)   { op_code = "mul"; }
-        else if (op_type == TOK_DIV)   { op_code = "sdiv"; }
-        else if (op_type == TOK_MOD)   { op_code = "srem"; } 
-    } else {
+    if (target_type == TYPE_FLOAT) {
+        type_str = "double";
         if (op_type == TOK_PLUS)  { op_code = "fadd"; }
         else if (op_type == TOK_SUB)   { op_code = "fsub"; }
         else if (op_type == TOK_MUL)   { op_code = "fmul"; }
         else if (op_type == TOK_DIV)   { op_code = "fdiv"; }
         else if (op_type == TOK_MOD)   { op_code = "frem"; } 
+    } else {
+        if (target_type == TYPE_LONG) { type_str = "i64"; }
+        else if (target_type == TYPE_INT) { type_str = "i32"; }
+        
+        if (op_type == TOK_PLUS)  { op_code = "add"; }
+        else if (op_type == TOK_SUB)   { op_code = "sub"; }
+        else if (op_type == TOK_MUL)   { op_code = "mul"; }
+
+        else if (op_type == TOK_DIV) { 
+            if (target_type == TYPE_BYTE) { op_code = "udiv"; } else { op_code = "sdiv"; }
+        }
+        else if (op_type == TOK_MOD) { 
+            if (target_type == TYPE_BYTE) { op_code = "urem"; } else { op_code = "srem"; }
+        } 
     }
 
     write(c.output_file, c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
@@ -1892,6 +2028,15 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                     fmt = "%s\\0A\\00"; ty_str = "i8*";
                 } else if (arg_res.type == TYPE_INT) {
                     // pass
+                } else if (arg_res.type == TYPE_LONG) {
+                    fmt = "%lld\\0A\\00"; ty_str = "i64";
+                } else if (arg_res.type == TYPE_BYTE) {
+                    fmt = "%d\\0A\\00";
+                    ty_str = "i32";
+                    let ext -> String = next_reg(c);
+                    write(c.output_file, c.indent + ext + " = zext i8 " + arg_res.reg + " to i32\n");
+                    arg_res.reg = ext;
+                    // use_fmt = "@.fmt_int";
                 } else {
                     throw_type_error(n_call.pos, "Cannot print type " + get_llvm_type_str(c, arg_res.type));
                 }
@@ -1899,6 +2044,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 let use_fmt -> String = "@.fmt_int";
                 if (ty_str == "double") { use_fmt = "@.fmt_float"; }
                 if (ty_str == "i8*") { use_fmt = "@.fmt_str"; }
+                if (ty_str == "i64") { use_fmt = "@.fmt_long"; }
 
                 let ptr_reg -> String = next_reg(c);
                 write(c.output_file, c.indent + ptr_reg + " = getelementptr [4 x i8], [4 x i8]* " + use_fmt + ", i32 0, i32 0\n");
@@ -2163,6 +2309,7 @@ func compile_start(c -> Compiler) -> Void {
     compile_arc_hooks(c);
     
     write(c.output_file, "@.fmt_int = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\"\n");
+    write(c.output_file, "@.fmt_long = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n");
     write(c.output_file, "@.fmt_float = private unnamed_addr constant [4 x i8] c\"%f\\0A\\00\"\n");
     write(c.output_file, "@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n\n");
 
