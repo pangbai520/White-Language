@@ -74,7 +74,6 @@ const TOK_IS            -> Int = 60;
 const TOK_EXTERN        -> Int = 61; // extern
 const TOK_ELLIPSIS      -> Int = 62; // ...
 const TOK_FROM          -> Int = 63;
-
 const TOK_LBRACKET      -> Int = 64; // [
 const TOK_RBRACKET      -> Int = 65; // ]
 
