@@ -95,6 +95,8 @@ struct Compiler(
     type_counter -> Int, // custom type
     ptr_cache -> HashMap,       // Key: "ptr_ID", Value: SymbolInfo(reg="", type=ptr_id)
     ptr_base_map -> HashMap,    // Key: "ID", Value: SymbolInfo(reg="", type=base_id)
+    vector_cache -> HashMap,    // Key: "vec_baseID", Value: SymbolInfo(type=new_id)
+    vector_base_map -> HashMap, // Key: "ID", Value: SymbolInfo(type=baseID)
     func_ret_map -> HashMap,
     declared_externs -> HashMap
 )
@@ -130,6 +132,8 @@ func new_compiler(out_path -> String) -> Compiler {
         type_counter = 100,
         ptr_cache=map_new(32),
         ptr_base_map=map_new(32),
+        vector_cache=map_new(32),
+        vector_base_map=map_new(32),
         func_ret_map=map_new(32),
         declared_externs=map_new(32)
     );
@@ -213,7 +217,9 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
 
     if (type_id >= 100) {
         let f_info -> SymbolInfo = map_get(c.func_ret_map, "" + type_id);
-        if (f_info is !null) { return "i8*"; }
+        if (f_info is !null) {
+            return "i8*";
+        }
 
         let ptr_info -> SymbolInfo = map_get(c.ptr_base_map, "" + type_id);
         if (ptr_info is !null) {
@@ -223,6 +229,12 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
         let s_info -> StructInfo = map_get(c.struct_id_map, "" + type_id);
         if (s_info is !null) { 
             return s_info.llvm_name + "*"; 
+        }
+
+        let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + type_id);
+        if (v_info is !null) {
+            let elem_ty -> String = get_llvm_type_str(c, v_info.type);
+            return "{ i64, i64, " + elem_ty + "* }*";
         }
     }
 
@@ -256,6 +268,11 @@ func get_type_name(c -> Compiler, type_id -> Int) -> String {
         let ptr_info -> SymbolInfo = map_get(c.ptr_base_map, "" + type_id);
         if (ptr_info is !null) {
             return "Ptr<" + get_type_name(c, ptr_info.type) + ">";
+        }
+
+        let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + type_id);
+        if (v_info is !null) {
+            return "Vector(" + get_type_name(c, v_info.type) + ")";
         }
     }
     
@@ -366,6 +383,20 @@ func get_func_type_id(c -> Compiler, ret_type_id -> Int) -> Int {
     return new_id;
 }
 
+func get_vector_type_id(c -> Compiler, base_id -> Int) -> Int {
+    let key -> String = "vec_" + base_id;
+    let cached -> SymbolInfo = map_get(c.vector_cache, key);
+    if (cached is !null) { return cached.type; }
+    
+    let new_id -> Int = c.type_counter;
+    c.type_counter = c.type_counter + 1;
+
+    map_put(c.vector_cache, key, SymbolInfo(reg="", type=new_id, origin_type=0));
+    map_put(c.vector_base_map, "" + new_id, SymbolInfo(reg="", type=base_id, origin_type=0));
+    
+    return new_id;
+}
+
 // Recursively resolve types from AST nodes to Int ID
 func resolve_type(c -> Compiler, node -> Struct) -> Int {
     if (node is null) { return TYPE_VOID; }
@@ -390,6 +421,13 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
             i += 1;
         }
         return current_id;
+    }
+
+    // Vector
+    if (base.type == NODE_VECTOR_TYPE) {
+        let v_node -> VectorTypeNode = node;
+        let elem_id -> Int = resolve_type(c, v_node.element_type);
+        return get_vector_type_id(c, elem_id); // 类似于 get_ptr_type_id
     }
     
     // Named Type (Int, Float, StructName)
@@ -586,6 +624,93 @@ func cleanup_all_scopes(c -> Compiler) -> Void {
         }
         curr = curr.parent;
     }
+}
+
+func emit_vector_bounds_check(c -> Compiler, vec_reg -> String, idx_reg -> String, struct_ty -> String, pos -> Position) -> Void {
+    let size_ptr -> String = next_reg(c);
+    write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_reg + ", i32 0, i32 0\n");
+    let size_val -> String = next_reg(c);
+    write(c.output_file, c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
+
+    let idx_i64 -> String = next_reg(c);
+    write(c.output_file, c.indent + idx_i64 + " = sext i32 " + idx_reg + " to i64\n");
+
+    let cmp_reg -> String = next_reg(c);
+    write(c.output_file, c.indent + cmp_reg + " = icmp uge i64 " + idx_i64 + ", " + size_val + "\n");
+
+    let fail_label -> String = "bounds_fail_" + c.type_counter;
+    let ok_label -> String = "bounds_ok_" + c.type_counter;
+    c.type_counter = c.type_counter + 1;
+    
+    write(c.output_file, c.indent + "br i1 " + cmp_reg + ", label %" + fail_label + ", label %" + ok_label + "\n");
+
+    write(c.output_file, "\n" + fail_label + ":\n");
+
+    let fmt_ptr -> String = "getelementptr inbounds ([66 x i8], [66 x i8]* @.fmt_err_bounds, i32 0, i32 0)";
+    let line_num -> Int = pos.ln + 1;
+    let col_num -> Int = pos.col + 1;
+    write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* " + fmt_ptr + ", i32 " + line_num + ", i32 " + col_num + ")\n");
+
+    let full_text -> String = pos.text;
+    if (full_text.length() > 0) {
+        let current_ln -> Int = 0;
+        let scan_idx -> Int = 0;
+        let len -> Int = full_text.length();
+        let line_start_idx -> Int = 0;
+        while (scan_idx < len) {
+            if (current_ln == pos.ln) {
+                line_start_idx = scan_idx;
+                break;
+            }
+            if (full_text[scan_idx] == 10) { // \n
+                current_ln = current_ln + 1;
+            }
+            scan_idx += 1;
+        }
+
+        let line_end_idx -> Int = line_start_idx;
+        while (line_end_idx < len) {
+            let ch -> Int = full_text[line_end_idx];
+            if (ch == 10 || ch == 13) { break; }
+            line_end_idx = line_end_idx + 1;
+        }
+        
+        let raw_line -> String = full_text.slice(line_start_idx, line_end_idx);
+        let code_content -> String = "    " + raw_line + "\n";
+        
+        let code_id -> Int = c.str_count;
+        c.str_count = c.str_count + 1;
+        let code_const -> StringConstant = StringConstant(id=code_id, value=code_content, next=c.string_list);
+        c.string_list = code_const;
+
+        let code_len -> Int = 4 + raw_line.length() + 2; 
+        
+        let code_ptr -> String = "getelementptr inbounds ([" + code_len + " x i8], [" + code_len + " x i8]* @.str." + code_id + ", i32 0, i32 0)";
+        write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* " + code_ptr + ")\n");
+
+        let arrow_str -> String = "    ";
+        let k -> Int = 0;
+        while (k < pos.col) {
+            arrow_str = arrow_str + " ";
+            k = k + 1;
+        }
+        arrow_str = arrow_str + "^\n";
+        
+        let arrow_id -> Int = c.str_count;
+        c.str_count = c.str_count + 1;
+        let arrow_const -> StringConstant = StringConstant(id=arrow_id, value=arrow_str, next=c.string_list);
+        c.string_list = arrow_const;
+
+        let arrow_len -> Int = 4 + pos.col + 3;
+        
+        let arrow_ptr -> String = "getelementptr inbounds ([" + arrow_len + " x i8], [" + arrow_len + " x i8]* @.str." + arrow_id + ", i32 0, i32 0)";
+        write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* " + arrow_ptr + ")\n");
+    }
+    
+    write(c.output_file, c.indent + "call void @exit(i32 1)\n");
+    write(c.output_file, c.indent + "unreachable\n");
+
+    write(c.output_file, "\n" + ok_label + ":\n");
 }
 
 func compile_arc_hooks(c -> Compiler) -> Void {
@@ -1580,6 +1705,310 @@ func compile_extern_block(c -> Compiler, node -> ExternBlockNode) -> CompileResu
     return void_result();
 }
 
+func compile_vector_lit(c -> Compiler, node -> VectorLitNode) -> CompileResult {
+    let count -> Int = node.count;
+    let elem_type_id -> Int = TYPE_INT; 
+    if (node.elements is !null) {
+        let first_arg -> ArgNode = node.elements;
+        let first_res -> CompileResult = compile_node(c, first_arg.val);
+        elem_type_id = first_res.type;
+    }
+    
+    let vec_type_id -> Int = get_vector_type_id(c, elem_type_id);
+    let elem_ty_str -> String = get_llvm_type_str(c, elem_type_id);
+    let struct_name -> String = "{ i64, i64, " + elem_ty_str + "* }";
+    
+    // malloc vector struct header
+    let struct_size_ptr -> String = next_reg(c);
+    write(c.output_file, c.indent + struct_size_ptr + " = getelementptr " + struct_name + ", " + struct_name + "* null, i32 1\n");
+    let struct_size -> String = next_reg(c);
+    write(c.output_file, c.indent + struct_size + " = ptrtoint " + struct_name + "* " + struct_size_ptr + " to i64\n");
+    let raw_struct -> String = next_reg(c);
+    write(c.output_file, c.indent + raw_struct + " = call i8* @malloc(i64 " + struct_size + ")\n");
+    let vec_ptr -> String = next_reg(c);
+    write(c.output_file, c.indent + vec_ptr + " = bitcast i8* " + raw_struct + " to " + struct_name + "*\n");
+    
+    // malloc data array
+    let arr_size_ptr -> String = next_reg(c);
+    // size = count * sizeof(T)
+    write(c.output_file, c.indent + arr_size_ptr + " = getelementptr " + elem_ty_str + ", " + elem_ty_str + "* null, i64 " + count + "\n");
+    let arr_bytes -> String = next_reg(c);
+    write(c.output_file, c.indent + arr_bytes + " = ptrtoint " + elem_ty_str + "* " + arr_size_ptr + " to i64\n");
+    
+    let raw_data -> String = next_reg(c);
+    // TODO: Handle count == 0 case carefully
+    write(c.output_file, c.indent + raw_data + " = call i8* @malloc(i64 " + arr_bytes + ")\n");
+    let data_ptr -> String = next_reg(c);
+    write(c.output_file, c.indent + data_ptr + " = bitcast i8* " + raw_data + " to " + elem_ty_str + "*\n");
+
+    // struct { i64 size, i64 capacity, T* data }
+    // size
+    let size_ptr -> String = next_reg(c); 
+    write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_name + ", " + struct_name + "* " + vec_ptr + ", i32 0, i32 0\n");
+    write(c.output_file, c.indent + "store i64 " + count + ", i64* " + size_ptr + "\n");
+    
+    // capacity
+    let cap_ptr -> String = next_reg(c); 
+    write(c.output_file, c.indent + cap_ptr + " = getelementptr inbounds " + struct_name + ", " + struct_name + "* " + vec_ptr + ", i32 0, i32 1\n");
+    write(c.output_file, c.indent + "store i64 " + count + ", i64* " + cap_ptr + "\n"); 
+    
+    // data pointer
+    let data_field_ptr -> String = next_reg(c); 
+    write(c.output_file, c.indent + data_field_ptr + " = getelementptr inbounds " + struct_name + ", " + struct_name + "* " + vec_ptr + ", i32 0, i32 2\n");
+    write(c.output_file, c.indent + "store " + elem_ty_str + "* " + data_ptr + ", " + elem_ty_str + "** " + data_field_ptr + "\n");
+    
+    let curr -> ArgNode = node.elements;
+    let idx -> Int = 0;
+    while (curr is !null) {
+        let val_res -> CompileResult = compile_node(c, curr.val);
+
+        if (val_res.type != elem_type_id) {
+            if (elem_type_id == TYPE_INT && val_res.type == TYPE_BYTE) {
+                val_res = promote_to_int(c, val_res);
+            } else {
+                throw_type_error(node.pos, "Mixed types in vector literal. Expected " + get_type_name(c, elem_type_id) + ", got " + get_type_name(c, val_res.type) + ".");
+            }
+        }
+        
+        let slot_ptr -> String = next_reg(c);
+        write(c.output_file, c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + idx + "\n");
+
+        if (is_ref_type(c, elem_type_id)) {
+            emit_retain(c, val_res.reg, elem_type_id);
+        }
+        
+        write(c.output_file, c.indent + "store " + elem_ty_str + " " + val_res.reg + ", " + elem_ty_str + "* " + slot_ptr + "\n");
+        
+        idx = idx + 1;
+        curr = curr.next;
+    }
+    
+    return CompileResult(reg=vec_ptr, type=vec_type_id);
+}
+
+func compile_length_method(c -> Compiler, obj_node -> Struct, call_node -> CallNode) -> CompileResult {
+    if (call_node.args is !null) {
+        throw_type_error(call_node.pos, "Method 'length' does not accept arguments.");
+    }
+
+    let obj_res -> CompileResult = compile_node(c, obj_node);
+    let type_id -> Int = obj_res.type;
+
+    // String.length()
+    if (type_id == TYPE_STRING) {
+        let len_reg -> String = next_reg(c);
+        // strlen returns i32 in our declaration
+        write(c.output_file, c.indent + len_reg + " = call i32 @strlen(i8* " + obj_res.reg + ")\n");
+        return CompileResult(reg=len_reg, type=TYPE_INT);
+    }
+
+    // Vector.length()
+    let is_vec -> Bool = false;
+    if (type_id >= 100) {
+        let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + type_id);
+        if (v_info is !null) { is_vec = true; }
+    }
+
+    if is_vec {
+        let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + type_id);
+        let elem_ty_str -> String = get_llvm_type_str(c, v_info.type);
+        let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+        
+        let size_ptr -> String = next_reg(c);
+        write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + obj_res.reg + ", i32 0, i32 0\n");
+        
+        let size_val -> String = next_reg(c);
+        write(c.output_file, c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
+
+        let trunc_reg -> String = next_reg(c);
+        write(c.output_file, c.indent + trunc_reg + " = trunc i64 " + size_val + " to i32\n");
+        
+        return CompileResult(reg=trunc_reg, type=TYPE_INT);
+    }
+
+    throw_type_error(call_node.pos, "Method 'length' is not defined for type " + get_type_name(c, type_id));
+    return void_result();
+}
+
+func check_out_index(c -> Compiler, target_node -> Struct, index_node -> Struct, pos -> Position) -> Void {
+    let base_idx -> BaseNode = index_node;
+    if (base_idx.type == NODE_INT) {
+        let i_node -> IntNode = index_node;
+        let val_str -> String = i_node.tok.value;
+
+        let idx_val -> Int = 0;
+        let start -> Int = 0;
+        let is_neg -> Bool = false;
+
+        if (val_str.length() > 0 && val_str[0] == 45) { // '-'
+            start = 1;
+            is_neg = true;
+        }
+
+        let j -> Int = start;
+        while (j < val_str.length()) {
+            let code -> Int = val_str[j];
+            if (code >= 48 && code <= 57) {
+                idx_val *= 10;
+                idx_val += (code - 48);
+            }
+            j += 1;
+        }
+        
+        if is_neg { 
+            idx_val = -idx_val; 
+        }
+
+        if (idx_val < 0) {
+            throw_index_error(pos, "Negative index " + val_str + " is not supported yet.");
+        }
+
+        let base_target -> BaseNode = target_node;
+        if (base_target.type == NODE_VECTOR_LIT) {
+            let vec_node -> VectorLitNode = target_node;
+            let count -> Int = vec_node.count;
+            
+            if (idx_val >= count) {
+                throw_index_error(pos, "Index " + val_str + " is out of bounds for vector of size " + count + ".");
+            }
+        }
+
+        if (base_target.type == NODE_STRING) {
+            let str_node -> StringNode = target_node;
+            let s_len -> Int = str_node.tok.value.length();
+
+            if (idx_val >= s_len) {
+                throw_index_error(pos, "Index " + val_str + " is out of bounds for string of length " + s_len + ".");
+            }
+        }
+    }
+}
+func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResult {
+    check_out_index(c, node.target, node.index_node, node.pos);
+    let target_res -> CompileResult = compile_node(c, node.target);
+    let index_res -> CompileResult = compile_node(c, node.index_node);
+    
+    // idx type
+    if (index_res.type != TYPE_INT) {
+        throw_type_error(node.pos, "Index must be an Integer.");
+    }
+    
+    // Vector access
+    let is_vec -> Bool = false;
+    if (target_res.type >= 100) {
+        if (map_get(c.vector_base_map, "" + target_res.type) is !null) { is_vec = true; }
+    }
+    
+    if is_vec {
+        let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + target_res.type);
+        let elem_type -> Int = v_info.type;
+        let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
+        
+        // { i64, i64, T* }
+        let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+
+        emit_vector_bounds_check(c, target_res.reg, index_res.reg, struct_ty, node.pos);
+
+        let data_field_ptr -> String = next_reg(c);
+        write(c.output_file, c.indent + data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + target_res.reg + ", i32 0, i32 2\n");
+        
+        let data_ptr -> String = next_reg(c);
+        write(c.output_file, c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
+
+        let slot_ptr -> String = next_reg(c);
+        
+        let idx_i64 -> String = next_reg(c);
+        write(c.output_file, c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
+        
+        write(c.output_file, c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + idx_i64 + "\n");
+        
+        let val_reg -> String = next_reg(c);
+        write(c.output_file, c.indent + val_reg + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot_ptr + "\n");
+        
+        return CompileResult(reg=val_reg, type=elem_type);
+    }
+    
+    // str access(-> Byte)
+    if (target_res.type == TYPE_STRING) {
+        let idx_i64 -> String = next_reg(c);
+        write(c.output_file, c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
+        
+        let char_ptr -> String = next_reg(c);
+        write(c.output_file, c.indent + char_ptr + " = getelementptr inbounds i8, i8* " + target_res.reg + ", i64 " + idx_i64 + "\n");
+        
+        let char_val -> String = next_reg(c);
+        write(c.output_file, c.indent + char_val + " = load i8, i8* " + char_ptr + "\n");
+        
+        return CompileResult(reg=char_val, type=TYPE_BYTE);
+    }
+    
+    throw_type_error(node.pos, "Type " + get_type_name(c, target_res.type) + " is not indexable.");
+    return void_result();
+}
+func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResult {
+    check_out_index(c, node.target, node.index_node, node.pos);
+    let target_res -> CompileResult = compile_node(c, node.target);
+    let index_res -> CompileResult = compile_node(c, node.index_node);
+    let val_res -> CompileResult = compile_node(c, node.value);
+    
+    if (index_res.type != TYPE_INT) {
+        throw_type_error(node.pos, "Index must be an Integer.");
+    }
+    
+    let is_vec -> Bool = false;
+    if (target_res.type >= 100) {
+        if (map_get(c.vector_base_map, "" + target_res.type) is !null) { is_vec = true; }
+    }
+
+    if (target_res.type == TYPE_STRING) {
+        throw_type_error(node.pos, "Strings are immutable. Cannot assign to index.");
+    }
+
+    if is_vec {
+        let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + target_res.type);
+        let elem_type -> Int = v_info.type;
+        let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
+
+        if (val_res.type != elem_type) {
+            if (elem_type == TYPE_INT && val_res.type == TYPE_BYTE) {
+                val_res = promote_to_int(c, val_res);
+            } else {
+                throw_type_error(node.pos, "Type mismatch. Vector expects " + get_type_name(c, elem_type) + ", got " + get_type_name(c, val_res.type));
+            }
+        }
+
+        let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+
+        emit_vector_bounds_check(c, target_res.reg, index_res.reg, struct_ty, node.pos);
+
+        let data_field_ptr -> String = next_reg(c);
+        write(c.output_file, c.indent + data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + target_res.reg + ", i32 0, i32 2\n");
+        let data_ptr -> String = next_reg(c);
+        write(c.output_file, c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
+        
+        let idx_i64 -> String = next_reg(c);
+        write(c.output_file, c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
+        let slot_ptr -> String = next_reg(c);
+        write(c.output_file, c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + idx_i64 + "\n");
+
+        if (is_ref_type(c, elem_type)) {
+            emit_retain(c, val_res.reg, elem_type);
+    
+            let old_val -> String = next_reg(c);
+            write(c.output_file, c.indent + old_val + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot_ptr + "\n");
+
+            emit_release(c, old_val, elem_type);
+        }
+
+        write(c.output_file, c.indent + "store " + elem_ty_str + " " + val_res.reg + ", " + elem_ty_str + "* " + slot_ptr + "\n");
+        
+        return val_res;
+    }
+    
+    throw_type_error(node.pos, "Type " + get_type_name(c, target_res.type) + " does not support index assignment.");
+    return void_result();
+}
+
 func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
     let left -> CompileResult = compile_node(c, node.left);
     let op_type -> Int = node.op_tok.type; 
@@ -1877,6 +2306,9 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_FIELD_ACCESS) { return compile_field_access(c, node); }
     if (base.type == NODE_FIELD_ASSIGN) { return compile_field_assign(c, node); }
     if (base.type == NODE_EXTERN_BLOCK) { return compile_extern_block(c, node); }
+    if (base.type == NODE_VECTOR_LIT) { return compile_vector_lit(c, node); }
+    if (base.type == NODE_INDEX_ACCESS) { return compile_index_access(c, node); }
+    if (base.type == NODE_INDEX_ASSIGN) { return compile_index_assign(c, node); }
 
     // ptr
     if (base.type == NODE_PTR_ASSIGN) {return compile_ptr_assign(c, node);}
@@ -2035,6 +2467,14 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_CALL) {
         let n_call -> CallNode = node;
         let callee -> BaseNode = n_call.callee;
+
+        if (callee.type == NODE_FIELD_ACCESS) {
+            let f_acc -> FieldAccessNode = callee;
+            if (f_acc.field_name == "length") {
+                return compile_length_method(c, f_acc.obj, n_call);
+            }
+        }
+
         let func_name -> String = "";
         let is_direct -> Int = 0;
 
@@ -2401,6 +2841,9 @@ func compile_start(c -> Compiler) -> Void {
     write(c.output_file, "declare void @free(i8*)\n");
     map_put(c.declared_externs, "free", StringConstant(id=0, value="", next=null));
 
+    write(c.output_file, "declare void @exit(i32)\n");
+    map_put(c.declared_externs, "exit", StringConstant(id=0, value="", next=null));
+
     compile_arc_hooks(c);
     
     write(c.output_file, "@.fmt_int = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\"\n");
@@ -2413,6 +2856,9 @@ func compile_start(c -> Compiler) -> Void {
     write(c.output_file, "@.str_true = private unnamed_addr constant [5 x i8] c\"true\\00\"\n");
     write(c.output_file, "@.str_false = private unnamed_addr constant [6 x i8] c\"false\\00\"\n");
     write(c.output_file, "@.str_null = private unnamed_addr constant [5 x i8] c\"null\\00\"\n\n");
+
+    write(c.output_file, "@.str_idx_err = private unnamed_addr constant [21 x i8] c\"Index out of bounds\\0A\\00\"\n\n");
+    write(c.output_file, "@.fmt_err_bounds = private unnamed_addr constant [66 x i8] c\"\\0ARuntimeError\\1B[0m: Index out of bounds\\0A    at Line %d, Column %d\\0A\\00\"\n\n");
 }
 
 func compile(c -> Compiler, node -> Struct) -> Void {

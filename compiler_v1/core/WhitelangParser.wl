@@ -131,9 +131,27 @@ func parse_return_type(p -> Parser) -> Struct {
                 return FunctionTypeNode(type=NODE_FUNCTION_TYPE, return_type=ret_ty, pos=pos);
             }
 
-            // 如果没有 '('，那就是泛型 Function (退化为 VarAccessNode)
             let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
             return VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
+        }
+        if (tok.value == "Vector") {
+            advance(p); // skip Vector
+            if (p.current_tok.type != TOK_LPAREN) {
+                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                throw_invalid_syntax(err_pos, "Expected '(' after Vector.");
+            }
+            advance(p); // skip (
+            
+            let elem_type -> Struct = parse_return_type(p);
+            
+            if (p.current_tok.type != TOK_RPAREN) {
+                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                throw_invalid_syntax(err_pos, "Expected ')' after Vector type.");
+            }
+            advance(p); // skip )
+            
+            let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+            return VectorTypeNode(type=NODE_VECTOR_TYPE, element_type=elem_type, pos=pos);
         }
 
         advance(p);
@@ -267,6 +285,39 @@ func atom(p -> Parser) -> Struct {
         return node;
     }
 
+    if (tok.type == TOK_LBRACKET) {
+        advance(p); // skip [
+        let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
+        let head -> ArgNode = null;
+        let curr -> ArgNode = null;
+        let count -> Int = 0;
+        
+        if (p.current_tok.type != TOK_RBRACKET) {
+            while (true) {
+                let val -> Struct = expression(p);
+                let new_node -> ArgNode = ArgNode(val=val, name=null, next=null);
+                
+                if (head is null) { head = new_node; curr = new_node; }
+                else { curr.next = new_node; curr = new_node; }
+                count = count + 1;
+                
+                if (p.current_tok.type == TOK_COMMA) {
+                    advance(p);
+                } else {
+                    break;
+                }
+            }
+        }
+        
+        if (p.current_tok.type != TOK_RBRACKET) {
+            let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+            throw_invalid_syntax(err_pos, "Expected ']' after vector elements.");
+        }
+        advance(p); // skip ]
+        
+        return VectorLitNode(type=NODE_VECTOR_LIT, elements=head, count=count, pos=pos);
+    }
+
     let err_pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text);
     throw_invalid_syntax(err_pos, "Unexpected token: " + get_token_name(tok.type));
     return null;
@@ -301,7 +352,8 @@ func parse_args(p -> Parser) -> Struct {
 func postfix_expr(p -> Parser) -> Struct {
     let node -> Struct = atom(p);
 
-    while (p.current_tok.type == TOK_INC || p.current_tok.type == TOK_DEC || p.current_tok.type == TOK_LPAREN || p.current_tok.type == TOK_DOT) {
+    while (p.current_tok.type == TOK_INC || p.current_tok.type == TOK_DEC || p.current_tok.type == TOK_LPAREN ||
+           p.current_tok.type == TOK_DOT || p.current_tok.type == TOK_LBRACKET) {
         // ++ / --
         if (p.current_tok.type == TOK_INC || p.current_tok.type == TOK_DEC) {
             let op_tok -> Token = p.current_tok;
@@ -337,6 +389,22 @@ func postfix_expr(p -> Parser) -> Struct {
             advance(p);
     
             node = FieldAccessNode(type=NODE_FIELD_ACCESS, obj=node, field_name=field_name, pos=pos);
+        }
+
+        else if (p.current_tok.type == TOK_LBRACKET) {
+            let bracket_tok -> Token = p.current_tok;
+            advance(p); // skip [
+            
+            let idx_expr -> Struct = expression(p);
+            
+            if (p.current_tok.type != TOK_RBRACKET) {
+                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                throw_invalid_syntax(err_pos, "Expected ']' after index.");
+            }
+            advance(p); // skip ]
+            
+            let pos -> Position = Position(idx=0, ln=bracket_tok.line, col=bracket_tok.col, text=p.lexer.text);
+            node = IndexAccessNode(type=NODE_INDEX_ACCESS, target=node, index_node=idx_expr, pos=pos);
         }
     }
     return node;
@@ -481,6 +549,10 @@ func assignment(p -> Parser) -> Struct {
             let d_node -> DerefNode = left;
             let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
             return PtrAssignNode(type=NODE_PTR_ASSIGN, pointer=d_node, value=right, pos=pos);
+        } else if (base.type == NODE_INDEX_ACCESS) {
+            let idx_node -> IndexAccessNode = left;
+            let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
+            return IndexAssignNode(type=NODE_INDEX_ASSIGN, target=idx_node.target, index_node=idx_node.index_node, value=right, pos=pos);
         } else {
             let err_pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text);
             throw_invalid_syntax(err_pos, "Invalid assignment target.");

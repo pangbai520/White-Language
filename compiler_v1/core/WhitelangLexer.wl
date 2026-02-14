@@ -328,6 +328,8 @@ func get_next_token(l -> Lexer) -> Token {
         if (char == 123) { advance(l); return Token(type=TOK_LBRACE,   value="{", line=char_line, col=char_col); }
         if (char == 125) { advance(l); return Token(type=TOK_RBRACE,   value="}", line=char_line, col=char_col); }
         if (char == 44) { advance(l);  return Token(type=TOK_COMMA,    value=",", line=char_line, col=char_col); }
+        if (char == 91) { advance(l); return Token(type=TOK_LBRACKET, value="[", line=char_line, col=char_col); }
+        if (char == 93) { advance(l); return Token(type=TOK_RBRACKET, value="]", line=char_line, col=char_col); }
 
         throw_illegal_char(l.pos, "unknown character '" + char + "'. ");
     }

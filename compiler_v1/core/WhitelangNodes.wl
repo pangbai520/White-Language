@@ -35,6 +35,10 @@ const NODE_IS             -> Int = 32; // is ...
 const NODE_IS_NOT         -> Int = 33; // is !...
 const NODE_EXTERN_BLOCK   -> Int = 34;
 const NODE_EXTERN_FUNC    -> Int = 35;
+const NODE_VECTOR_TYPE    -> Int = 36;
+const NODE_VECTOR_LIT     -> Int = 37;
+const NODE_INDEX_ACCESS   -> Int = 38;
+const NODE_INDEX_ASSIGN   -> Int = 39;
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -270,4 +274,32 @@ struct ExternFuncNode(
     ret_type_tok -> Struct,
     is_varargs   -> Bool,    // 1 if has '...', else 0
     pos          -> Position
+)
+
+struct VectorTypeNode(
+    type         -> Int, // NODE_VECTOR_TYPE
+    element_type -> Struct, // Type Node (e.g. IntNode)
+    pos          -> Position
+)
+
+struct VectorLitNode(
+    type     -> Int, // NODE_VECTOR_LIT
+    elements -> Struct,
+    count    -> Int,
+    pos      -> Position
+)
+
+struct IndexAccessNode(
+    type       -> Int, // NODE_INDEX_ACCESS
+    target     -> Struct,
+    index_node -> Struct,
+    pos        -> Position
+)
+
+struct IndexAssignNode(
+    type       -> Int, // NODE_INDEX_ASSIGN
+    target     -> Struct,
+    index_node -> Struct,
+    value      -> Struct,
+    pos        -> Position
 )

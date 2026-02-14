@@ -75,6 +75,9 @@ const TOK_EXTERN        -> Int = 61; // extern
 const TOK_ELLIPSIS      -> Int = 62; // ...
 const TOK_FROM          -> Int = 63;
 
+const TOK_LBRACKET      -> Int = 64; // [
+const TOK_RBRACKET      -> Int = 65; // ]
+
 
 func get_token_name(type -> Int) -> String {
     if (type == TOK_INT) { return "INT"; }
@@ -141,6 +144,8 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_EXTERN)  { return "extern"; }
     if (type == TOK_ELLIPSIS)  { return "..."; }
     if (type == TOK_FROM)  { return "from"; }
+    if (type == TOK_LBRACKET)  { return "["; }
+    if (type == TOK_RBRACKET)  { return "]"; }
 
     return "EOF";
 }
