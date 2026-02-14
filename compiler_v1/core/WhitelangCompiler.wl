@@ -41,7 +41,8 @@ struct SymbolInfo(
 
 struct FuncInfo(
     ret_type -> Int, 
-    arg_types -> Struct
+    arg_types -> Struct,
+    is_varargs -> Bool
 )
 
 struct TypeListNode(
@@ -94,7 +95,8 @@ struct Compiler(
     type_counter -> Int, // custom type
     ptr_cache -> HashMap,       // Key: "ptr_ID", Value: SymbolInfo(reg="", type=ptr_id)
     ptr_base_map -> HashMap,    // Key: "ID", Value: SymbolInfo(reg="", type=base_id)
-    func_ret_map -> HashMap
+    func_ret_map -> HashMap,
+    declared_externs -> HashMap
 )
 
 
@@ -128,7 +130,8 @@ func new_compiler(out_path -> String) -> Compiler {
         type_counter = 100,
         ptr_cache=map_new(32),
         ptr_base_map=map_new(32),
-        func_ret_map=map_new(32)
+        func_ret_map=map_new(32),
+        declared_externs=map_new(32)
     );
 }
 
@@ -1143,7 +1146,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         curr_p = curr_p.next;
     }
 
-    map_put(c.func_table, func_name, FuncInfo(ret_type=ret_type_id, arg_types=arg_types_head));
+    map_put(c.func_table, func_name, FuncInfo(ret_type=ret_type_id, arg_types=arg_types_head, is_varargs=false));
 
     let params_str -> String = "";
     let curr -> ParamListNode = node.params;
@@ -1527,6 +1530,56 @@ func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResu
     return val_res;
 }
 
+func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult {
+    let func_name -> String = node.name_tok.value;
+    let ret_type_id -> Int = resolve_type(c, node.ret_type_tok);
+    
+    let arg_head -> TypeListNode = null;
+    let arg_curr -> TypeListNode = null;
+    let curr_p -> ParamListNode = node.params;
+    
+    let params_str -> String = "";
+    let first -> Int = 1;
+    
+    while (curr_p is !null) {
+        let p -> ParamNode = curr_p.param;
+        let p_id -> Int = resolve_type(c, p.type_tok);
+        
+        let t_node -> TypeListNode = TypeListNode(type=p_id, next=null);
+        if (arg_head is null) { arg_head = t_node; arg_curr = t_node; }
+        else { arg_curr.next = t_node; arg_curr = t_node; }
+        
+        if (first == 0) { params_str = params_str + ", "; }
+        params_str = params_str + get_llvm_type_str(c, p_id);
+        first = 0;
+        
+        curr_p = curr_p.next;
+    }
+
+    if node.is_varargs {
+        if (first == 0) { params_str = params_str + ", "; }
+        params_str = params_str + "...";
+    }
+    
+    map_put(c.func_table, func_name, FuncInfo(ret_type=ret_type_id, arg_types=arg_head, is_varargs=node.is_varargs));
+    if (map_get(c.declared_externs, func_name) is null) {
+        let ret_llvm -> String = get_llvm_type_str(c, ret_type_id);
+        write(c.output_file, "declare " + ret_llvm + " @" + func_name + "(" + params_str + ")\n");
+
+        map_put(c.declared_externs, func_name, StringConstant(id=0, value="", next=null)); 
+    }
+    return void_result();
+}
+
+func compile_extern_block(c -> Compiler, node -> ExternBlockNode) -> CompileResult {
+    let curr -> StmtListNode = node.funcs;
+    while (curr is !null) {
+        compile_extern_func(c, curr.stmt);
+        curr = curr.next;
+    }
+    return void_result();
+}
+
 func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
     let left -> CompileResult = compile_node(c, node.left);
     let op_type -> Int = node.op_tok.type; 
@@ -1823,6 +1876,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_STRUCT_DEF) { return compile_struct_def(c, node); }
     if (base.type == NODE_FIELD_ACCESS) { return compile_field_access(c, node); }
     if (base.type == NODE_FIELD_ASSIGN) { return compile_field_assign(c, node); }
+    if (base.type == NODE_EXTERN_BLOCK) { return compile_extern_block(c, node); }
 
     // ptr
     if (base.type == NODE_PTR_ASSIGN) {return compile_ptr_assign(c, node);}
@@ -2062,10 +2116,36 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             let args_str -> String = "";
             let arg_node_curr -> ArgNode = n_call.args;
             let type_node_curr -> TypeListNode = func_info.arg_types;
-            let first -> Int = 1;
+            let is_first -> Bool = true;
 
             while (arg_node_curr is !null) {
-                if (type_node_curr is null) { throw_type_error(n_call.pos, "Too many arguments."); }
+                if (type_node_curr is null) { 
+                    if (func_info.is_varargs == 0) {
+                        throw_type_error(n_call.pos, "Too many arguments."); 
+                    }
+                    let arg_val -> CompileResult = compile_node(c, arg_node_curr.val);
+
+                    // Byte -> Int
+                    if (arg_val.type == TYPE_BYTE) {
+                        arg_val = promote_to_int(c, arg_val);
+                    }
+                    // Bool -> Int
+                    if (arg_val.type == TYPE_BOOL) {
+                        let zext_reg -> String = next_reg(c);
+                        write(c.output_file, c.indent + zext_reg + " = zext i1 " + arg_val.reg + " to i32\n");
+                        arg_val = CompileResult(reg=zext_reg, type=TYPE_INT);
+                    }
+                    // Float -> double(Float)
+                    
+                    if !is_first { args_str = args_str + ", "; }
+                    let ty_str -> String = get_llvm_type_str(c, arg_val.type);
+                    args_str = args_str + ty_str + " " + arg_val.reg;
+
+                    is_first = false;
+                    
+                    arg_node_curr = arg_node_curr.next;
+                    continue;
+                }
                 
                 let arg_val -> CompileResult = compile_node(c, arg_node_curr.val);
                 let expected_type -> Int = type_node_curr.type;
@@ -2088,9 +2168,9 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 if (arg_val.type != expected_type) { throw_type_error(n_call.pos, "Argument type mismatch."); }
 
                 let ty_str -> String = get_llvm_type_str(c, arg_val.type);
-                if (first == 0) { args_str = args_str + ", "; }
+                if !is_first { args_str = args_str + ", "; }
                 args_str = args_str + ty_str + " " + arg_val.reg;
-                first = 0;
+                is_first = false;
                 
                 arg_node_curr = arg_node_curr.next;
                 type_node_curr = type_node_curr.next;
@@ -2296,15 +2376,30 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
 func compile_start(c -> Compiler) -> Void {
     write(c.output_file, "declare i32 @printf(i8*, ...)\n");
+    map_put(c.declared_externs, "printf", StringConstant(id=0, value="", next=null));
+
     write(c.output_file, "declare i32 @snprintf(i8*, i64, i8*, ...)\n");
+    map_put(c.declared_externs, "snprintf", StringConstant(id=0, value="", next=null)); 
+
     write(c.output_file, "declare double @llvm.pow.f64(double, double)\n\n");
-    
+
     write(c.output_file, "declare i8* @malloc(i64)\n");
+    map_put(c.declared_externs, "malloc", StringConstant(id=0, value="", next=null));
+
     write(c.output_file, "declare i32 @strlen(i8*)\n");
+    map_put(c.declared_externs, "strlen", StringConstant(id=0, value="", next=null)); 
+
     write(c.output_file, "declare i8* @strcpy(i8*, i8*)\n");
+    map_put(c.declared_externs, "strcpy", StringConstant(id=0, value="", next=null)); 
+
     write(c.output_file, "declare i8* @strcat(i8*, i8*)\n\n");
+    map_put(c.declared_externs, "strcat", StringConstant(id=0, value="", next=null)); 
+
     write(c.output_file, "declare i32 @strcmp(i8*, i8*)\n\n");
+    map_put(c.declared_externs, "strcmp", StringConstant(id=0, value="", next=null)); 
+
     write(c.output_file, "declare void @free(i8*)\n");
+    map_put(c.declared_externs, "free", StringConstant(id=0, value="", next=null));
 
     compile_arc_hooks(c);
     

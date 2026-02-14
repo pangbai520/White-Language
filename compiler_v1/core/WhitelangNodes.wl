@@ -33,6 +33,8 @@ const NODE_FUNCTION_TYPE  -> Int = 29;
 const NODE_NULL           -> Int = 30;
 const NODE_IS             -> Int = 32; // is ...
 const NODE_IS_NOT         -> Int = 33; // is !...
+const NODE_EXTERN_BLOCK   -> Int = 34;
+const NODE_EXTERN_FUNC    -> Int = 35;
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -253,4 +255,19 @@ struct NullPtrNode(
 struct NullNode(
     type -> Int,
     pos  -> Position
+)
+
+struct ExternBlockNode(
+    type  -> Int, // NODE_EXTERN_BLOCK
+    funcs -> Struct,
+    pos   -> Position
+)
+
+struct ExternFuncNode(
+    type         -> Int, // NODE_EXTERN_FUNC
+    name_tok     -> Token,
+    params       -> Struct,
+    ret_type_tok -> Struct,
+    is_varargs   -> Bool,    // 1 if has '...', else 0
+    pos          -> Position
 )

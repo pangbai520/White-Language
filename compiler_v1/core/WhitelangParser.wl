@@ -35,6 +35,8 @@ func parse(p -> Parser) -> Struct {
                 let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
                 throw_invalid_syntax(err_pos, "Expected ';' after global variable declaration.");
             }
+        } else if (p.current_tok.type == TOK_EXTERN) {
+            stmt = parse_extern(p);
         } else {
             let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
             throw_invalid_syntax(err_pos, "Top level code must be function definitions or global variables. Found: " + get_token_name(p.current_tok.type));
@@ -403,7 +405,7 @@ func comp_expr(p -> Parser) -> Struct {
            p.current_tok.type == TOK_LTE || p.current_tok.type == TOK_GTE ||
            p.current_tok.type == TOK_IS) {
         let op_tok -> Token = p.current_tok;
-        let node_type -> Int = NODE_BINOP; // 默认为普通二元操作
+        let node_type -> Int = NODE_BINOP;
 
         if (op_tok.type == TOK_IS) {
             advance(p); // skip 'is'
@@ -862,4 +864,176 @@ func parse_struct_def(p -> Parser) -> Struct {
         body = parse_block(p); // initialization
     }
     return StructDefNode(type=NODE_STRUCT_DEF, name_tok=name_tok, fields=fields, body=body, pos=start_pos);
+}
+
+func parse_extern_func(p -> Parser) -> Struct {
+    let start_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+    advance(p); // skip 'func'
+    
+    if (p.current_tok.type != TOK_IDENTIFIER) {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected function name in extern block.");
+    }
+    let name_tok -> Token = p.current_tok;
+    advance(p);
+    
+    if (p.current_tok.type != TOK_LPAREN) {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected '(' after function name.");
+    }
+    advance(p); // skip '('
+
+    let head -> ParamListNode = null;
+    let curr -> ParamListNode = null;
+    let is_varargs -> Bool = false;
+    
+    if (p.current_tok.type != TOK_RPAREN) {
+        while (true) {
+            if (p.current_tok.type == TOK_ELLIPSIS) {
+                is_varargs = true;
+                advance(p); // skip ...
+                if (p.current_tok.type == TOK_COMMA) {
+                    let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                    throw_invalid_syntax(err_pos, "Varargs '...' must be the last parameter.");
+                }
+                break;
+            } else {
+                if (p.current_tok.type != TOK_IDENTIFIER) {
+                    let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                    throw_invalid_syntax(err_pos, "Expected parameter name or '...'.");
+                }
+                let p_name -> Token = p.current_tok;
+                advance(p);
+                
+                if (p.current_tok.type != TOK_TYPE_ARROW) {
+                    let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                    throw_invalid_syntax(err_pos, "Expected '->' after parameter name.");
+                }
+                advance(p);
+                
+                let p_type -> Struct = parse_return_type(p);
+                let param_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                let new_param -> ParamNode = ParamNode(type=NODE_PARAM, name_tok=p_name, type_tok=p_type, pos=param_pos);
+                let new_node -> ParamListNode = ParamListNode(param=new_param, next=null);
+                
+                if (head == null) { head = new_node; curr = new_node; }
+                else { curr.next = new_node; curr = new_node; }
+                
+                if (p.current_tok.type == TOK_COMMA) {
+                    advance(p);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    
+    if (p.current_tok.type != TOK_RPAREN) {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected ')' after extern parameters.");
+    }
+    advance(p); // skip ')'
+    
+    let ret_type -> Struct = null;
+    if (p.current_tok.type == TOK_TYPE_ARROW) {
+        advance(p);
+        ret_type = parse_return_type(p);
+    } else {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected return type ('-> Type').");
+    }
+    
+    return ExternFuncNode(type=NODE_EXTERN_FUNC, name_tok=name_tok, params=head, ret_type_tok=ret_type, is_varargs=is_varargs, pos=start_pos);
+}
+
+func parse_extern(p -> Parser) -> Struct {
+    let start_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+    advance(p); // skip 'extern'
+
+    // extern "C" { func ...; }
+    if (p.current_tok.type == TOK_STR_LIT) {
+        if (p.current_tok.value != "C") {
+            let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+            throw_invalid_syntax(err_pos, "Only extern \"C\" is supported.");
+        }
+        advance(p); // skip "C"
+        
+        if (p.current_tok.type != TOK_LBRACE) {
+            let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+            throw_invalid_syntax(err_pos, "Expected '{' to start extern block.");
+        }
+        advance(p); // skip '{'
+        
+        let head -> StmtListNode = null;
+        let curr -> StmtListNode = null;
+        
+        while (p.current_tok.type != TOK_RBRACE && p.current_tok.type != TOK_EOF) {
+            if (p.current_tok.type == TOK_FUNC) {
+                let func_node -> Struct = parse_extern_func(p);
+
+                if (p.current_tok.type != TOK_SEMICOLON) {
+                    let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                    throw_invalid_syntax(err_pos, "Expected ';' after extern function declaration.");
+                }
+                advance(p); // skip ';'
+                
+                let new_stmt -> StmtListNode = StmtListNode(stmt=func_node, next=null);
+                if (head == null) { head = new_stmt; curr = new_stmt; }
+                else { curr.next = new_stmt; curr = new_stmt; }
+            } else {
+                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                throw_invalid_syntax(err_pos, "Only function declarations are allowed in extern blocks.");
+            }
+        }
+        
+        if (p.current_tok.type != TOK_RBRACE) {
+            let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+            throw_invalid_syntax(err_pos, "Expected '}' to end extern block.");
+        }
+        advance(p); // skip '}'
+        
+        return ExternBlockNode(type=NODE_EXTERN_BLOCK, funcs=head, pos=start_pos);
+    }
+
+    // extern func foo() -> Void from "C";
+    else if (p.current_tok.type == TOK_FUNC) {
+        let func_node -> Struct = parse_extern_func(p);
+
+        if (p.current_tok.type == TOK_FROM) { 
+            advance(p); 
+        } else if (p.current_tok.type == TOK_IDENTIFIER) {
+            if (p.current_tok.value == "from") {
+                advance(p);
+            } else {
+                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                throw_invalid_syntax(err_pos, "Expected 'from' after single-line extern declaration.");
+            }
+        } else {
+            let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+            throw_invalid_syntax(err_pos, "Expected 'from' after single-line extern declaration.");
+        }
+        
+        if (p.current_tok.type != TOK_STR_LIT) {
+            let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+            throw_invalid_syntax(err_pos, "Expected library name string (e.g. \"C\") after 'from'.");
+        }
+        if (p.current_tok.value != "C") {
+            let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+            throw_invalid_syntax(err_pos, "Only \"C\" is supported.");
+        }
+        advance(p); // skip "C"
+        
+        if (p.current_tok.type != TOK_SEMICOLON) {
+            let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+            throw_invalid_syntax(err_pos, "Expected ';' at the end of extern declaration.");
+        }
+        advance(p); // skip ';'
+        
+        let head -> StmtListNode = StmtListNode(stmt=func_node, next=null);
+        return ExternBlockNode(type=NODE_EXTERN_BLOCK, funcs=head, pos=start_pos);
+    }
+    
+    let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+    throw_invalid_syntax(err_pos, "Expected string literal \"C\"or 'func' after extern.");
+    return null;
 }

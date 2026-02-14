@@ -71,6 +71,10 @@ const TOK_NULLPTR       -> Int = 58;
 const TOK_NULL          -> Int = 59;
 const TOK_IS            -> Int = 60;
 
+const TOK_EXTERN        -> Int = 61; // extern
+const TOK_ELLIPSIS      -> Int = 62; // ...
+const TOK_FROM          -> Int = 63;
+
 
 func get_token_name(type -> Int) -> String {
     if (type == TOK_INT) { return "INT"; }
@@ -134,6 +138,9 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_NULLPTR)  { return "nullptr"; }
     if (type == TOK_NULL)     { return "null"; }
     if (type == TOK_IS)  { return "is"; }
+    if (type == TOK_EXTERN)  { return "extern"; }
+    if (type == TOK_ELLIPSIS)  { return "..."; }
+    if (type == TOK_FROM)  { return "from"; }
 
     return "EOF";
 }

@@ -149,6 +149,8 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "nullptr") { return Token(type=TOK_NULLPTR, value=value, line=start_line, col=start_col); }
     if (value == "null") { return Token(type=TOK_NULL, value=value, line=start_line, col=start_col); }
     if (value == "is") { return Token(type=TOK_IS, value=value, line=start_line, col=start_col); }
+    if (value == "extern") { return Token(type=TOK_EXTERN, value=value, line=start_line, col=start_col); }
+    if (value == "from") { return Token(type=TOK_FROM, value=value, line=start_line, col=start_col); }
     
     return Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }
@@ -215,15 +217,24 @@ func get_next_token(l -> Lexer) -> Token {
             return get_string(l);
         }
 
-        if (char == 46) { // .
-            if (l.pos.idx + 1 < l.text.length()) {
-                if (is_digit(l.text[l.pos.idx + 1])) {
-                    return get_number(l);
+        // . and ...
+        if (char == 46) {
+            let is_ellipsis -> Bool = false;
+            if (l.pos.idx + 2 < l.text.length) {
+                let n1 -> Byte = l.text[l.pos.idx + 1];
+                let n2 -> Byte = l.text[l.pos.idx + 2];
+                if (n1 == 46 && n2 == 46) { // . .
+                    is_ellipsis = true;
                 }
             }
-            advance(l);
 
-            return Token(type=TOK_DOT, value=".", line=char_line, col=char_col);
+            if is_ellipsis {
+                advance(l); advance(l); advance(l); // consume ...
+                return Token(type=TOK_ELLIPSIS, value="...", line=char_line, col=char_col);
+            } else {
+                advance(l);
+                return Token(type=TOK_DOT, value=".", line=char_line, col=char_col);
+            }
         }
 
         // + and ++ and +=
