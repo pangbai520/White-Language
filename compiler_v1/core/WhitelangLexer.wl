@@ -151,7 +151,8 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "is") { return Token(type=TOK_IS, value=value, line=start_line, col=start_col); }
     if (value == "extern") { return Token(type=TOK_EXTERN, value=value, line=start_line, col=start_col); }
     if (value == "from") { return Token(type=TOK_FROM, value=value, line=start_line, col=start_col); }
-    
+    if (value == "import") { return Token(type=TOK_IMPORT, value=value, line=start_line, col=start_col); }
+
     return Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }
 
@@ -220,7 +221,7 @@ func get_next_token(l -> Lexer) -> Token {
         // . and ...
         if (char == 46) {
             let is_ellipsis -> Bool = false;
-            if (l.pos.idx + 2 < l.text.length) {
+            if (l.pos.idx + 2 < l.text.length()) {
                 let n1 -> Byte = l.text[l.pos.idx + 1];
                 let n2 -> Byte = l.text[l.pos.idx + 2];
                 if (n1 == 46 && n2 == 46) { // . .

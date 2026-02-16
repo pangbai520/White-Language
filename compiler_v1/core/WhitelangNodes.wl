@@ -39,6 +39,7 @@ const NODE_VECTOR_TYPE    -> Int = 36;
 const NODE_VECTOR_LIT     -> Int = 37;
 const NODE_INDEX_ACCESS   -> Int = 38;
 const NODE_INDEX_ASSIGN   -> Int = 39;
+const NODE_IMPORT         -> Int = 40;
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -142,7 +143,7 @@ struct BreakNode(
 )
 
 struct ContinueNode(
-    type -> Int,   // too lazy to write
+    type -> Int,   // NODE_CONTINUE
     pos  -> Position
 )
 
@@ -301,5 +302,17 @@ struct IndexAssignNode(
     target     -> Struct,
     index_node -> Struct,
     value      -> Struct,
+    pos        -> Position
+)
+
+struct ImportSymbolNode(
+    name_tok -> Token,
+    next     -> Struct
+)
+
+struct ImportNode(
+    type       -> Int,    // NODE_IMPORT
+    path_tok   -> Token,
+    symbols    -> Struct,
     pos        -> Position
 )

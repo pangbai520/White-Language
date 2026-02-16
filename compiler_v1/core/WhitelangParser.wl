@@ -27,6 +27,8 @@ func parse(p -> Parser) -> Struct {
             stmt = func_def(p);
         } else if (p.current_tok.type == TOK_STRUCT) {
             stmt = parse_struct_def(p);
+        } else if (p.current_tok.type == TOK_IMPORT) { 
+            stmt = parse_import(p);
         } else if (p.current_tok.type == TOK_LET) {
             stmt = var_decl(p);
             if (p.current_tok.type == TOK_SEMICOLON) {
@@ -970,27 +972,20 @@ func parse_extern_func(p -> Parser) -> Struct {
                 }
                 break;
             } else {
-                if (p.current_tok.type != TOK_IDENTIFIER) {
-                    let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
-                    throw_invalid_syntax(err_pos, "Expected parameter name or '...'.");
-                }
-                let p_name -> Token = p.current_tok;
-                advance(p);
-                
-                if (p.current_tok.type != TOK_TYPE_ARROW) {
-                    let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
-                    throw_invalid_syntax(err_pos, "Expected '->' after parameter name.");
-                }
-                advance(p);
-                
-                let p_type -> Struct = parse_return_type(p);
-                let param_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
-                let new_param -> ParamNode = ParamNode(type=NODE_PARAM, name_tok=p_name, type_tok=p_type, pos=param_pos);
+                let tid -> TypedIdent = parse_typed_identifier_param(p);
+                let param_pos -> Position = Position(idx=0, ln=tid.name_tok.line, col=tid.name_tok.col, text=p.lexer.text);
+                let new_param -> ParamNode = ParamNode(type=NODE_PARAM, name_tok=tid.name_tok, type_tok=tid.type_node, pos=param_pos);
+
                 let new_node -> ParamListNode = ParamListNode(param=new_param, next=null);
                 
-                if (head == null) { head = new_node; curr = new_node; }
-                else { curr.next = new_node; curr = new_node; }
-                
+                if (head == null) { 
+                    head = new_node; 
+                    curr = new_node; 
+                } else { 
+                    curr.next = new_node; 
+                    curr = new_node; 
+                }
+
                 if (p.current_tok.type == TOK_COMMA) {
                     advance(p);
                 } else {
@@ -1108,4 +1103,63 @@ func parse_extern(p -> Parser) -> Struct {
     let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
     throw_invalid_syntax(err_pos, "Expected string literal \"C\"or 'func' after extern.");
     return null;
+}
+
+func parse_import(p -> Parser) -> Struct {
+    let start_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+    advance(p); // skip 'import'
+
+    let symbols_head -> ImportSymbolNode = null;
+    let path_tok -> Token = null;
+
+    // import A, B from "..."
+    if (p.current_tok.type == TOK_IDENTIFIER) {
+        let curr_sym -> ImportSymbolNode = null;
+        
+        let parsing -> Bool = true;
+        while (parsing) {
+            if (p.current_tok.type != TOK_IDENTIFIER) {
+                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+                throw_invalid_syntax(err_pos, "Expected identifier in import list.");
+            }
+            
+            let name_tok -> Token = p.current_tok;
+            advance(p); // skip name
+
+            let node -> ImportSymbolNode = ImportSymbolNode(name_tok=name_tok, next=null);
+            
+            if (symbols_head is null) {
+                symbols_head = node;
+                curr_sym = node;
+            } else {
+                curr_sym.next = node;
+                curr_sym = node;
+            }
+
+            if (p.current_tok.type == TOK_COMMA) {
+                advance(p); // skip ','
+            } else {
+                parsing = false;
+            }
+        }
+
+        if (p.current_tok.type != TOK_FROM) {
+            let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+            throw_invalid_syntax(err_pos, "Expected 'from' after import symbols.");
+        }
+        advance(p); // skip 'from'
+    }
+
+    if (p.current_tok.type != TOK_STR_LIT) {
+        let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text);
+        throw_invalid_syntax(err_pos, "Expected string literal for import path.");
+    }
+    path_tok = p.current_tok;
+    advance(p); // skip string
+
+    if (p.current_tok.type == TOK_SEMICOLON) {
+        advance(p);
+    }
+
+    return ImportNode(type=NODE_IMPORT, path_tok=path_tok, symbols=symbols_head, pos=start_pos);
 }

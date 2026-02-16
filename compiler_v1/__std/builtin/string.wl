@@ -45,3 +45,19 @@ func string_slice(self -> String, start -> Int, end -> Int) -> String { // str.s
 
     return new_str;
 }
+
+func string_ends_with(s -> String, suffix -> String) -> Bool {
+    let s_len -> Int = s.length();
+    let sub_len -> Int = suffix.length();
+    
+    if (sub_len > s_len) { return false; }
+    
+    let i -> Int = 0;
+    while (i < sub_len) {
+        if (s[s_len - sub_len + i] != suffix[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}

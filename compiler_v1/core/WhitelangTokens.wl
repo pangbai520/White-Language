@@ -76,6 +76,7 @@ const TOK_ELLIPSIS      -> Int = 62; // ...
 const TOK_FROM          -> Int = 63;
 const TOK_LBRACKET      -> Int = 64; // [
 const TOK_RBRACKET      -> Int = 65; // ]
+const TOK_IMPORT        -> Int = 66; // import
 
 
 func get_token_name(type -> Int) -> String {
@@ -145,6 +146,7 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_FROM)  { return "from"; }
     if (type == TOK_LBRACKET)  { return "["; }
     if (type == TOK_RBRACKET)  { return "]"; }
+    if (type == TOK_IMPORT)  { return "import"; }
 
     return "EOF";
 }
