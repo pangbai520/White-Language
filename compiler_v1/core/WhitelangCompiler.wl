@@ -3415,7 +3415,11 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
         args_str = args_str + ", ";
         let arg_res -> CompileResult = compile_node(c, curr_arg.val);
         if (arg_res.type == TYPE_BYTE) { arg_res = promote_to_int(c, arg_res); }
-        if (arg_res.type == TYPE_BOOL) { /*...*/ }
+        if (arg_res.type == TYPE_BOOL) { 
+            let zext_reg -> String = next_reg(c);
+            write(c.output_file, c.indent + zext_reg + " = zext i1 " + arg_res.reg + " to i32\n");
+            arg_res = CompileResult(reg=zext_reg, type=TYPE_INT);
+        }
         
         args_str = args_str + get_llvm_type_str(c, arg_res.type) + " " + arg_res.reg;
         curr_arg = curr_arg.next;
