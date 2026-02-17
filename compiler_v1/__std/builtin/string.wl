@@ -23,7 +23,7 @@ func string_at(self -> String, idx -> Int) -> Byte { // str.at()
 }
 
 func string_slice(self -> String, start -> Int, end -> Int) -> String { // str.slice()
-    let self_len -> Int = self.length;
+    let self_len -> Int = self.length();
 
     if (start < 0) { start = 0; }
     if (end > self_len) { end = self_len; }

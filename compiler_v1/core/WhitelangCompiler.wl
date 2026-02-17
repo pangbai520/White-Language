@@ -45,6 +45,7 @@ struct SymbolInfo(
 )
 
 struct FuncInfo(
+    name     -> String,
     ret_type -> Int, 
     arg_types -> Struct,
     is_varargs -> Bool
@@ -107,7 +108,8 @@ struct Compiler(
     imported_modules -> HashMap,
     current_package_prefix -> String,
     loaded_packages -> HashMap,
-    current_dir -> String
+    current_dir -> String,
+    curr_func -> FuncInfo
 )
 
 
@@ -148,7 +150,8 @@ func new_compiler(out_path -> String) -> Compiler {
         imported_modules=map_new(32),
         current_package_prefix = "",
         loaded_packages = map_new(32),
-        current_dir = "."
+        current_dir = ".",
+        curr_func = null
     );
 }
 
@@ -1392,7 +1395,14 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         curr_p = curr_p.next;
     }
 
-    map_put(c.func_table, func_name, FuncInfo(ret_type=ret_type_id, arg_types=arg_types_head, is_varargs=false));
+    let f_info -> FuncInfo = FuncInfo(
+        name=func_name,
+        ret_type=ret_type_id, 
+        arg_types=arg_types_head, 
+        is_varargs=false
+    );
+
+    map_put(c.func_table, func_name, f_info);
 
     let params_str -> String = "";
     let curr -> ParamListNode = node.params;
@@ -1409,7 +1419,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         arg_idx += 1;
         curr = curr.next;
     }
-    
+
     write(c.output_file, "define " + llvm_ret_type + " @" + func_name + "(" + params_str + ") {\n");
     write(c.output_file, "entry:\n");
 
@@ -1418,7 +1428,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     
     c.reg_count = 0; 
     c.scope_depth = 1;
-    
+    c.curr_func = f_info;
     curr = node.params;
     arg_idx = 0;
     while (curr is !null) {
@@ -1437,8 +1447,9 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         arg_idx += 1;
         curr = curr.next;
     }
-    
+
     compile_node(c, node.body);
+
     let block -> BlockNode = node.body;
     let stmt_curr -> StmtListNode = block.stmts;
     let last_stmt -> Struct = null;
@@ -1467,10 +1478,12 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     }
     
     write(c.output_file, "}\n\n");
-    
+
     // restore scope
     c.symbol_table = old_sym;
     c.scope_depth = 0;
+    
+    c.curr_func = null;
     
     return void_result();
 }
@@ -2328,6 +2341,34 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
     }
 
     if (target_res.type == TYPE_STRING) {
+        let is_magic_func -> Bool = false;
+
+        if (c.curr_func is !null) {
+            if (c.curr_func.name == "builtin.string_slice") {
+                is_magic_func = true;
+            }
+        }
+
+        if is_magic_func {
+            let idx_i64 -> String = next_reg(c);
+            write(c.output_file, c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
+
+            let ptr_reg -> String = next_reg(c);
+            write(c.output_file, c.indent + ptr_reg + " = getelementptr inbounds i8, i8* " + target_res.reg + ", i64 " + idx_i64 + "\n");
+
+            let val_reg_i8 -> String = val_res.reg;
+            
+            if (val_res.type == TYPE_INT) {
+                let trunc_reg -> String = next_reg(c);
+                write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + val_res.reg + " to i8\n");
+                val_reg_i8 = trunc_reg;
+            }
+
+            write(c.output_file, c.indent + "store i8 " + val_reg_i8 + ", i8* " + ptr_reg + "\n");
+            
+            return val_res;
+        }
+
         throw_type_error(node.pos, "Strings are immutable. Cannot assign to index.");
     }
 
@@ -2854,6 +2895,23 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             }
 
             let obj_base -> BaseNode = f_acc.obj;
+            let try_string_method -> Bool = false;
+            if (obj_base.type == NODE_STRING) { try_string_method = true; }
+            
+            if (obj_base.type == NODE_VAR_ACCESS) {
+                let v -> VarAccessNode = f_acc.obj;
+                let info -> SymbolInfo = find_symbol(c, v.name_tok.value);
+                if (info is !null && info.type == TYPE_STRING) {
+                    try_string_method = true;
+                }
+            }
+
+            if try_string_method {
+                let res -> CompileResult = compile_string_method_call(c, f_acc.obj, f_acc.field_name, n_call);
+                if (res is !null) { return res; }
+            }
+
+            let obj_base -> BaseNode = f_acc.obj;
             if (obj_base.type == NODE_VAR_ACCESS) {
                 let v_node -> VarAccessNode = f_acc.obj;
                 let pkg_name -> String = v_node.name_tok.value;
@@ -3333,6 +3391,47 @@ func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> S
 
     write(c.output_file, "\n" + label_end + ":\n");
     write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0))\n");
+}
+
+func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -> String, call_node -> CallNode) -> CompileResult {
+    let target_func -> String = "string_" + method_name;
+    let real_func_name -> String = "";
+    
+    if (map_get(c.func_table, target_func) is !null) {
+        real_func_name = target_func;
+    } else if (map_get(c.func_table, "builtin." + target_func) is !null) {
+        real_func_name = "builtin." + target_func;
+    }
+    
+    if (real_func_name == "") {
+        return null;
+    }
+
+    let obj_res -> CompileResult = compile_node(c, obj_node);
+    let args_str -> String = "i8* " + obj_res.reg;
+
+    let curr_arg -> ArgNode = call_node.args;
+    while (curr_arg is !null) {
+        args_str = args_str + ", ";
+        let arg_res -> CompileResult = compile_node(c, curr_arg.val);
+        if (arg_res.type == TYPE_BYTE) { arg_res = promote_to_int(c, arg_res); }
+        if (arg_res.type == TYPE_BOOL) { /*...*/ }
+        
+        args_str = args_str + get_llvm_type_str(c, arg_res.type) + " " + arg_res.reg;
+        curr_arg = curr_arg.next;
+    }
+
+    let f_info -> FuncInfo = map_get(c.func_table, real_func_name);
+    let ret_ty_str -> String = get_llvm_type_str(c, f_info.ret_type);
+    let call_reg -> String = "";
+    if (f_info.ret_type == TYPE_VOID) {
+        write(c.output_file, c.indent + "call void @" + real_func_name + "(" + args_str + ")\n");
+        return void_result();
+    } else {
+        call_reg = next_reg(c);
+        write(c.output_file, c.indent + call_reg + " = call " + ret_ty_str + " @" + real_func_name + "(" + args_str + ")\n");
+        return CompileResult(reg=call_reg, type=f_info.ret_type);
+    }
 }
 // --------------
 
