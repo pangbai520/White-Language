@@ -828,7 +828,15 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     let raw_path -> String = node.path_tok.value;
     let final_path -> String = resolve_import_path(c, raw_path, node.pos);
 
-    if (map_get(c.imported_modules, final_path) is !null) { return; }
+    if (map_get(c.imported_modules, final_path) is !null) { 
+        if (node.symbols is !null) {
+            throw_import_error(node.pos, "syntax `import ... from ...` is not currently supported.");
+        }
+        return; 
+    }
+    if (node.symbols is !null) {
+        throw_import_error(node.pos, "syntax `import ... from ...` is not currently supported");
+    }
     let marker -> StringConstant = StringConstant(id=0, value="imported", next=null);
     map_put(c.imported_modules, final_path, marker);
 
@@ -2344,7 +2352,7 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
         let is_magic_func -> Bool = false;
 
         if (c.curr_func is !null) {
-            if (c.curr_func.name == "builtin.string_slice") {
+            if (c.curr_func.name == "builtin.string_slice" || c.curr_func.name == "builtin.string_slice") {
                 is_magic_func = true;
             }
         }
