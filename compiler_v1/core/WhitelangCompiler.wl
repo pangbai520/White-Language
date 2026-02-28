@@ -873,6 +873,7 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     compile_ast(c, mod_ast);
 
     c.current_package_prefix = old_prefix;
+    c.current_dir = old_dir;
 }
 // ==============
 
@@ -1525,6 +1526,22 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
             ret_val_reg = cast_reg;
             res.type = TYPE_GENERIC_STRUCT;
 
+        }
+
+        if (res.type == TYPE_NULLPTR) {
+            if (is_pointer_type(c, c.current_ret_type) == false) {
+                throw_type_error(node.pos, "nullptr can only be returned for explicit pointer types.");
+            }
+            res.type = c.current_ret_type; // fake type
+        } 
+        else if (res.type == TYPE_NULL) {
+            if (is_pointer_type(c, c.current_ret_type) == true) {
+                throw_type_error(node.pos, "null cannot be returned for explicit pointer types. Use 'nullptr'.");
+            }
+            if (c.current_ret_type == TYPE_INT || c.current_ret_type == TYPE_FLOAT || c.current_ret_type == TYPE_BOOL || c.current_ret_type == TYPE_BYTE) {
+                throw_type_error(node.pos, "Primitive types cannot be null.");
+            }
+            res.type = c.current_ret_type; // fake type
         }
 
         if (res.type != c.current_ret_type) {
@@ -3071,7 +3088,23 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 }
 
                 if (expected_type == TYPE_GENERIC_FUNCTION && arg_val.type >= 100) {
-                    
+                    // pass
+                }
+
+                if (arg_val.type == TYPE_NULLPTR) {
+                    if (is_pointer_type(c, expected_type) == false) {
+                        throw_type_error(n_call.pos, "nullptr can only be passed to explicit pointer types.");
+                    }
+                    arg_val.type = expected_type; // fake type
+                } 
+                else if (arg_val.type == TYPE_NULL) {
+                    if (is_pointer_type(c, expected_type) == true) {
+                        throw_type_error(n_call.pos, "null cannot be passed to explicit pointer types. Use 'nullptr'.");
+                    }
+                    if (expected_type == TYPE_INT || expected_type == TYPE_FLOAT || expected_type == TYPE_BOOL || expected_type == TYPE_BYTE) {
+                        throw_type_error(n_call.pos, "Primitive types cannot be null.");
+                    }
+                    arg_val.type = expected_type; // fake type
                 }
 
                 if (arg_val.type != expected_type) { throw_type_error(n_call.pos, "Argument type mismatch."); }
