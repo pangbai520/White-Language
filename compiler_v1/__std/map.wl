@@ -32,7 +32,7 @@ struct MapEntry(
 )
 
 struct HashMap(
-    buckets  -> ptr MapEntry, 
+    ptr buckets  -> MapEntry, 
     capacity -> Int,          
     size     -> Int           
 )
@@ -44,7 +44,7 @@ func hash_djb2(key -> String) -> Int {
     let hash -> Long = 5381;
     let i -> Int = 0;
     
-    while (i < key.length) {
+    while (i < key.length()) {
         let c -> Int = key[i];
         if (c == 0) { break; }
         hash = ((hash * 33) + c);
@@ -80,7 +80,7 @@ func map_put(self -> HashMap, key -> String, val -> Struct) -> Void {
     if (idx < 0) { idx = 0 - idx; }
     let current -> MapEntry = self.buckets[idx];
     let iter -> MapEntry = current;
-    while (iter != null) {
+    while (iter is !null) {
         if (strcmp(iter.key, key) == 0) {
             iter.value = val;
             return;
@@ -103,7 +103,7 @@ func map_get(self -> HashMap, key -> String) -> Struct {
     let current -> MapEntry = self.buckets[idx];
     
     // Traverse the chain
-    while (current != null) {
+    while (current is !null) {
         if (strcmp(current.key, key) == 0) {
             return current.value;
         }
@@ -121,7 +121,7 @@ func map_free(self -> HashMap) -> Void {
 // in keyword support
 func _compiler_helper_IN(self -> HashMap, key -> String) -> Bool {
     let val -> Struct = map_get(self, key);
-    return val != null;
+    return val is !null;
 }
 
 

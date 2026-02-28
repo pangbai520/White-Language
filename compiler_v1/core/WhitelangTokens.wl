@@ -77,6 +77,7 @@ const TOK_FROM          -> Int = 63;
 const TOK_LBRACKET      -> Int = 64; // [
 const TOK_RBRACKET      -> Int = 65; // ]
 const TOK_IMPORT        -> Int = 66; // import
+const TOK_CONST         -> Int = 67; // const
 
 
 func get_token_name(type -> Int) -> String {
@@ -147,6 +148,7 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_LBRACKET)  { return "["; }
     if (type == TOK_RBRACKET)  { return "]"; }
     if (type == TOK_IMPORT)  { return "import"; }
+    if (type == TOK_CONST)   { return "const"; }
 
     return "EOF";
 }

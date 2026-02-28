@@ -94,8 +94,9 @@ struct PostfixOpNode(
 struct VarDeclareNode(
     type         -> Int,    // NODE_VAR_DECL
     name_tok     -> Token,  // Variable Name Token
-    type_node     -> Struct,  // Type Name Token
+    type_node    -> Struct,  // Type Name Token
     value        -> Struct, 
+    is_const     -> Bool, 
     pos          -> Position    // Error position
 )
 

@@ -19,9 +19,9 @@ func get_output_name(input_name -> String) -> String {
 
 
 func main() -> Int {
-    let input_filename -> String = "./tests/import.wl"; // Input source code file
+    let input_filename -> String = "./tests/const.wl"; // Input source code file
     let f_in -> File = file_io.open(input_filename, "rb");
-    if (f_in == null) {
+    if (f_in is null) {
         builtin.print("Error: Could not open input file " + input_filename);
         return 1;
     }
@@ -32,10 +32,10 @@ func main() -> Int {
     builtin.print("Compiling: " + input_filename + "...");
 
     // Lex & Parse
-    let lexer -> Lexer = new_lexer(source);
+    let lexer -> Lexer = new_lexer(input_filename, source);
     let parser -> Parser = Parser(lexer=lexer, current_tok=get_next_token(lexer));
     let ast -> Struct = parse(parser);
-    if (ast == null) {
+    if (ast is null) {
         builtin.print("Parsing failed.");
         return 1;
     }

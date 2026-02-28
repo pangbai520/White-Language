@@ -7,7 +7,8 @@ struct Position(
     idx  -> Int,
     ln   -> Int,
     col  -> Int,
-    text -> String
+    text -> String,
+    fn   -> String
 )
 
 func advance_pos(pos -> Position, current_char -> Byte) -> Void {
@@ -22,6 +23,7 @@ func advance_pos(pos -> Position, current_char -> Byte) -> Void {
 
 func report_error(pos -> Position, name -> String, details -> String) -> Void {
     builtin.print(name + ": " + details);
+    builtin.print("In file: " + pos.fn);
     builtin.print("Line " + (pos.ln + 1) + ", column " + (pos.col + 1));
 
     let text -> String = pos.text;

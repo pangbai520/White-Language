@@ -18,6 +18,9 @@ extern "C" {
     func calloc(num -> Long, size -> Long) -> String;
     func malloc(size -> Long) -> String;
     func free(p -> String) -> Void;
+
+    // White Lang C Helper
+    func __wl_str_set(s -> String, idx -> Int, val -> Int) -> Void;
 }
 
 // ==========================================================
@@ -44,7 +47,7 @@ struct File(handle -> String, path -> String)
 func open(path -> String, mode -> String) -> File {
     let raw_handle -> String = fopen(path, mode);
 
-    if (raw_handle == null) {
+    if (raw_handle is null) {
         return null;
     }
 
@@ -52,7 +55,7 @@ func open(path -> String, mode -> String) -> File {
 }
 
 func close(self -> File) -> Void {
-    if (self.handle != null) {
+    if (self.handle is !null) {
         fclose(self.handle);
         self.handle = null; 
     }
@@ -60,9 +63,9 @@ func close(self -> File) -> Void {
 
 
 func read_all(self -> File) -> String {
-    if (self.handle == null) {
+    if (self.handle is null) {
         let empty -> String = calloc(1, 1);
-        empty[0] = 0;
+        __wl_str_set(empty, 0, 0);
         return empty;
     }
 
@@ -78,8 +81,8 @@ func read_all(self -> File) -> String {
 
 
 func write(self -> File, content -> String) -> Void {
-    if (self.handle == null) { return; }
-    let len -> Int = content.length; 
+    if (self.handle is null) { return; }
+    let len -> Int = content.length(); 
 
     fwrite(content, 1, len, self.handle);
 }

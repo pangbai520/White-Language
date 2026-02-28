@@ -41,7 +41,8 @@ struct CompileResult(
 struct SymbolInfo(
     reg  -> String, 
     type -> Int,
-    origin_type -> Int // for generic type
+    origin_type -> Int, // for generic type
+    is_const -> Bool // const
 )
 
 struct FuncInfo(
@@ -865,7 +866,7 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     let source -> String = file_io.read_all(f);
     file_io.close(f);
 
-    let lexer -> Lexer = new_lexer(source);
+    let lexer -> Lexer = new_lexer(final_path, source);
     let parser -> Parser = Parser(lexer=lexer, current_tok=get_next_token(lexer));
     let mod_ast -> Struct = parse(parser);
 
@@ -997,7 +998,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         }
         
         write(c.output_file, global_name + " = global " + llvm_ty_str + " " + init_val_str + "\n");
-        map_put(c.global_symbol_table, var_name, SymbolInfo(reg=global_name, type=target_type_id, origin_type=target_type_id));
+        map_put(c.global_symbol_table, var_name, SymbolInfo(reg=global_name, type=target_type_id, origin_type=target_type_id, is_const=node.is_const));
         return void_result();
     }
 
@@ -1030,6 +1031,9 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + val_res.reg + " to i8\n");
                 val_res.reg = trunc_reg;
                 val_res.type = TYPE_BYTE;
+            }
+            if (target_type_id == TYPE_INT && val_res.type == TYPE_BYTE) {
+                val_res = promote_to_int(c, val_res);
             }
             if (target_type_id == TYPE_LONG && val_res.type == TYPE_INT) {
                 val_res = promote_to_long(c, val_res);
@@ -1103,7 +1107,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
     }
 
     let curr_scope -> Scope = c.symbol_table;
-    map_put(curr_scope.table, var_name, SymbolInfo(reg=ptr_reg, type=target_type_id, origin_type=origin_id));
+    map_put(curr_scope.table, var_name, SymbolInfo(reg=ptr_reg, type=target_type_id, origin_type=origin_id, is_const=node.is_const));
 
     if (c.scope_depth > 0) {
         if (is_ref_type(c, target_type_id)) {
@@ -1125,6 +1129,10 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
         throw_name_error(node.pos, "Undefined variable '" + var_name + "'.");
     }
 
+    if info.is_const {
+        throw_type_error(node.pos, "Cannot assign to constant variable '" + var_name + "'.");
+    }
+
     let val_res -> CompileResult = compile_node(c, node.value);
 
     if (val_res.type == TYPE_NULLPTR) {
@@ -1144,6 +1152,9 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
             write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + val_res.reg + " to i8\n");
             val_res.reg = trunc_reg;
             val_res.type = TYPE_BYTE;
+        }
+        if (info.type == TYPE_INT && val_res.type == TYPE_BYTE) {
+            val_res = promote_to_int(c, val_res);
         }
         if (info.type == TYPE_LONG && val_res.type == TYPE_INT) {
             val_res = promote_to_long(c, val_res);
@@ -1517,6 +1528,15 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
         }
 
         if (res.type != c.current_ret_type) {
+            if (c.current_ret_type == TYPE_INT && res.type == TYPE_BYTE) {
+                let p_res -> CompileResult = promote_to_int(c, res);
+                ret_val_reg = p_res.reg;
+            }
+            if (c.current_ret_type == TYPE_BYTE && res.type == TYPE_INT) {
+                let trunc_reg -> String = next_reg(c);
+                write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + res.reg + " to i8\n");
+                ret_val_reg = trunc_reg;
+            }
             // Bool -> Int
             if (res.type == TYPE_BOOL) {
                 if (c.current_ret_type == TYPE_INT) {
@@ -1829,6 +1849,15 @@ func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResu
             throw_type_error(node.pos, "Primitive types (Int, Float, Bool) cannot be null.");
         }
     } else {
+        if (field.type == TYPE_INT && val_res.type == TYPE_BYTE) {
+            val_res = promote_to_int(c, val_res);
+        }
+        if (field.type == TYPE_BYTE && val_res.type == TYPE_INT) {
+            let trunc_reg -> String = next_reg(c);
+            write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + val_res.reg + " to i8\n");
+            val_res.reg = trunc_reg;
+            val_res.type = TYPE_BYTE;
+        }
         if (field.type == TYPE_FLOAT && val_res.type == TYPE_INT) {
             val_res = promote_to_float(c, val_res);
         }
@@ -3193,6 +3222,10 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         
         if (info is null) {
             throw_name_error(v_acc.pos, "Undefined variable '" + var_name + "'. ");
+        }
+
+        if info.is_const {
+            throw_type_error(u.pos, "Cannot modify constant variable '" + var_name + "'.");
         }
 
         if (info.type == TYPE_BOOL) {

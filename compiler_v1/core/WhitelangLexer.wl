@@ -25,8 +25,8 @@ func is_alpha(c -> Byte) -> Bool {
     return (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b == 95); 
 }
 
-func new_lexer(text -> String) -> Lexer {
-    let pos -> Position = Position(idx=-1, ln=0, col=-1, text=text);
+func new_lexer(fn -> String, text -> String) -> Lexer {
+    let pos -> Position = Position(idx=-1, ln=0, col=-1, text=text, fn=fn);
     let l -> Lexer = Lexer(text=text, pos=pos, current_char=0);
     advance(l);
     return l;
@@ -152,6 +152,7 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "extern") { return Token(type=TOK_EXTERN, value=value, line=start_line, col=start_col); }
     if (value == "from") { return Token(type=TOK_FROM, value=value, line=start_line, col=start_col); }
     if (value == "import") { return Token(type=TOK_IMPORT, value=value, line=start_line, col=start_col); }
+    if (value == "const") { return Token(type=TOK_CONST, value=value, line=start_line, col=start_col); }
 
     return Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }
