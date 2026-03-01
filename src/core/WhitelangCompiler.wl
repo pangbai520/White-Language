@@ -861,12 +861,12 @@ func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> 
         throw_environment_error("Missing 'WL_PATH' variable.");
     }
 
-    let pkg_entry -> String = wl_path + "/" + raw_path + "/_pkg.wl";
+    let pkg_entry -> String = wl_path + "/std/" + raw_path + "/_pkg.wl";
     if (file_exists(pkg_entry)) {
         return pkg_entry;
     }
 
-    let file_entry -> String = wl_path + "/" + raw_path + ".wl";
+    let file_entry -> String = wl_path + "/std/" + raw_path + ".wl";
     if (file_exists(file_entry)) {
         return file_entry;
     }

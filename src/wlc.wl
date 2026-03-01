@@ -233,14 +233,15 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     if (is_windows() == 1) { cmd = "\"" + cmd + "\""; }
     
     let ret -> Int = system_call(cmd);
-    if (ret != 0) {
-        builtin.print("Build Failed (Clang exit code: " + ret + ")");
-        return ret;
-    }
 
     if (!cfg.keep_temps) {
         if (cfg.verbose) { builtin.print("Cleaning up: " + ll_file); }
         remove_file(ll_file);
+    }
+
+    if (ret != 0) {
+        builtin.print("Build Failed (Clang exit code: " + ret + ")");
+        return ret;
     }
 
     builtin.print("Build success: " + cfg.output_file);
