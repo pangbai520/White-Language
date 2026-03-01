@@ -7,13 +7,13 @@
 // C Runtime Bindings
 // ----------------------------------------------------------
 extern "C" {
-    func calloc(num -> Long, size -> Long) -> String;
+    func calloc(num -> Long, size -> Long) -> ptr Void;
     
     // Standard memory allocation
-    func malloc(size -> Long) -> String;
+    func malloc(size -> Long) -> ptr Void;
     
     // Releases memory
-    func free(p -> String) -> Void;
+    func free(ptr p -> Void) -> Void;
     
     // Compares two strings. Returns 0 if they are equal.
     func strcmp(s1 -> String, s2 -> String) -> Int;
@@ -41,7 +41,7 @@ struct HashMap(
 // Hash Function (DJB2)
 // ----------------------------------------------------------
 func hash_djb2(key -> String) -> Int {
-    let hash -> Long = 5381;
+    let hash -> Int = 5381;
     let i -> Int = 0;
     
     while (i < key.length()) {
@@ -67,7 +67,7 @@ func hash_djb2(key -> String) -> Int {
 // Map Operations
 // ==========================================================
 func map_new(capacity -> Int) -> HashMap {
-    let raw_mem -> String = calloc(capacity, 8);
+    let ptr raw_mem -> Void = calloc(capacity, 8);
     let ptr buckets -> MapEntry = raw_mem;
 
     return HashMap(buckets=buckets, capacity=capacity, size=0);
@@ -114,7 +114,7 @@ func map_get(self -> HashMap, key -> String) -> Struct {
 }
 
 func map_free(self -> HashMap) -> Void {
-    let raw_buckets -> String = self.buckets;
+    let ptr raw_buckets -> Void = self.buckets;
     free(raw_buckets);
 }
 
@@ -123,5 +123,3 @@ func _compiler_helper_IN(self -> HashMap, key -> String) -> Bool {
     let val -> Struct = map_get(self, key);
     return val is !null;
 }
-
-
