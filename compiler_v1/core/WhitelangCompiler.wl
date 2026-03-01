@@ -23,7 +23,7 @@ const TYPE_BYTE  -> Int = 10;
 const TYPE_NULLPTR -> Int = 99;
 
 
-extern func getenv(name -> String) -> String from "C";
+extern func wl_getenv(name -> String) -> String from "C";
 
 
 struct GCTracker(
@@ -543,26 +543,31 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
 func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
     if (res.type == TYPE_STRING) { return res; }
 
-    if (res.type == TYPE_INT) {
-        let buf -> String = next_reg(c);
-        write(c.output_file, c.indent + buf + " = alloca [20 x i8]\n");
-        let buf_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + buf_ptr + " = getelementptr [20 x i8], [20 x i8]* " + buf + ", i32 0, i32 0\n");
-        
+    let raw_mem -> String = next_reg(c);
+    write(c.output_file, c.indent + raw_mem + " = call i8* @malloc(i64 40)\n");
+
+    let rc_ptr -> String = next_reg(c);
+    write(c.output_file, c.indent + rc_ptr + " = bitcast i8* " + raw_mem + " to i32*\n");
+    write(c.output_file, c.indent + "store i32 0, i32* " + rc_ptr + "\n");
+
+    let buf_ptr -> String = next_reg(c);
+    write(c.output_file, c.indent + buf_ptr + " = getelementptr inbounds i8, i8* " + raw_mem + ", i32 8\n");
+
+    if (res.type == TYPE_INT || res.type == TYPE_BYTE) {
+        let val_reg -> String = res.reg;
+        if (res.type == TYPE_BYTE) {
+            val_reg = next_reg(c);
+            write(c.output_file, c.indent + val_reg + " = zext i8 " + res.reg + " to i32\n");
+        }
         let fmt -> String = next_reg(c);
         write(c.output_file, c.indent + fmt + " = getelementptr [3 x i8], [3 x i8]* @.fmt_int_simple, i32 0, i32 0\n");
         
-        // call sprintf(buf, "%d", val)
-        write(c.output_file, c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 20, i8* " + fmt + ", i32 " + res.reg + ")\n");
+        // call snprintf(buf_ptr, 32, "%d", val)
+        write(c.output_file, c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 32, i8* " + fmt + ", i32 " + val_reg + ")\n");
         return CompileResult(reg=buf_ptr, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_LONG) {
-        let buf -> String = next_reg(c);
-        write(c.output_file, c.indent + buf + " = alloca [32 x i8]\n");
-        let buf_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + buf_ptr + " = getelementptr [32 x i8], [32 x i8]* " + buf + ", i32 0, i32 0\n");
-        
         let fmt -> String = next_reg(c);
         write(c.output_file, c.indent + fmt + " = getelementptr [5 x i8], [5 x i8]* @.fmt_long_simple, i32 0, i32 0\n");
         
@@ -570,32 +575,11 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
         return CompileResult(reg=buf_ptr, type=TYPE_STRING);
     }
 
-    if (res.type == TYPE_BYTE) {
-        let val_i32 -> String = next_reg(c);
-        write(c.output_file, c.indent + val_i32 + " = zext i8 " + res.reg + " to i32\n");
-        
-        let buf -> String = next_reg(c);
-        write(c.output_file, c.indent + buf + " = alloca [20 x i8]\n");
-        let buf_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + buf_ptr + " = getelementptr [20 x i8], [20 x i8]* " + buf + ", i32 0, i32 0\n");
-
-        let fmt -> String = next_reg(c);
-        write(c.output_file, c.indent + fmt + " = getelementptr [3 x i8], [3 x i8]* @.fmt_int_simple, i32 0, i32 0\n");
-        
-        write(c.output_file, c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 20, i8* " + fmt + ", i32 " + val_i32 + ")\n");
-        return CompileResult(reg=buf_ptr, type=TYPE_STRING);
-    }
-
     if (res.type == TYPE_FLOAT) {
-        let buf -> String = next_reg(c);
-        write(c.output_file, c.indent + buf + " = alloca [32 x i8]\n");
-        let buf_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + buf_ptr + " = getelementptr [32 x i8], [32 x i8]* " + buf + ", i32 0, i32 0\n");
-        
         let fmt -> String = next_reg(c);
         write(c.output_file, c.indent + fmt + " = getelementptr [3 x i8], [3 x i8]* @.fmt_float_simple, i32 0, i32 0\n");
         
-        write(c.output_file, c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 20, i8* " + fmt + ", i32 " + res.reg + ")\n");
+        write(c.output_file, c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 32, i8* " + fmt + ", double " + res.reg + ")\n");
         return CompileResult(reg=buf_ptr, type=TYPE_STRING);
     }
 
@@ -605,21 +589,17 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
         let ptr_false -> String = next_reg(c);
         write(c.output_file, c.indent + ptr_false + " = getelementptr [6 x i8], [6 x i8]* @.str_false, i32 0, i32 0\n");
         
-        let res_reg -> String = next_reg(c);
-        // select i1 %cond, type %v1, type %v2
-        write(c.output_file, c.indent + res_reg + " = select i1 " + res.reg + ", i8* " + ptr_true + ", i8* " + ptr_false + "\n");
-        return CompileResult(reg=res_reg, type=TYPE_STRING);
+        let src_reg -> String = next_reg(c);
+        write(c.output_file, c.indent + src_reg + " = select i1 " + res.reg + ", i8* " + ptr_true + ", i8* " + ptr_false + "\n");
+        
+        write(c.output_file, c.indent + "call i8* @strcpy(i8* " + buf_ptr + ", i8* " + src_reg + ")\n");
+        return CompileResult(reg=buf_ptr, type=TYPE_STRING);
     }
 
-    if (res.type == TYPE_NULL) {
-        let null_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + null_ptr + " = getelementptr [5 x i8], [5 x i8]* @.str_null, i32 0, i32 0\n");
-        return CompileResult(reg=null_ptr, type=TYPE_STRING);
-    }
-
-    let empty_res -> String = next_reg(c);
-    write(c.output_file, c.indent + empty_res + " = getelementptr [5 x i8], [5 x i8]* @.str_null, i32 0, i32 0\n");
-    return CompileResult(reg=empty_res, type=TYPE_STRING);
+    let empty_src -> String = next_reg(c);
+    write(c.output_file, c.indent + empty_src + " = getelementptr [5 x i8], [5 x i8]* @.str_null, i32 0, i32 0\n");
+    write(c.output_file, c.indent + "call i8* @strcpy(i8* " + buf_ptr + ", i8* " + empty_src + ")\n");
+    return CompileResult(reg=buf_ptr, type=TYPE_STRING);
 }
 
 func get_func_sig_str(c -> Compiler, info -> FuncInfo) -> String {
@@ -876,7 +856,7 @@ func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> 
         return c.current_dir + "/" + raw_path;
     }
 
-    let wl_path -> String = getenv("WL_PATH");
+    let wl_path -> String = wl_getenv("WL_PATH");
     if (wl_path is null) {
         throw_environment_error("Missing 'WL_PATH' variable.");
     }
@@ -1993,7 +1973,13 @@ func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResu
 
     let val_res -> CompileResult = compile_node(c, node.value);
 
-    if (val_res.type == TYPE_NULL) {
+    if (val_res.type == TYPE_NULLPTR) {
+        if (is_pointer_type(c, field.type) == false) {
+            throw_type_error(node.pos, "nullptr can only be assigned to explicit pointer types.");
+        }
+    }
+
+    else if (val_res.type == TYPE_NULL) {
         if (is_pointer_type(c, field.type) == true) {
             throw_type_error(node.pos, "Keyword 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
         }
@@ -2754,10 +2740,19 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
             // for \0
             let total_size -> String = next_reg(c);
             write(c.output_file, c.indent + total_size + " = add i64 " + sum_len + ", 1\n");
-            
-            // malloc(total_size)
+
+            let alloc_size -> String = next_reg(c);
+            write(c.output_file, c.indent + alloc_size + " = add i64 " + total_size + ", 8\n");
+
+            // malloc(alloc_size)
+            let raw_mem -> String = next_reg(c);
+            write(c.output_file, c.indent + raw_mem + " = call i8* @malloc(i64 " + alloc_size + ")\n");
+
+            let rc_ptr -> String = next_reg(c);
+            write(c.output_file, c.indent + rc_ptr + " = bitcast i8* " + raw_mem + " to i32*\n");
+            write(c.output_file, c.indent + "store i32 0, i32* " + rc_ptr + "\n");
             let new_str_ptr -> String = next_reg(c);
-            write(c.output_file, c.indent + new_str_ptr + " = call i8* @malloc(i64 " + total_size + ")\n");
+            write(c.output_file, c.indent + new_str_ptr + " = getelementptr inbounds i8, i8* " + raw_mem + ", i32 8\n");
             
             // strcpy(new_ptr, left) -> null
             let ign1 -> String = next_reg(c);

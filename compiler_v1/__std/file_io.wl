@@ -8,19 +8,17 @@
 // ----------------------------------------------------------
 extern "C" {
     // 'String' to represent generic C pointers (FILE*, void*).
-    func fopen(filename -> String, mode -> String) -> String;
-    func fclose(stream -> String) -> Int;
-    func fread(p -> String, size -> Long, count -> Long, stream -> String) -> Long;
-    func fwrite(p -> String, size -> Long, count -> Long, stream -> String) -> Long;
-    func fseek(stream -> String, offset -> Long, origin -> Int) -> Int;
-    func ftell(stream -> String) -> Long;
-    func rewind(stream -> String) -> Void;
-    func calloc(num -> Long, size -> Long) -> String;
-    func malloc(size -> Long) -> String;
-    func free(p -> String) -> Void;
+    func fopen(filename -> String, mode -> String) -> ptr Void;
+    func fclose(stream -> ptr Void) -> Int;
+    func fread(p -> String, size -> Long, count -> Long, stream -> ptr Void) -> Long;
+    func fwrite(p -> String, size -> Long, count -> Long, stream -> ptr Void) -> Long;
+    func fseek(stream -> ptr Void, offset -> Long, origin -> Int) -> Int;
+    func ftell(stream -> ptr Void) -> Long;
+    func rewind(stream -> ptr Void) -> Void;
 
     // White Lang C Helper
     func __wl_str_set(s -> String, idx -> Int, val -> Int) -> Void;
+    func wl_alloc_string(size -> Long) -> String;
 }
 
 // ==========================================================
@@ -38,14 +36,14 @@ import "builtin"
 // ==========================================================
 // Type Definitions
 // ==========================================================
-struct File(handle -> String, path -> String)
+struct File(handle -> ptr Void, path -> String)
 
 
 // ==========================================================
 // File Operations
 // ==========================================================
 func open(path -> String, mode -> String) -> File {
-    let raw_handle -> String = fopen(path, mode);
+    let ptr raw_handle -> Void = fopen(path, mode);
 
     if (raw_handle is null) {
         return null;
@@ -57,23 +55,21 @@ func open(path -> String, mode -> String) -> File {
 func close(self -> File) -> Void {
     if (self.handle is !null) {
         fclose(self.handle);
-        self.handle = null; 
+        self.handle = nullptr; 
     }
 }
 
 
 func read_all(self -> File) -> String {
     if (self.handle is null) {
-        let empty -> String = calloc(1, 1);
-        __wl_str_set(empty, 0, 0);
-        return empty;
+        return wl_alloc_string(0);
     }
 
-    let handle -> String = self.handle;
+    let ptr handle -> Void = self.handle;
     fseek(handle, 0, SEEK_END);
     let size -> Long = ftell(handle);
     rewind(handle);
-    let buffer -> String = calloc(size + 1, 1);
+    let buffer -> String = wl_alloc_string(size);
     fread(buffer, 1, size, handle);
 
     return buffer;
@@ -82,7 +78,7 @@ func read_all(self -> File) -> String {
 
 func write(self -> File, content -> String) -> Void {
     if (self.handle is null) { return; }
-    let len -> Int = content.length(); 
+    let len -> Long = content.length(); 
 
     fwrite(content, 1, len, self.handle);
 }

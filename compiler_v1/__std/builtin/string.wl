@@ -11,8 +11,7 @@
 // C runtime bindings (memory management)
 // ----------------------------------------------------------
 extern "C" {
-    func malloc(size -> Long) -> String;
-    func free(p -> String) -> Void;
+    func wl_alloc_string(size -> Long) -> String;
     func __wl_str_set(s -> String, idx -> Int, val -> Int) -> Void;
     func __wl_str_get(s -> String, idx -> Int) -> Byte;
 }
@@ -30,21 +29,17 @@ func string_slice(self -> String, start -> Int, end -> Int) -> String { // str.s
     if (start < 0) { start = 0; }
     if (end > self_len) { end = self_len; }
     if (start >= end) {
-        let empty -> String = malloc(1);
-        __wl_str_set(empty, 0, 0);
-        return empty;
+        return wl_alloc_string(0);
     }
 
-    let new_len -> Int = end - start;
-    let new_str -> String = malloc((new_len + 1));
+    let new_len -> Long = end - start;
+    let new_str -> String = wl_alloc_string(new_len);
     let i -> Int = 0;
     while (i < new_len) {
         let ch -> Int = __wl_str_get(self, start + i);
         __wl_str_set(new_str, i, ch);
         i++;
     }
-
-    __wl_str_set(new_str, new_len, 0);
 
     return new_str;
 }
