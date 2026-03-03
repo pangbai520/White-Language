@@ -1,4 +1,4 @@
-// compiler_v1/WhiteLanguage.wl
+// src/wlc.wl
 import "builtin"
 import "file_io"
 
@@ -9,10 +9,12 @@ import "core/WhitelangNodes.wl"
 import "core/WhitelangParser.wl"
 import "core/WhitelangCompiler.wl"
 
+
 extern func get_arg(ptr argv -> String, idx -> Int) -> String from "C";
 extern func system_call(cmd -> String) -> Int from "C";
 extern func is_windows() -> Int from "C";
 extern func remove_file(path -> String) -> Int from "C";
+extern func wl_getenv(name -> String) -> String from "C";
 
 const EMIT_EXE  -> Int = 0;
 const EMIT_OBJ  -> Int = 1;
@@ -23,9 +25,9 @@ const EMIT_BC   -> Int = 4;
 struct CompilerConfig(
     source_file -> String,
     output_file -> String,
-    extern_file -> String, // C file to link
-    emit_mode   -> Int,    // exe, obj, asm, llvm, bc
-    opt_level   -> String, // -O0, -O1, -O2, -O3
+    extern_file -> String,
+    emit_mode   -> Int,
+    opt_level   -> String,
     verbose     -> Bool,
     dump_ast    -> Bool,
     dump_ir     -> Bool,
@@ -38,7 +40,7 @@ func print_usage() -> Void {
     builtin.print("");
     builtin.print("Options:");
     builtin.print("  -o <file>             Specify output filename");
-    builtin.print("  --extern <file>       Link an external C file (e.g., runtime.c)");
+    builtin.print("  --extern <file>       Link an extra external C file (optional)");
     builtin.print("  -O<level>             Optimization level (0, 1, 2, 3). Default: 2");
     builtin.print("  --emit <type>         Output format: exe, obj, asm, llvm, bc");
     builtin.print("  -v, --verbose         Enable verbose logging");
@@ -154,7 +156,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         }
     }
 
-    log_stage(cfg, "Frontend");
+    log_stage(cfg, "Frontend & Middle-end");
     let f_in -> File = open(cfg.source_file, "rb");
     if (f_in is null) {
         builtin.print("Error: Could not open " + cfg.source_file);
@@ -167,12 +169,8 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     let parser -> Parser = Parser(lexer=lexer, current_tok=get_next_token(lexer));
     let ast -> Struct = parse(parser);
 
-    if (cfg.dump_ast) {
-        builtin.print("[Debug] AST Dumped (Serialization TBD)"); 
-    }
+    if (cfg.dump_ast) { builtin.print("[Debug] AST Dumped"); }
 
-    log_stage(cfg, "Middle-end");
-    
     let compiler -> Compiler = new_compiler(ll_file);
     compiler.current_dir = get_dir_name(cfg.source_file);
     compile(compiler, ast);
@@ -185,50 +183,104 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     }
 
     if (cfg.emit_mode == EMIT_LLVM) {
-        if (cfg.output_file != ll_file) {
-            builtin.print("Generated: " + ll_file);
-        }
+        if (cfg.output_file != ll_file) { builtin.print("Generated: " + ll_file); }
         return 0;
     }
 
     log_stage(cfg, "Backend/Linker");
-    let cmd -> String = "clang " + ll_file;
-
-    if (cfg.extern_file is !null) {
-        cmd = cmd + " " + cfg.extern_file;
+    let clang_cmd -> String = "clang";
+    if (is_windows() == 1) {
+        clang_cmd = "clang.exe";
     }
 
-    cmd = cmd + " -o " + cfg.output_file;
-    cmd = cmd + " " + cfg.opt_level;
-    cmd = cmd + " -Wno-override-module";
+    let has_clang -> Bool = false;
 
-    // Handle Emit Modes
+    let wl_path -> String = wl_getenv("WL_PATH");
+    if (wl_path is !null) {
+        let portable_clang -> String = "";
+        if (is_windows() == 1) {
+            portable_clang = wl_path + "/tools/llvm/bin/clang.exe";
+        } else {
+            portable_clang = wl_path + "/tools/llvm/bin/clang";
+        }
+
+        let probe -> File = open(portable_clang, "rb");
+        if (probe is !null) {
+            close(probe);
+            clang_cmd = "\"" + portable_clang + "\"";
+            has_clang = true;
+            if (cfg.verbose) { builtin.print("Using portable LLVM: " + portable_clang); }
+        } else {
+            if (cfg.verbose) { builtin.print("Portable LLVM not found, falling back to system " + clang_cmd + "."); }
+        }
+    }
+
+    if (!has_clang) {
+        let check_ret -> Int = 1;
+        if (is_windows() == 1) {
+            check_ret = system_call("where " + clang_cmd + " >nul 2>nul");
+        } else {
+            check_ret = system_call("which " + clang_cmd + " > /dev/null 2>&1");
+        }
+
+        if (check_ret == 0) {
+            has_clang = true;
+        }
+    }
+
+    if (!has_clang) {
+        builtin.print("Error: Could not find C compiler ('clang').");
+        builtin.print("Please ensure your WhiteLanguage installation is complete, or install 'clang' and add it to your system PATH.");
+        return 1;
+    }
+    
+    let cmd -> String = clang_cmd + " \"" + ll_file + "\"";
+
     if (cfg.emit_mode == EMIT_ASM) {
-        cmd = cmd + " -S"; // Generate assembly
+        cmd += " -S -o \"" + cfg.output_file + "\" " + cfg.opt_level + " -Wno-override-module";
     }
     else if (cfg.emit_mode == EMIT_OBJ) {
-        cmd = cmd + " -c"; // Generate object file
+        cmd += " -c -o \"" + cfg.output_file + "\" " + cfg.opt_level + " -Wno-override-module";
     }
     else if (cfg.emit_mode == EMIT_BC) {
-        cmd = cmd + " -emit-llvm -c"; // Generate bitcode
+        cmd += " -emit-llvm -c -o \"" + cfg.output_file + "\" " + cfg.opt_level + " -Wno-override-module";
     }
     else {
+        let wl_path -> String = wl_getenv("WL_PATH");
+        if (wl_path is !null) {
+            if (is_windows() == 1) {
+                cmd += " \"" + wl_path + "/runtime/wl_runtime.obj\"";
+            } else {
+                cmd += " \"" + wl_path + "/runtime/wl_runtime.o\"";
+            }
+        } else {
+            builtin.print("Warning: WL_PATH environment variable is not set. Auto-linking of runtime skipped.");
+        }
+
+        if (cfg.extern_file is !null) {
+            cmd += " \"" + cfg.extern_file + "\"";
+        }
+
+        cmd += " -o \"" + cfg.output_file + "\" " + cfg.opt_level + " -Wno-override-module";
+
         if (is_windows() == 0) {
-            cmd = cmd + " -lm -lc"; // Linux needs math lib
+            cmd += " -lm -lc";
         }
     }
 
     if (cfg.verbose) { builtin.print("Command: " + cmd); }
+    if (is_windows() == 1) { cmd = "\"" + cmd + "\""; }
     
     let ret -> Int = system_call(cmd);
-    if (ret != 0) {
-        builtin.print("Build Failed (Clang exit code: " + ret + ")");
-        return ret;
-    }
 
     if (!cfg.keep_temps) {
         if (cfg.verbose) { builtin.print("Cleaning up: " + ll_file); }
         remove_file(ll_file);
+    }
+
+    if (ret != 0) {
+        builtin.print("Build Failed (Clang exit code: " + ret + ")");
+        return ret;
     }
 
     builtin.print("Build success: " + cfg.output_file);

@@ -87,7 +87,7 @@ func String_to_Int(s -> String) -> Int {
         if (code >= 48 && code <= 57) {
             res = res * 10 + (code - 48);
         }
-        i = i + 1;
+        i += 1;
     }
     return res;
 }
@@ -302,7 +302,7 @@ func atom(p -> Parser) -> Struct {
                 
                 if (head is null) { head = new_node; curr = new_node; }
                 else { curr.next = new_node; curr = new_node; }
-                count = count + 1;
+                count += 1;
                 
                 if (p.current_tok.type == TOK_COMMA) {
                     parser_advance(p);

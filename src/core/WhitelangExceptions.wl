@@ -34,15 +34,15 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
 
     while (i < text.length() && current_ln < target_ln) {
         if (text[i] == 10) { // '\n'
-            current_ln = current_ln + 1;
+            current_ln += 1;
             start_idx = i + 1;
         }
-        i = i + 1;
+        i += 1;
     }
 
     let end_idx -> Int = start_idx;
     while (end_idx < text.length() && text[end_idx] != 10 && text[end_idx] != 13) {
-        end_idx = end_idx + 1;
+        end_idx += 1;
     }
 
 
@@ -55,7 +55,7 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
         let j -> Int = 0;
         while (j < pos.col) {
             caret_line = caret_line + " ";
-            j = j + 1;
+            j += 1;
         }
         builtin.print(caret_line + "^");
     }

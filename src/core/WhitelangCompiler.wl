@@ -336,7 +336,7 @@ func string_escape(s -> String) -> String {
         } else if (code == 13) { // \r
             res = res + "\\0D";
         } else {
-            res = res + s.slice(i, i + 1);
+            res += s.slice(i, i + 1);
         }
         i += 1;
     }
@@ -609,10 +609,16 @@ func get_func_sig_str(c -> Compiler, info -> FuncInfo) -> String {
     let first -> Bool = true;
     while (curr is !null) {
         if (!first) { args_str = args_str + ", "; }
-        args_str = args_str + get_llvm_type_str(c, curr.type);
+        args_str += get_llvm_type_str(c, curr.type);
         first = false;
         curr = curr.next;
     }
+
+    if (info.is_varargs) {
+        if (!first) { args_str = args_str + ", ..."; }
+        else { args_str = "..."; }
+    }
+    
     return ret_str + " (" + args_str + ")*";
 }
 
@@ -861,12 +867,12 @@ func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> 
         throw_environment_error("Missing 'WL_PATH' variable.");
     }
 
-    let pkg_entry -> String = wl_path + "/" + raw_path + "/_pkg.wl";
+    let pkg_entry -> String = wl_path + "/std/" + raw_path + "/_pkg.wl";
     if (file_exists(pkg_entry)) {
         return pkg_entry;
     }
 
-    let file_entry -> String = wl_path + "/" + raw_path + ".wl";
+    let file_entry -> String = wl_path + "/std/" + raw_path + ".wl";
     if (file_exists(file_entry)) {
         return file_entry;
     }
@@ -1012,6 +1018,10 @@ func compile_block(c -> Compiler, node -> BlockNode) -> CompileResult {
         if (stmt.type == NODE_CONTINUE) { terminated = true; }
 
         last_res = compile_node(c, curr.stmt);
+        if (stmt.type == NODE_RETURN || stmt.type == NODE_BREAK || stmt.type == NODE_CONTINUE) { 
+            terminated = true; 
+            break;
+        }
         curr = curr.next;
     }
     
@@ -1522,7 +1532,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         let p_llvm_type -> String = get_llvm_type_str(c, p_type_id);
         
         if (arg_idx > 0) { params_str = params_str + ", "; }
-        params_str = params_str + p_llvm_type + " %arg" + arg_idx;
+        params_str += p_llvm_type + " %arg" + arg_idx;
         
         arg_idx += 1;
         curr = curr.next;
@@ -1725,7 +1735,7 @@ func compile_struct_def(c -> Compiler, node -> StructDefNode) -> CompileResult {
         let f_llvm_type -> String = get_llvm_type_str(c, f_type_id);
 
         if (idx > 0) { llvm_body = llvm_body + ", "; }
-        llvm_body = llvm_body + f_llvm_type;
+        llvm_body += f_llvm_type;
         
         let new_field -> FieldInfo = FieldInfo(name=f_name, type=f_type_id, llvm_type=f_llvm_type, offset=idx, next=null);
         if (field_head is null) { field_head = new_field; field_curr = new_field; }
@@ -2065,7 +2075,7 @@ func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult
         else { arg_curr.next = t_node; arg_curr = t_node; }
         
         if (!first) { params_str = params_str + ", "; }
-        params_str = params_str + get_llvm_type_str(c, p_id);
+        params_str += get_llvm_type_str(c, p_id);
         first = false;
         
         curr_p = curr_p.next;
@@ -3267,7 +3277,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                     
                     if (is_first == false) { args_str = args_str + ", "; }
                     let ty_str -> String = get_llvm_type_str(c, arg_val.type);
-                    args_str = args_str + ty_str + " " + arg_val.reg;
+                    args_str += ty_str + " " + arg_val.reg;
 
                     is_first = false;
                     
@@ -3340,7 +3350,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
                 let ty_str -> String = get_llvm_type_str(c, arg_val.type);
                 if (is_first == false) { args_str = args_str + ", "; }
-                args_str = args_str + ty_str + " " + arg_val.reg;
+                args_str += ty_str + " " + arg_val.reg;
                 is_first = false;
                 
                 arg_node_curr = arg_node_curr.next;
@@ -3352,16 +3362,36 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             let ret_type_str -> String = get_llvm_type_str(c, func_info.ret_type);
             let call_res_reg -> String = "";
             
+            let call_prefix -> String = ret_type_str + " ";
+            if (func_info.is_varargs) {
+                let sig_args -> String = "";
+                let p_curr -> TypeListNode = func_info.arg_types;
+                let first_p -> Bool = true;
+                while (p_curr is !null) {
+                    if (!first_p) { sig_args = sig_args + ", "; }
+                    sig_args = sig_args + get_llvm_type_str(c, p_curr.type);
+                    first_p = false;
+                    p_curr = p_curr.next;
+                }
+                if (!first_p) { sig_args = sig_args + ", ..."; }
+                else { sig_args = "..."; }
+                call_prefix = ret_type_str + " (" + sig_args + ") ";
+            }
+            
             if (func_info.ret_type == TYPE_VOID) {
-                write(c.output_file, c.indent + "call void @" + func_name + "(" + args_str + ")\n");
+                if (func_info.is_varargs) {
+                    write(c.output_file, c.indent + "call " + call_prefix + "@" + func_name + "(" + args_str + ")\n");
+                } else {
+                    write(c.output_file, c.indent + "call void @" + func_name + "(" + args_str + ")\n");
+                }
                 return void_result();
             } else {
                 call_res_reg = next_reg(c);
-                write(c.output_file, c.indent + call_res_reg + " = call " + ret_type_str + " @" + func_name + "(" + args_str + ")\n");
+                write(c.output_file, c.indent + call_res_reg + " = call " + call_prefix + "@" + func_name + "(" + args_str + ")\n");
                 return CompileResult(reg=call_res_reg, type=func_info.ret_type);
             }
-        } 
-        
+        }
+
         else {
             if (callee.type == NODE_VAR_ACCESS) {
                 let v_node -> VarAccessNode = n_call.callee;
@@ -3417,8 +3447,8 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                         args_sig = args_sig + ", ";
                         args_val_str = args_val_str + ", ";
                     }
-                    args_sig = args_sig + a_ty;
-                    args_val_str = args_val_str + a_ty + " " + a_res.reg;
+                    args_sig += a_ty;
+                    args_val_str += a_ty + " " + a_res.reg;
                     first = false;
                     curr_arg = curr_arg.next;
                 }
