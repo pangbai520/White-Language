@@ -711,7 +711,7 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
     c.string_list = header_const;
 
     let header_len -> Int = header_fmt.length() + 1;
-    
+
     let header_ptr -> String = "getelementptr inbounds ([" + header_len + " x i8], [" + header_len + " x i8]* @.str." + header_id + ", i32 0, i32 0)";
     
     let ln -> Int = pos.ln + 1;
@@ -739,15 +739,14 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
         }
 
         let raw_line -> String = full_text.slice(line_start_idx, line_end_idx);
-        let escaped_line -> String = string_escape(raw_line);
-        let code_content -> String = "    " + escaped_line + "\n";
-
+        let code_content -> String = "    " + raw_line + "\n";
+    
         let code_id -> Int = c.str_count;
         c.str_count += 1;
         let code_const -> StringConstant = StringConstant(id=code_id, value=code_content, next=c.string_list);
         c.string_list = code_const;
-
-        let code_len -> Int = raw_line.length() + 6;
+    
+        let code_len -> Int = code_content.length() + 1;
         
         let code_ptr -> String = "getelementptr inbounds ([" + code_len + " x i8], [" + code_len + " x i8]* @.str." + code_id + ", i32 0, i32 0)";
         write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* " + code_ptr + ")\n");
@@ -755,17 +754,17 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
         let arrow_str -> String = "    ";
         let k -> Int = 0;
         while (k < pos.col) {
-            arrow_str = arrow_str + " ";
+            arrow_str += " ";
             k += 1;
         }
-        arrow_str = arrow_str + "^\n";
-
+        arrow_str += "^\n";
+    
         let arrow_id -> Int = c.str_count;
         c.str_count += 1;
         let arrow_const -> StringConstant = StringConstant(id=arrow_id, value=arrow_str, next=c.string_list);
         c.string_list = arrow_const;
-
-        let arrow_len -> Int = 4 + pos.col + 3;
+    
+        let arrow_len -> Int = arrow_str.length() + 1;
         
         let arrow_ptr -> String = "getelementptr inbounds ([" + arrow_len + " x i8], [" + arrow_len + " x i8]* @.str." + arrow_id + ", i32 0, i32 0)";
         write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* " + arrow_ptr + ")\n");
@@ -2927,8 +2926,32 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         }
         else if (op_type == TOK_MOD) { 
             if (target_type == TYPE_BYTE) { op_code = "urem"; } else { op_code = "srem"; }
-        } 
+        }
     }
+
+    if (op_type == TOK_DIV || op_type == TOK_MOD) {
+            if (right.reg == "0" || right.reg == "0.0") {
+                throw_zero_division_error(node.pos, "Cannot divide by zero. ");
+            }
+
+            let is_zero_reg -> String = next_reg(c);
+            if (target_type == TYPE_FLOAT) {
+                write(c.output_file, c.indent + is_zero_reg + " = fcmp oeq double " + right.reg + ", 0.0\n");
+            } else {
+                write(c.output_file, c.indent + is_zero_reg + " = icmp eq " + type_str + " " + right.reg + ", 0\n");
+            }
+            
+            let err_label -> String = "div_zero_" + c.type_counter;
+            let ok_label -> String = "div_ok_" + c.type_counter;
+            c.type_counter += 1;
+            
+            write(c.output_file, c.indent + "br i1 " + is_zero_reg + ", label %" + err_label + ", label %" + ok_label + "\n");
+            
+            write(c.output_file, "\n" + err_label + ":\n");
+            emit_runtime_error(c, node.pos, "Division by zero");
+            
+            write(c.output_file, "\n" + ok_label + ":\n");
+        }
 
     write(c.output_file, c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
     return CompileResult(reg=res_reg, type=target_type);

@@ -1,7 +1,7 @@
 // core/WhitelangException.wl
 import "builtin"
 
-extern func exit(...) -> Void from "C";
+extern func exit(status -> Int) -> Void from "C";
 
 struct Position(
     idx  -> Int,
@@ -101,6 +101,10 @@ func throw_IO_error(pos -> Position, details -> String) -> Void {
 
 func throw_internal_compiler_error(pos -> Position, details -> String) -> Void {
     report_error(pos, "InternalCompilerError", details);
+}
+
+func throw_zero_division_error(pos -> Position, details -> String) -> Void {
+    report_error(pos, "ZeroDivisionError", details);
 }
 
 func throw_missing_main_function() -> Void { // special
