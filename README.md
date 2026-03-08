@@ -1,7 +1,7 @@
 # WhiteLanguage
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-red.svg)
-![Version](https://img.shields.io/badge/version-0.1-green.svg)
+![Version](https://img.shields.io/badge/version-0.1.1-green.svg)
 ![Status](https://img.shields.io/badge/status-Bootstrapped-success.svg)
 
 WhiteLanguage (suffix: `.wl`) is a statically-typed, self-hosted system programming language designed for predictability, clean syntax, and seamless C interoperability. 
@@ -102,7 +102,7 @@ Test the newly built compiler:
 ./wlc_new --help
 ```
 
-You should see the `White Language Compiler (v0.1)` output.
+You should see the `White Language Compiler (v0.1.1)` output.
 
 ## License
 

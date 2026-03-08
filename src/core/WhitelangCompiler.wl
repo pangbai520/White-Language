@@ -110,7 +110,8 @@ struct Compiler(
     current_package_prefix -> String,
     loaded_packages -> HashMap,
     current_dir -> String,
-    curr_func -> FuncInfo
+    curr_func -> FuncInfo,
+    expected_type -> Int
 )
 
 
@@ -152,7 +153,8 @@ func new_compiler(out_path -> String) -> Compiler {
         current_package_prefix = "",
         loaded_packages = map_new(32),
         current_dir = ".",
-        curr_func = null
+        curr_func = null,
+        expected_type = 0
     );
 }
 
@@ -1109,7 +1111,9 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
     let origin_id -> Int = target_type_id;
 
     if (node.value is !null) {
+        c.expected_type = target_type_id;
         let val_res -> CompileResult = compile_node(c, node.value);
+        c.expected_type = 0;
         if (val_res.type == TYPE_NULLPTR) {
             if (is_pointer_type(c, target_type_id) == false) {
                 throw_type_error(node.pos, "Keyword 'nullptr' can only be assigned to explicit pointer types (ptr ...). Use 'null' for objects.");
@@ -1244,7 +1248,9 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
         throw_type_error(node.pos, "Cannot assign to constant variable '" + var_name + "'.");
     }
 
+    c.expected_type = info.type;
     let val_res -> CompileResult = compile_node(c, node.value);
+    c.expected_type = 0;
 
     if (val_res.type == TYPE_NULLPTR) {
         if (is_pointer_type(c, info.type) == false) {
@@ -2286,6 +2292,13 @@ func compile_vector_lit(c -> Compiler, node -> VectorLitNode) -> CompileResult {
         let first_arg -> ArgNode = node.elements;
         let first_res -> CompileResult = compile_node(c, first_arg.val);
         elem_type_id = first_res.type;
+    } else {
+        if (c.expected_type >= 100) {
+            let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + c.expected_type);
+            if (v_info is !null) {
+                elem_type_id = v_info.type;
+            }
+        }
     }
     
     let vec_type_id -> Int = get_vector_type_id(c, elem_type_id);
