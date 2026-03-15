@@ -660,7 +660,7 @@ func var_decl_core(p -> Parser, is_const -> Bool) -> Struct {
         val_node = expression(p);
     }
     
-    return VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=val_node, is_const=is_const, pos=start_pos);
+    return VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=val_node, is_const=is_const, alloc_reg = "", pos=start_pos);
 }
 
 func var_decl(p -> Parser) -> Struct {
@@ -1131,7 +1131,18 @@ func parse_import(p -> Parser) -> Struct {
             let name_tok -> Token = p.current_tok;
             parser_advance(p); // skip name
 
-            let node -> ImportSymbolNode = ImportSymbolNode(name_tok=name_tok, next=null);
+            let alias_tok -> Token = null;
+            if (p.current_tok.type == TOK_AS) {
+                parser_advance(p); // skip 'as'
+                if (p.current_tok.type != TOK_IDENTIFIER) {
+                    let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                    throw_invalid_syntax(err_pos, "Expected identifier after 'as'.");
+                }
+                alias_tok = p.current_tok;
+                parser_advance(p); // skip alias name
+            }
+
+            let node -> ImportSymbolNode = ImportSymbolNode(name_tok=name_tok, alias_tok=alias_tok, next=null);
             
             if (symbols_head is null) {
                 symbols_head = node;
@@ -1162,9 +1173,20 @@ func parse_import(p -> Parser) -> Struct {
     path_tok = p.current_tok;
     parser_advance(p); // skip string
 
+    let alias_tok -> Token = null;
+    if (p.current_tok.type == TOK_AS) {
+        parser_advance(p); // skip 'as'
+        if (p.current_tok.type != TOK_IDENTIFIER) {
+            let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            throw_invalid_syntax(err_pos, "Expected identifier after 'as' for module alias.");
+        }
+        alias_tok = p.current_tok;
+        parser_advance(p); // skip alias identifier
+    }
+
     if (p.current_tok.type == TOK_SEMICOLON) {
         parser_advance(p);
     }
 
-    return ImportNode(type=NODE_IMPORT, path_tok=path_tok, symbols=symbols_head, pos=start_pos);
+    return ImportNode(type=NODE_IMPORT, path_tok=path_tok, symbols=symbols_head, alias_tok=alias_tok, pos=start_pos);
 }

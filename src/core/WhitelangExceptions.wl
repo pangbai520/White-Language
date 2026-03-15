@@ -50,14 +50,39 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
         let line_text -> String = text.slice(start_idx, end_idx);
         builtin.print("");
         builtin.print(line_text);
-        
+
+        let err_len -> Int = 1;
+        let line_len -> Int = line_text.length();
+        if (pos.col < line_len) {
+            let ch -> Int = line_text[pos.col];
+            if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95) {
+                let cur -> Int = pos.col + 1;
+                while (cur < line_len) {
+                    let c2 -> Int = line_text[cur];
+                    if ((c2 >= 65 && c2 <= 90) || (c2 >= 97 && c2 <= 122) || c2 == 95 || (c2 >= 48 && c2 <= 57)) {
+                        cur += 1;
+                    } else {
+                        break;
+                    }
+                }
+                err_len = cur - pos.col;
+            }
+        }
+
         let caret_line -> String = "";
         let j -> Int = 0;
         while (j < pos.col) {
             caret_line = caret_line + " ";
             j += 1;
         }
-        builtin.print(caret_line + "^");
+        
+        let k -> Int = 0;
+        while (k < err_len) {
+            caret_line = caret_line + "^";
+            k += 1;
+        }
+        
+        builtin.print(caret_line);
     }
 
     exit(1); 

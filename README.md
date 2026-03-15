@@ -1,7 +1,7 @@
 # White Language
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-red.svg)
-![Version](https://img.shields.io/badge/version-0.1.1-green.svg)
+![Version](https://img.shields.io/github/v/tag/pangbai520/White-Language?label=version&color=green&sort=semver)
 ![Status](https://img.shields.io/badge/status-Bootstrapped-success.svg)
 
 White Language (suffix: `.wl`) is a statically-typed, self-hosted system programming language designed for predictability, clean syntax, and seamless C interoperability. 

@@ -153,6 +153,7 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "from") { return Token(type=TOK_FROM, value=value, line=start_line, col=start_col); }
     if (value == "import") { return Token(type=TOK_IMPORT, value=value, line=start_line, col=start_col); }
     if (value == "const") { return Token(type=TOK_CONST, value=value, line=start_line, col=start_col); }
+    if (value == "as") { return Token(type=TOK_AS, value=value, line=start_line, col=start_col); }
 
     return Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }
