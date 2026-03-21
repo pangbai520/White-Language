@@ -23,30 +23,37 @@ const EMIT_LLVM -> Int = 3;
 const EMIT_BC   -> Int = 4;
 
 struct CompilerConfig(
-    source_file -> String,
-    output_file -> String,
-    extern_file -> String,
-    emit_mode   -> Int,
-    opt_level   -> String,
-    verbose     -> Bool,
-    dump_ast    -> Bool,
-    dump_ir     -> Bool,
-    keep_temps  -> Bool
+    source_file     -> String,
+    output_file     -> String,
+    extra_ldflags   -> String,
+    is_compile_only -> Bool,  // -c
+    is_asm_only     -> Bool,  // -S
+    is_emit_llvm    -> Bool,  // --emit-llvm
+    debug_info      -> Bool,  // -g
+    opt_level       -> String,
+    verbose         -> Bool,
+    dump_ast        -> Bool,
+    dump_ir         -> Bool,
+    keep_temps      -> Bool
 )
 
 func print_usage() -> Void {
-    builtin.print("White Language Compiler (v0.1.2)");
+    builtin.print("White Language Compiler (v0.1.3)");
     builtin.print("Usage: wlc <source.wl> [options]");
     builtin.print("");
     builtin.print("Options:");
-    builtin.print("  -o <file>             Specify output filename");
-    builtin.print("  --extern <file>       Link an extra external C file (optional)");
+    builtin.print("  -o <file>             Write output to <file>");
+    builtin.print("  -c                    Compile and assemble, but do not link");
+    builtin.print("  -S                    Compile only; do not assemble or link");
+    builtin.print("  --emit-llvm           Use the LLVM representation for assembler and object files");
     builtin.print("  -O<level>             Optimization level (0, 1, 2, 3). Default: 2");
-    builtin.print("  --emit <type>         Output format: exe, obj, asm, llvm, bc");
+    builtin.print("  -g                    Generate source-level debug information");
+    builtin.print("  --ldflags <flags>     Pass extra flags to the linker (e.g., \"-lm -lpthread\")");
     builtin.print("  -v, --verbose         Enable verbose logging");
     builtin.print("  --dump-ast            Dump Abstract Syntax Tree to stdout");
     builtin.print("  --dump-ir             Dump LLVM IR to stdout");
-    builtin.print("  -h, --help            Show this help message");
+    builtin.print("  --keep-temps          Do not delete intermediate LLVM IR files");
+    builtin.print("  -h, --help            Display this information");
 }
 
 func log_stage(cfg -> CompilerConfig, name -> String) -> Void {
@@ -71,15 +78,18 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     }
 
     let cfg -> CompilerConfig = CompilerConfig(
-        source_file = "",
-        output_file = "",
-        extern_file = null,
-        emit_mode   = EMIT_EXE,
-        opt_level   = "-O2",
-        verbose     = false,
-        dump_ast    = false,
-        dump_ir     = false,
-        keep_temps  = false
+        source_file     = "",
+        output_file     = "",
+        extra_ldflags   = "",
+        is_compile_only = false,
+        is_asm_only     = false,
+        is_emit_llvm    = false,
+        debug_info      = false,
+        opt_level       = "-O2",
+        verbose         = false,
+        dump_ast        = false,
+        dump_ir         = false,
+        keep_temps      = false
     );
 
     let i -> Int = 1;
@@ -90,39 +100,27 @@ func main(argc -> Int, ptr argv -> String) -> Int {
             print_usage();
             return 0;
         }
-        else if (arg == "-v" || arg == "--verbose") {
-            cfg.verbose = true;
-        }
-        else if (arg == "--dump-ast") {
-            cfg.dump_ast = true;
-        }
-        else if (arg == "--dump-ir") {
-            cfg.dump_ir = true;
-        }
+        else if (arg == "-v" || arg == "--verbose") { cfg.verbose = true; }
+        else if (arg == "--dump-ast") { cfg.dump_ast = true; }
+        else if (arg == "--dump-ir") { cfg.dump_ir = true; }
+        else if (arg == "--keep-temps") { cfg.keep_temps = true; }
+        else if (arg == "-c") { cfg.is_compile_only = true; }
+        else if (arg == "-S") { cfg.is_asm_only = true; }
+        else if (arg == "--emit-llvm") { cfg.is_emit_llvm = true; }
+        else if (arg == "-g") { cfg.debug_info = true; }
+        else if (arg == "-O0") { cfg.opt_level = "-O0"; }
+        else if (arg == "-O1") { cfg.opt_level = "-O1"; }
+        else if (arg == "-O2") { cfg.opt_level = "-O2"; }
+        else if (arg == "-O3") { cfg.opt_level = "-O3"; }
         else if (arg == "-o") {
             i++;
             if (i >= argc) { builtin.print("Error: -o requires an argument"); return 1; }
             cfg.output_file = get_arg(argv, i);
         }
-        else if (arg == "--extern") {
+        else if (arg == "--ldflags") {
             i++;
-            if (i >= argc) { builtin.print("Error: --extern requires an argument"); return 1; }
-            cfg.extern_file = get_arg(argv, i);
-        }
-        else if (arg == "-O0") { cfg.opt_level = "-O0"; }
-        else if (arg == "-O1") { cfg.opt_level = "-O1"; }
-        else if (arg == "-O2") { cfg.opt_level = "-O2"; }
-        else if (arg == "-O3") { cfg.opt_level = "-O3"; }
-        else if (arg == "--emit") {
-            i++;
-            if (i >= argc) { builtin.print("Error: --emit requires (exe|obj|asm|llvm|bc)"); return 1; }
-            let val -> String = get_arg(argv, i);
-            if (val == "exe") { cfg.emit_mode = EMIT_EXE; }
-            else if (val == "obj") { cfg.emit_mode = EMIT_OBJ; }
-            else if (val == "asm") { cfg.emit_mode = EMIT_ASM; }
-            else if (val == "llvm") { cfg.emit_mode = EMIT_LLVM; }
-            else if (val == "bc") { cfg.emit_mode = EMIT_BC; }
-            else { builtin.print("Error: Unknown emit format: " + val); return 1; }
+            if (i >= argc) { builtin.print("Error: --ldflags requires an argument"); return 1; }
+            cfg.extra_ldflags = cfg.extra_ldflags + " " + get_arg(argv, i);
         }
         else {
             if (cfg.source_file.length() == 0) {
@@ -143,12 +141,16 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     let ll_file -> String = base_name + ".ll";
 
     if (cfg.output_file.length() == 0) {
-        if (cfg.emit_mode == EMIT_LLVM) { cfg.output_file = base_name + ".ll"; }
-        else if (cfg.emit_mode == EMIT_BC) { cfg.output_file = base_name + ".bc"; }
-        else if (cfg.emit_mode == EMIT_ASM) { cfg.output_file = base_name + ".s"; }
-        else if (cfg.emit_mode == EMIT_OBJ) { 
-            if (is_windows() == 1) { cfg.output_file = base_name + ".obj"; }
-            else { cfg.output_file = base_name + ".o"; }
+        if (cfg.is_asm_only) {
+            if (cfg.is_emit_llvm) { cfg.output_file = base_name + ".ll"; }
+            else { cfg.output_file = base_name + ".s"; }
+        }
+        else if (cfg.is_compile_only) {
+            if (cfg.is_emit_llvm) { cfg.output_file = base_name + ".bc"; }
+            else { 
+                if (is_windows() == 1) { cfg.output_file = base_name + ".obj"; }
+                else { cfg.output_file = base_name + ".o"; }
+            }
         }
         else { // EXE
             if (is_windows() == 1) { cfg.output_file = base_name + ".exe"; }
@@ -157,13 +159,13 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     }
 
     log_stage(cfg, "Frontend & Middle-end");
-    let f_in -> File = open(cfg.source_file, "rb");
+    let f_in -> File = file_io.open(cfg.source_file, "rb");
     if (f_in is null) {
         builtin.print("Error: Could not open " + cfg.source_file);
         return 1;
     }
-    let source -> String = read_all(f_in);
-    close(f_in);
+    let source -> String = file_io.read_all(f_in);
+    file_io.close(f_in);
 
     let lexer -> Lexer = new_lexer(cfg.source_file, source);
     let parser -> Parser = Parser(lexer=lexer, current_tok=get_next_token(lexer));
@@ -176,13 +178,13 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     compile(compiler, ast);
 
     if (cfg.dump_ir) {
-        let f_ir -> File = open(ll_file, "rb");
-        let ir_content -> String = read_all(f_ir);
-        close(f_ir);
+        let f_ir -> File = file_io.open(ll_file, "rb");
+        let ir_content -> String = file_io.read_all(f_ir);
+        file_io.close(f_ir);
         builtin.print(ir_content);
     }
 
-    if (cfg.emit_mode == EMIT_LLVM) {
+    if (cfg.is_asm_only && cfg.is_emit_llvm) {
         if (cfg.output_file != ll_file) { builtin.print("Generated: " + ll_file); }
         return 0;
     }
@@ -204,9 +206,9 @@ func main(argc -> Int, ptr argv -> String) -> Int {
             portable_clang = wl_path + "/tools/llvm/bin/clang";
         }
 
-        let probe -> File = open(portable_clang, "rb");
+        let probe -> File = file_io.open(portable_clang, "rb");
         if (probe is !null) {
-            close(probe);
+            file_io.close(probe);
             clang_cmd = "\"" + portable_clang + "\"";
             has_clang = true;
             if (cfg.verbose) { builtin.print("Using portable LLVM: " + portable_clang); }
@@ -234,16 +236,20 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         return 1;
     }
     
-    let cmd -> String = clang_cmd + " \"" + ll_file + "\"";
+    let cmd -> String = clang_cmd;
+    if (cfg.debug_info) { cmd += " -g"; }
+    
+    cmd += " -Wno-override-module " + cfg.opt_level + " \"" + ll_file + "\"";
 
-    if (cfg.emit_mode == EMIT_ASM) {
-        cmd += " -S -o \"" + cfg.output_file + "\" " + cfg.opt_level + " -Wno-override-module";
+    if (cfg.is_asm_only) {
+        cmd += " -S";
+        if (cfg.is_emit_llvm) { cmd += " -emit-llvm"; }
+        cmd += " -o \"" + cfg.output_file + "\"";
     }
-    else if (cfg.emit_mode == EMIT_OBJ) {
-        cmd += " -c -o \"" + cfg.output_file + "\" " + cfg.opt_level + " -Wno-override-module";
-    }
-    else if (cfg.emit_mode == EMIT_BC) {
-        cmd += " -emit-llvm -c -o \"" + cfg.output_file + "\" " + cfg.opt_level + " -Wno-override-module";
+    else if (cfg.is_compile_only) {
+        cmd += " -c";
+        if (cfg.is_emit_llvm) { cmd += " -emit-llvm"; }
+        cmd += " -o \"" + cfg.output_file + "\"";
     }
     else {
         let wl_path -> String = wl_getenv("WL_PATH");
@@ -257,11 +263,11 @@ func main(argc -> Int, ptr argv -> String) -> Int {
             builtin.print("Warning: WL_PATH environment variable is not set. Auto-linking of runtime skipped.");
         }
 
-        if (cfg.extern_file is !null) {
-            cmd += " \"" + cfg.extern_file + "\"";
+        if (cfg.extra_ldflags.length() > 0) {
+            cmd += " " + cfg.extra_ldflags;
         }
 
-        cmd += " -o \"" + cfg.output_file + "\" " + cfg.opt_level + " -Wno-override-module";
+        cmd += " -o \"" + cfg.output_file + "\"";
 
         if (is_windows() == 0) {
             cmd += " -lm -lc";
@@ -273,7 +279,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     
     let ret -> Int = system_call(cmd);
 
-    if (!cfg.keep_temps) {
+    if (!cfg.keep_temps && cfg.output_file != ll_file) {
         if (cfg.verbose) { builtin.print("Cleaning up: " + ll_file); }
         remove_file(ll_file);
     }

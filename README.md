@@ -98,10 +98,10 @@ wlc src/wlc.wl wlc_new
 Test the newly built compiler:
 
 ```bash
-./wlc_new --help
+./wlc_new
 ```
 
-You should see the `White Language Compiler (v0.1.2)` output.
+You should see the `White Language Compiler (v0.1.3)` output.
 
 ## License
 

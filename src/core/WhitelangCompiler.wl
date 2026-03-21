@@ -112,7 +112,8 @@ struct Compiler(
     loaded_files -> HashMap,
     current_dir -> String,
     curr_func -> FuncInfo,
-    expected_type -> Int
+    expected_type -> Int,
+    type_drop_list -> Struct
 )
 
 
@@ -124,7 +125,7 @@ struct LoopScope(
 
 
 func new_compiler(out_path -> String) -> Compiler {
-    let f -> File = open(out_path, "w");
+    let f -> File = file_io.open(out_path, "w");
     // initialize empty scope
     let root_scope -> Scope = Scope(table=map_new(32), parent=null, gc_vars=null);
 
@@ -156,7 +157,8 @@ func new_compiler(out_path -> String) -> Compiler {
         loaded_files = map_new(32),
         current_dir = ".",
         curr_func = null,
-        expected_type = 0
+        expected_type = 0,
+        type_drop_list = null
     );
 }
 
@@ -172,24 +174,24 @@ func promote_to_float(c -> Compiler, res -> CompileResult) -> CompileResult {
 
     if (res.type == TYPE_BYTE) {
         let uitofp_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + uitofp_reg + " = uitofp i8 " + input_reg + " to double\n");
+        file_io.write(c.output_file, c.indent + uitofp_reg + " = uitofp i8 " + input_reg + " to double\n");
         return CompileResult(reg=uitofp_reg, type=TYPE_FLOAT);
     }
 
     if (res.type == TYPE_LONG) {
         let sitofp_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + sitofp_reg + " = sitofp i64 " + input_reg + " to double\n");
+        file_io.write(c.output_file, c.indent + sitofp_reg + " = sitofp i64 " + input_reg + " to double\n");
         return CompileResult(reg=sitofp_reg, type=TYPE_FLOAT);
     }
 
     if (res.type == TYPE_BOOL) {
         let zext_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + zext_reg + " = zext i1 " + input_reg + " to i32\n");
+        file_io.write(c.output_file, c.indent + zext_reg + " = zext i1 " + input_reg + " to i32\n");
         input_reg = zext_reg;
     }
     
     let n_reg -> String = next_reg(c);
-    write(c.output_file, c.indent + n_reg + " = sitofp i32 " + input_reg + " to double\n");
+    file_io.write(c.output_file, c.indent + n_reg + " = sitofp i32 " + input_reg + " to double\n");
     return CompileResult(reg=n_reg, type=TYPE_FLOAT);
 }
 func promote_to_long(c -> Compiler, res -> CompileResult) -> CompileResult {
@@ -198,20 +200,20 @@ func promote_to_long(c -> Compiler, res -> CompileResult) -> CompileResult {
 
     if (res.type == TYPE_BYTE) {
         let zext_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + zext_reg + " = zext i8 " + input_reg + " to i64\n");
+        file_io.write(c.output_file, c.indent + zext_reg + " = zext i8 " + input_reg + " to i64\n");
         return CompileResult(reg=zext_reg, type=TYPE_LONG);
     }
 
     if (res.type == TYPE_BOOL) {
         let zext_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + zext_reg + " = zext i1 " + input_reg + " to i64\n");
+        file_io.write(c.output_file, c.indent + zext_reg + " = zext i1 " + input_reg + " to i64\n");
         return CompileResult(reg=zext_reg, type=TYPE_LONG);
     }
 
     if (res.type == TYPE_INT) {
         let n_reg -> String = next_reg(c);
         // sext: sign extension
-        write(c.output_file, c.indent + n_reg + " = sext i32 " + input_reg + " to i64\n");
+        file_io.write(c.output_file, c.indent + n_reg + " = sext i32 " + input_reg + " to i64\n");
         return CompileResult(reg=n_reg, type=TYPE_LONG);
     }
     
@@ -221,7 +223,7 @@ func promote_to_int(c -> Compiler, res -> CompileResult) -> CompileResult {
     if (res.type != TYPE_BYTE) { return res; }
     
     let zext_reg -> String = next_reg(c);
-    write(c.output_file, c.indent + zext_reg + " = zext i8 " + res.reg + " to i32\n");
+    file_io.write(c.output_file, c.indent + zext_reg + " = zext i8 " + res.reg + " to i32\n");
     return CompileResult(reg=zext_reg, type=TYPE_INT);
 }
 
@@ -411,6 +413,7 @@ func get_vector_type_id(c -> Compiler, base_id -> Int) -> Int {
     if (cached is !null) { return cached.type; }
     
     let new_id -> Int = c.type_counter;
+    c.type_drop_list = TypeListNode(type=new_id, next=c.type_drop_list);
     c.type_counter += 1;
 
     map_put(c.vector_cache, key, SymbolInfo(reg="", type=new_id, origin_type=0));
@@ -538,7 +541,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         let s_info -> StructInfo = map_get(c.struct_table, name);
         if (s_info is !null) { return s_info.type_id; }
         
-        throw_type_error(v.pos, "Unknown type: " + name);
+        WhitelangExceptions.throw_type_error(v.pos, "Unknown type: " + name);
     }
     
     return TYPE_VOID;
@@ -548,61 +551,67 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
     if (res.type == TYPE_STRING) { return res; }
 
     let raw_mem -> String = next_reg(c);
-    write(c.output_file, c.indent + raw_mem + " = call i8* @malloc(i64 40)\n");
+    file_io.write(c.output_file, c.indent + raw_mem + " = call i8* @malloc(i64 40)\n");
 
     let rc_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + rc_ptr + " = bitcast i8* " + raw_mem + " to i32*\n");
-    write(c.output_file, c.indent + "store i32 0, i32* " + rc_ptr + "\n");
+    file_io.write(c.output_file, c.indent + rc_ptr + " = bitcast i8* " + raw_mem + " to i32*\n");
+    file_io.write(c.output_file, c.indent + "store i32 0, i32* " + rc_ptr + "\n");
+
+    let type_ptr -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + type_ptr + " = getelementptr inbounds i8, i8* " + raw_mem + ", i32 4\n");
+    let type_ptr_i32 -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + type_ptr_i32 + " = bitcast i8* " + type_ptr + " to i32*\n");
+    file_io.write(c.output_file, c.indent + "store i32 " + TYPE_STRING + ", i32* " + type_ptr_i32 + "\n");
 
     let buf_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + buf_ptr + " = getelementptr inbounds i8, i8* " + raw_mem + ", i32 8\n");
+    file_io.write(c.output_file, c.indent + buf_ptr + " = getelementptr inbounds i8, i8* " + raw_mem + ", i32 8\n");
 
     if (res.type == TYPE_INT || res.type == TYPE_BYTE) {
         let val_reg -> String = res.reg;
         if (res.type == TYPE_BYTE) {
             val_reg = next_reg(c);
-            write(c.output_file, c.indent + val_reg + " = zext i8 " + res.reg + " to i32\n");
+            file_io.write(c.output_file, c.indent + val_reg + " = zext i8 " + res.reg + " to i32\n");
         }
         let fmt -> String = next_reg(c);
-        write(c.output_file, c.indent + fmt + " = getelementptr [3 x i8], [3 x i8]* @.fmt_int_simple, i32 0, i32 0\n");
+        file_io.write(c.output_file, c.indent + fmt + " = getelementptr [3 x i8], [3 x i8]* @.fmt_int_simple, i32 0, i32 0\n");
         
         // call snprintf(buf_ptr, 32, "%d", val)
-        write(c.output_file, c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 32, i8* " + fmt + ", i32 " + val_reg + ")\n");
+        file_io.write(c.output_file, c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 32, i8* " + fmt + ", i32 " + val_reg + ")\n");
         return CompileResult(reg=buf_ptr, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_LONG) {
         let fmt -> String = next_reg(c);
-        write(c.output_file, c.indent + fmt + " = getelementptr [5 x i8], [5 x i8]* @.fmt_long_simple, i32 0, i32 0\n");
+        file_io.write(c.output_file, c.indent + fmt + " = getelementptr [5 x i8], [5 x i8]* @.fmt_long_simple, i32 0, i32 0\n");
         
-        write(c.output_file, c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 32, i8* " + fmt + ", i64 " + res.reg + ")\n");
+        file_io.write(c.output_file, c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 32, i8* " + fmt + ", i64 " + res.reg + ")\n");
         return CompileResult(reg=buf_ptr, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_FLOAT) {
         let fmt -> String = next_reg(c);
-        write(c.output_file, c.indent + fmt + " = getelementptr [3 x i8], [3 x i8]* @.fmt_float_simple, i32 0, i32 0\n");
+        file_io.write(c.output_file, c.indent + fmt + " = getelementptr [3 x i8], [3 x i8]* @.fmt_float_simple, i32 0, i32 0\n");
         
-        write(c.output_file, c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 32, i8* " + fmt + ", double " + res.reg + ")\n");
+        file_io.write(c.output_file, c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 32, i8* " + fmt + ", double " + res.reg + ")\n");
         return CompileResult(reg=buf_ptr, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_BOOL) {
         let ptr_true -> String = next_reg(c);
-        write(c.output_file, c.indent + ptr_true + " = getelementptr [5 x i8], [5 x i8]* @.str_true, i32 0, i32 0\n");
+        file_io.write(c.output_file, c.indent + ptr_true + " = getelementptr [5 x i8], [5 x i8]* @.str_true, i32 0, i32 0\n");
         let ptr_false -> String = next_reg(c);
-        write(c.output_file, c.indent + ptr_false + " = getelementptr [6 x i8], [6 x i8]* @.str_false, i32 0, i32 0\n");
+        file_io.write(c.output_file, c.indent + ptr_false + " = getelementptr [6 x i8], [6 x i8]* @.str_false, i32 0, i32 0\n");
         
         let src_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + src_reg + " = select i1 " + res.reg + ", i8* " + ptr_true + ", i8* " + ptr_false + "\n");
+        file_io.write(c.output_file, c.indent + src_reg + " = select i1 " + res.reg + ", i8* " + ptr_true + ", i8* " + ptr_false + "\n");
         
-        write(c.output_file, c.indent + "call i8* @strcpy(i8* " + buf_ptr + ", i8* " + src_reg + ")\n");
+        file_io.write(c.output_file, c.indent + "call i8* @strcpy(i8* " + buf_ptr + ", i8* " + src_reg + ")\n");
         return CompileResult(reg=buf_ptr, type=TYPE_STRING);
     }
 
     let empty_src -> String = next_reg(c);
-    write(c.output_file, c.indent + empty_src + " = getelementptr [5 x i8], [5 x i8]* @.str_null, i32 0, i32 0\n");
-    write(c.output_file, c.indent + "call i8* @strcpy(i8* " + buf_ptr + ", i8* " + empty_src + ")\n");
+    file_io.write(c.output_file, c.indent + empty_src + " = getelementptr [5 x i8], [5 x i8]* @.str_null, i32 0, i32 0\n");
+    file_io.write(c.output_file, c.indent + "call i8* @strcpy(i8* " + buf_ptr + ", i8* " + empty_src + ")\n");
     return CompileResult(reg=buf_ptr, type=TYPE_STRING);
 }
 
@@ -640,7 +649,7 @@ func exit_scope(c -> Compiler) -> Void {
     while (curr_gc is !null) {
         let ty_str -> String = get_llvm_type_str(c, curr_gc.type);
         let val_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + val_reg + " = load " + ty_str + ", " + ty_str + "* " + curr_gc.reg + "\n");
+        file_io.write(c.output_file, c.indent + val_reg + " = load " + ty_str + ", " + ty_str + "* " + curr_gc.reg + "\n");
 
         emit_release(c, val_reg, curr_gc.type);
         
@@ -677,8 +686,8 @@ func emit_retain(c -> Compiler, reg -> String, type_id -> Int) -> Void {
     // cast to i8* for the runtime function
     let cast_reg -> String = next_reg(c);
     let src_ty -> String = get_llvm_type_str(c, type_id);
-    write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + reg + " to i8*\n");
-    write(c.output_file, c.indent + "call void @__wl_retain(i8* " + cast_reg + ")\n");
+    file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + reg + " to i8*\n");
+    file_io.write(c.output_file, c.indent + "call void @__wl_retain(i8* " + cast_reg + ")\n");
 }
 
 func emit_release(c -> Compiler, reg -> String, type_id -> Int) -> Void {
@@ -686,8 +695,8 @@ func emit_release(c -> Compiler, reg -> String, type_id -> Int) -> Void {
 
     let cast_reg -> String = next_reg(c);
     let src_ty -> String = get_llvm_type_str(c, type_id);
-    write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + reg + " to i8*\n");
-    write(c.output_file, c.indent + "call void @__wl_release(i8* " + cast_reg + ")\n");
+    file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + reg + " to i8*\n");
+    file_io.write(c.output_file, c.indent + "call void @__wl_release(i8* " + cast_reg + ")\n");
 }
 
 func cleanup_all_scopes(c -> Compiler) -> Void {
@@ -697,7 +706,7 @@ func cleanup_all_scopes(c -> Compiler) -> Void {
         while (gc_node is !null) {
             let ty_str -> String = get_llvm_type_str(c, gc_node.type);
             let val_reg -> String = next_reg(c);
-            write(c.output_file, c.indent + val_reg + " = load " + ty_str + ", " + ty_str + "* " + gc_node.reg + "\n");
+            file_io.write(c.output_file, c.indent + val_reg + " = load " + ty_str + ", " + ty_str + "* " + gc_node.reg + "\n");
             emit_release(c, val_reg, gc_node.type);
             gc_node = gc_node.next;
         }
@@ -733,7 +742,7 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
             let target_type_id -> Int = resolve_type(c, v_node.type_node);
             let llvm_ty_str -> String = get_llvm_type_str(c, target_type_id);
             let ptr_reg -> String = next_reg(c);
-            write(c.output_file, c.indent + ptr_reg + " = alloca " + llvm_ty_str + "\n");
+            file_io.write(c.output_file, c.indent + ptr_reg + " = alloca " + llvm_ty_str + "\n");
             v_node.alloc_reg = ptr_reg;
         }
     }
@@ -754,7 +763,7 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
     
     let ln -> Int = pos.ln + 1;
     let col -> Int = pos.col + 1;
-    write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* " + header_ptr + ", i32 " + ln + ", i32 " + col + ")\n");
+    file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* " + header_ptr + ", i32 " + ln + ", i32 " + col + ")\n");
 
     let full_text -> String = pos.text;
     if (full_text.length() > 0) {
@@ -787,7 +796,7 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
         let code_len -> Int = code_content.length() + 1;
         
         let code_ptr -> String = "getelementptr inbounds ([" + code_len + " x i8], [" + code_len + " x i8]* @.str." + code_id + ", i32 0, i32 0)";
-        write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* " + code_ptr + ")\n");
+        file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* " + code_ptr + ")\n");
 
         let err_len -> Int = 1;
         let line_len -> Int = raw_line.length();
@@ -828,52 +837,147 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
         let arrow_len -> Int = arrow_str.length() + 1;
         
         let arrow_ptr -> String = "getelementptr inbounds ([" + arrow_len + " x i8], [" + arrow_len + " x i8]* @.str." + arrow_id + ", i32 0, i32 0)";
-        write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* " + arrow_ptr + ")\n");
+        file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* " + arrow_ptr + ")\n");
     }
 
-    write(c.output_file, c.indent + "call void @exit(i32 1)\n");
-    write(c.output_file, c.indent + "unreachable\n");
+    file_io.write(c.output_file, c.indent + "call void @exit(i32 1)\n");
+    file_io.write(c.output_file, c.indent + "unreachable\n");
 }
 
 func compile_arc_hooks(c -> Compiler) -> Void {
     // --- __wl_retain(i8* ptr) ---
     // if (ptr is null) return; ptr[-8].rc++;
-    write(c.output_file, "define void @__wl_retain(i8* %ptr) {\n");
-    write(c.output_file, "entry:\n");
-    write(c.output_file, "  %is_null = icmp eq i8* %ptr, null\n");
-    write(c.output_file, "  br i1 %is_null, label %done, label %work\n");
-    write(c.output_file, "work:\n");
-    write(c.output_file, "  %base = getelementptr i8, i8* %ptr, i32 -8\n");
-    write(c.output_file, "  %rc_ptr = bitcast i8* %base to i32*\n");
-    write(c.output_file, "  %rc = load i32, i32* %rc_ptr\n");
-    write(c.output_file, "  %new_rc = add i32 %rc, 1\n");
-    write(c.output_file, "  store i32 %new_rc, i32* %rc_ptr\n");
-    write(c.output_file, "  br label %done\n");
-    write(c.output_file, "done:\n");
-    write(c.output_file, "  ret void\n");
-    write(c.output_file, "}\n\n");
+    file_io.write(c.output_file, "define void @__wl_retain(i8* %ptr) {\n");
+    file_io.write(c.output_file, "entry:\n");
+    file_io.write(c.output_file, "  %is_null = icmp eq i8* %ptr, null\n");
+    file_io.write(c.output_file, "  br i1 %is_null, label %done, label %work\n");
+    file_io.write(c.output_file, "work:\n");
+    file_io.write(c.output_file, "  %base = getelementptr i8, i8* %ptr, i32 -8\n");
+    file_io.write(c.output_file, "  %rc_ptr = bitcast i8* %base to i32*\n");
+    file_io.write(c.output_file, "  %rc = load i32, i32* %rc_ptr\n");
+    file_io.write(c.output_file, "  %new_rc = add i32 %rc, 1\n");
+    file_io.write(c.output_file, "  store i32 %new_rc, i32* %rc_ptr\n");
+    file_io.write(c.output_file, "  br label %done\n");
+    file_io.write(c.output_file, "done:\n");
+    file_io.write(c.output_file, "  ret void\n");
+    file_io.write(c.output_file, "}\n\n");
 
     // --- __wl_release(i8* ptr) ---
     // if (ptr is null) return; ptr[-8].rc--; if (rc == 0) free(ptr[-8]);
-    write(c.output_file, "define void @__wl_release(i8* %ptr) {\n");
-    write(c.output_file, "entry:\n");
-    write(c.output_file, "  %is_null = icmp eq i8* %ptr, null\n");
-    write(c.output_file, "  br i1 %is_null, label %done, label %work\n");
-    write(c.output_file, "work:\n");
-    write(c.output_file, "  %base = getelementptr i8, i8* %ptr, i32 -8\n");
-    write(c.output_file, "  %rc_ptr = bitcast i8* %base to i32*\n");
-    write(c.output_file, "  %rc = load i32, i32* %rc_ptr\n");
-    write(c.output_file, "  %new_rc = sub i32 %rc, 1\n");
-    write(c.output_file, "  store i32 %new_rc, i32* %rc_ptr\n");
-    write(c.output_file, "  %is_zero = icmp eq i32 %new_rc, 0\n");
-    write(c.output_file, "  br i1 %is_zero, label %free_it, label %done\n");
-    write(c.output_file, "free_it:\n");
+    file_io.write(c.output_file, "define void @__wl_release(i8* %ptr) {\n");
+    file_io.write(c.output_file, "entry:\n");
+    file_io.write(c.output_file, "  %is_null = icmp eq i8* %ptr, null\n");
+    file_io.write(c.output_file, "  br i1 %is_null, label %done, label %work\n");
+    file_io.write(c.output_file, "work:\n");
+    file_io.write(c.output_file, "  %base = getelementptr i8, i8* %ptr, i32 -8\n");
+    file_io.write(c.output_file, "  %rc_ptr = bitcast i8* %base to i32*\n");
+    file_io.write(c.output_file, "  %rc = load i32, i32* %rc_ptr\n");
+    file_io.write(c.output_file, "  %new_rc = sub i32 %rc, 1\n");
+    file_io.write(c.output_file, "  store i32 %new_rc, i32* %rc_ptr\n");
+    file_io.write(c.output_file, "  %is_zero = icmp eq i32 %new_rc, 0\n");
+    file_io.write(c.output_file, "  br i1 %is_zero, label %free_check, label %done\n");
+    
+    // get type_id from header: base[4]
+    file_io.write(c.output_file, "free_check:\n");
+    file_io.write(c.output_file, "  %type_ptr = getelementptr i8, i8* %base, i32 4\n");
+    file_io.write(c.output_file, "  %type_ptr_i32 = bitcast i8* %type_ptr to i32*\n");
+    file_io.write(c.output_file, "  %type_id = load i32, i32* %type_ptr_i32\n");
+    
+    // switch routing for deep drop
+    file_io.write(c.output_file, "  switch i32 %type_id, label %free_default [\n");
+    let curr_drop -> TypeListNode = c.type_drop_list;
+    while (curr_drop is !null) {
+        file_io.write(c.output_file, "    i32 " + curr_drop.type + ", label %drop_" + curr_drop.type + "\n");
+        curr_drop = curr_drop.next;
+    }
+    file_io.write(c.output_file, "  ]\n");
 
-    write(c.output_file, "  call void @free(i8* %base)\n"); 
-    write(c.output_file, "  br label %done\n");
-    write(c.output_file, "done:\n");
-    write(c.output_file, "  ret void\n");
-    write(c.output_file, "}\n\n");
+    // default: free(ptr[-8])
+    file_io.write(c.output_file, "\nfree_default:\n");
+    file_io.write(c.output_file, "  call void @free(i8* %base)\n"); 
+    file_io.write(c.output_file, "  br label %done\n");
+
+    // generate drop blocks for complex types
+    curr_drop = c.type_drop_list;
+    while (curr_drop is !null) {
+        let t_id -> Int = curr_drop.type;
+        file_io.write(c.output_file, "\ndrop_" + t_id + ":\n");
+        
+        let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + t_id);
+        if (v_info is !null) {
+            // Vector: free(vector.data)
+            let elem_ty_str -> String = get_llvm_type_str(c, v_info.type);
+            let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+            file_io.write(c.output_file, "  %vec_cast_" + t_id + " = bitcast i8* %ptr to " + struct_ty + "*\n");
+            
+            if (is_ref_type(c, v_info.type)) {
+                file_io.write(c.output_file, "  %size_ptr_" + t_id + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* %vec_cast_" + t_id + ", i32 0, i32 0\n");
+                file_io.write(c.output_file, "  %size_" + t_id + " = load i64, i64* %size_ptr_" + t_id + "\n");
+                file_io.write(c.output_file, "  %data_ptr_ptr_" + t_id + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* %vec_cast_" + t_id + ", i32 0, i32 2\n");
+                file_io.write(c.output_file, "  %data_ptr_" + t_id + " = load " + elem_ty_str + "*, " + elem_ty_str + "** %data_ptr_ptr_" + t_id + "\n");
+
+                let loop_cond -> String = "vec_drop_cond_" + t_id;
+                let loop_body -> String = "vec_drop_body_" + t_id;
+                let loop_end -> String = "vec_drop_end_" + t_id;
+
+                file_io.write(c.output_file, "  %idx_ptr_" + t_id + " = alloca i64\n");
+                file_io.write(c.output_file, "  store i64 0, i64* %idx_ptr_" + t_id + "\n");
+                file_io.write(c.output_file, "  br label %" + loop_cond + "\n");
+
+                file_io.write(c.output_file, "\n" + loop_cond + ":\n");
+                file_io.write(c.output_file, "  %curr_idx_" + t_id + " = load i64, i64* %idx_ptr_" + t_id + "\n");
+                file_io.write(c.output_file, "  %cmp_" + t_id + " = icmp slt i64 %curr_idx_" + t_id + ", %size_" + t_id + "\n");
+                file_io.write(c.output_file, "  br i1 %cmp_" + t_id + ", label %" + loop_body + ", label %" + loop_end + "\n");
+
+                file_io.write(c.output_file, "\n" + loop_body + ":\n");
+                file_io.write(c.output_file, "  %slot_" + t_id + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* %data_ptr_" + t_id + ", i64 %curr_idx_" + t_id + "\n");
+                file_io.write(c.output_file, "  %elem_" + t_id + " = load " + elem_ty_str + ", " + elem_ty_str + "* %slot_" + t_id + "\n");
+                
+                let elem_i8 -> String = "%elem_i8_" + t_id;
+                file_io.write(c.output_file, "  " + elem_i8 + " = bitcast " + elem_ty_str + " %elem_" + t_id + " to i8*\n");
+                file_io.write(c.output_file, "  call void @__wl_release(i8* " + elem_i8 + ")\n");
+
+                file_io.write(c.output_file, "  %next_idx_" + t_id + " = add i64 %curr_idx_" + t_id + ", 1\n");
+                file_io.write(c.output_file, "  store i64 %next_idx_" + t_id + ", i64* %idx_ptr_" + t_id + "\n");
+                file_io.write(c.output_file, "  br label %" + loop_cond + "\n");
+
+                file_io.write(c.output_file, "\n" + loop_end + ":\n");
+                file_io.write(c.output_file, "  %data_i8_" + t_id + " = bitcast " + elem_ty_str + "* %data_ptr_" + t_id + " to i8*\n");
+                file_io.write(c.output_file, "  call void @free(i8* %data_i8_" + t_id + ")\n");
+            } else {
+                file_io.write(c.output_file, "  %data_ptr_ptr_" + t_id + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* %vec_cast_" + t_id + ", i32 0, i32 2\n");
+                file_io.write(c.output_file, "  %data_ptr_" + t_id + " = load " + elem_ty_str + "*, " + elem_ty_str + "** %data_ptr_ptr_" + t_id + "\n");
+                file_io.write(c.output_file, "  %data_i8_" + t_id + " = bitcast " + elem_ty_str + "* %data_ptr_" + t_id + " to i8*\n");
+                file_io.write(c.output_file, "  call void @free(i8* %data_i8_" + t_id + ")\n");
+            }
+            file_io.write(c.output_file, "  br label %free_default\n");
+        } else {
+            let s_info -> StructInfo = map_get(c.struct_id_map, "" + t_id);
+            if (s_info is !null) {
+                // Struct: release each ref field
+                file_io.write(c.output_file, "  %struct_cast_" + t_id + " = bitcast i8* %ptr to " + s_info.llvm_name + "*\n");
+                let f_curr -> FieldInfo = s_info.fields;
+                while (f_curr is !null) {
+                    if (is_ref_type(c, f_curr.type)) {
+                        file_io.write(c.output_file, "  %f_ptr_" + t_id + "_" + f_curr.offset + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* %struct_cast_" + t_id + ", i32 0, i32 " + f_curr.offset + "\n");
+                        file_io.write(c.output_file, "  %f_val_" + t_id + "_" + f_curr.offset + " = load " + f_curr.llvm_type + ", " + f_curr.llvm_type + "* %f_ptr_" + t_id + "_" + f_curr.offset + "\n");
+                        let f_val_i8 -> String = "%f_val_i8_" + t_id + "_" + f_curr.offset;
+                        file_io.write(c.output_file, "  " + f_val_i8 + " = bitcast " + f_curr.llvm_type + " %f_val_" + t_id + "_" + f_curr.offset + " to i8*\n");
+                        file_io.write(c.output_file, "  call void @__wl_release(i8* " + f_val_i8 + ")\n");
+                    }
+                    f_curr = f_curr.next;
+                }
+                file_io.write(c.output_file, "  br label %free_default\n");
+            } else {
+                file_io.write(c.output_file, "  br label %free_default\n");
+            }
+        }
+        curr_drop = curr_drop.next;
+    }
+
+    file_io.write(c.output_file, "done:\n");
+    file_io.write(c.output_file, "  ret void\n");
+    file_io.write(c.output_file, "}\n\n");
 }
 
 func compile_ast(c -> Compiler, node -> Struct) -> Void {
@@ -893,11 +997,11 @@ func compile_ast(c -> Compiler, node -> Struct) -> Void {
 // === MODULE ===
 // ==============
 func file_exists(path -> String) -> Bool {
-    let f -> File = open(path, "rb");
+    let f -> File = file_io.open(path, "rb");
     if (f is null) {
         return false;
     }
-    close(f);
+    file_io.close(f);
     return true;
 }
 
@@ -924,7 +1028,7 @@ func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> 
 
     let wl_path -> String = wl_getenv("WL_PATH");
     if (wl_path is null) {
-        throw_environment_error("Missing 'WL_PATH' variable.");
+        WhitelangExceptions.throw_environment_error("Missing 'WL_PATH' variable.");
     }
 
     let pkg_entry -> String = wl_path + "/std/" + raw_path + "/_pkg.wl";
@@ -937,7 +1041,7 @@ func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> 
         return file_entry;
     }
 
-    throw_import_error(pos, "Cannot find module '" + raw_path + "'. Searched:\n - " + pkg_entry + "\n - " + file_entry);
+    WhitelangExceptions.throw_import_error(pos, "Cannot find module '" + raw_path + "'. Searched:\n - " + pkg_entry + "\n - " + file_entry);
     return "";
 }
 
@@ -958,7 +1062,7 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
             if (map_get(c.func_table, target_name) is !null ||
                 map_get(c.struct_table, target_name) is !null ||
                 map_get(c.global_symbol_table, target_name) is !null) {
-                throw_import_error(node.pos, "Name '" + target_name + "' is already defined. Use 'as' to alias it.");
+                WhitelangExceptions.throw_import_error(node.pos, "Name '" + target_name + "' is already defined. Use 'as' to alias it.");
             }
         }
 
@@ -983,7 +1087,7 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
         }
 
         if (!found) {
-            throw_import_error(node.pos, "Cannot import '" + orig_name + "': symbol not found in module.");
+            WhitelangExceptions.throw_import_error(node.pos, "Cannot import '" + orig_name + "': symbol not found in module.");
         }
 
         curr_sym = curr_sym.next;
@@ -1025,7 +1129,10 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
             file_mod_name = node.alias_tok.value;
         } else {
             let len -> Int = raw_path.length();
-            let end_idx -> Int = len - 3;
+            let end_idx -> Int = len;
+            if (raw_path.ends_with(".wl")) {
+                end_idx = len - 3;
+            }
             let start_idx -> Int = 0;
             let i -> Int = len - 1;
             while (i >= 0) {
@@ -1061,14 +1168,14 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
         is_package_entry = true;
     }
 
-    let f -> File = open(final_path, "rb");
-    if (f is null) { throw_import_error(node.pos, "Failed to open: " + final_path); }
-    let source -> String = read_all(f);
-    close(f);
+    let f -> File = file_io.open(final_path, "rb");
+    if (f is null) { WhitelangExceptions.throw_import_error(node.pos, "Failed to open: " + final_path); }
+    let source -> String = file_io.read_all(f);
+    file_io.close(f);
 
-    let lexer -> Lexer = new_lexer(final_path, source);
-    let parser -> Parser = Parser(lexer=lexer, current_tok=get_next_token(lexer));
-    let mod_ast -> Struct = parse(parser);
+    let lexer -> Lexer = WhitelangLexer.new_lexer(final_path, source);
+    let parser -> Parser = WhitelangParser.Parser(lexer=lexer, current_tok=get_next_token(lexer));
+    let mod_ast -> Struct = WhitelangParser.parse(parser);
 
     compile_ast(c, mod_ast);
 
@@ -1119,7 +1226,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
             }
             
             if (map_get(c.func_table, func_name) is !null) {
-                throw_type_error(f_node.pos, "Function '" + func_name + "' is already defined.");
+                WhitelangExceptions.throw_type_error(f_node.pos, "Function '" + func_name + "' is already defined.");
             }
             
             let ret_type_id -> Int = resolve_type(c, f_node.ret_type_tok);
@@ -1214,37 +1321,37 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
             }
             else if (val_node.type == NODE_NULLPTR) {
                 if (is_pointer_type(c, target_type_id) == false) {
-                    throw_type_error(node.pos, "Global 'nullptr' can only be assigned to pointer types.");
+                    WhitelangExceptions.throw_type_error(node.pos, "Global 'nullptr' can only be assigned to pointer types.");
                 }
                 init_val_str = "null";
             }
             else if (val_node.type == NODE_NULL) {
                 if (is_pointer_type(c, target_type_id) == true) {
-                throw_type_error(node.pos, "Global 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
+                WhitelangExceptions.throw_type_error(node.pos, "Global 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
                 }
                 if (target_type_id == TYPE_INT || target_type_id == TYPE_FLOAT || target_type_id == TYPE_BOOL) {
-                throw_type_error(node.pos, "Primitive types cannot be null.");
+                WhitelangExceptions.throw_type_error(node.pos, "Primitive types cannot be null.");
                 }
                 init_val_str = "null";
             }
             else if (val_node.type == NODE_INT) {
                 let n -> IntNode = node.value;
                 init_val_str = n.tok.value;
-                if (target_type_id == TYPE_FLOAT) { throw_type_error(node.pos, "Type mismatch (Int -> Float). "); }
+                if (target_type_id == TYPE_FLOAT) { WhitelangExceptions.throw_type_error(node.pos, "Type mismatch (Int -> Float). "); }
             } else if (val_node.type == NODE_FLOAT) {
                 let n -> FloatNode = node.value;
                 init_val_str = n.tok.value;
-                if (target_type_id != TYPE_FLOAT) { throw_type_error(node.pos, "Type mismatch (Float -> Int). "); }
+                if (target_type_id != TYPE_FLOAT) { WhitelangExceptions.throw_type_error(node.pos, "Type mismatch (Float -> Int). "); }
             } else if (val_node.type == NODE_BOOL) {
                 let n -> BooleanNode = node.value;
                 if (n.value == 1) { init_val_str = "1"; } else { init_val_str = "0"; }
-                if (target_type_id != TYPE_BOOL) { throw_type_error(node.pos, "Type mismatch. "); }
+                if (target_type_id != TYPE_BOOL) { WhitelangExceptions.throw_type_error(node.pos, "Type mismatch. "); }
             } else {
-                throw_type_error(node.pos, "Global variable initialization must be a constant literal. ");
+                WhitelangExceptions.throw_type_error(node.pos, "Global variable initialization must be a constant literal. ");
             }
         }
         
-        write(c.output_file, global_name + " = global " + llvm_ty_str + " " + init_val_str + "\n");
+        file_io.write(c.output_file, global_name + " = global " + llvm_ty_str + " " + init_val_str + "\n");
         map_put(c.global_symbol_table, var_name, SymbolInfo(reg=global_name, type=target_type_id, origin_type=target_type_id, is_const=node.is_const));
         return void_result();
     }
@@ -1258,21 +1365,21 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         c.expected_type = 0;
         if (val_res.type == TYPE_NULLPTR) {
             if (is_pointer_type(c, target_type_id) == false) {
-                throw_type_error(node.pos, "Keyword 'nullptr' can only be assigned to explicit pointer types (ptr ...). Use 'null' for objects.");
+                WhitelangExceptions.throw_type_error(node.pos, "Keyword 'nullptr' can only be assigned to explicit pointer types (ptr ...). Use 'null' for objects.");
             }
         }
         else if (val_res.type == TYPE_NULL) {
             if (is_pointer_type(c, target_type_id) == true) {
-                throw_type_error(node.pos, "Keyword 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
+                WhitelangExceptions.throw_type_error(node.pos, "Keyword 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
             }
             if (target_type_id == TYPE_INT || target_type_id == TYPE_FLOAT || target_type_id == TYPE_BOOL) {
-                throw_type_error(node.pos, "Primitive types (Int, Float, Bool) cannot be null.");
+                WhitelangExceptions.throw_type_error(node.pos, "Primitive types (Int, Float, Bool) cannot be null.");
             }
         }
         else {
             if (target_type_id == TYPE_BYTE && val_res.type == TYPE_INT) {
                 let trunc_reg -> String = next_reg(c);
-                write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + val_res.reg + " to i8\n");
+                file_io.write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + val_res.reg + " to i8\n");
                 val_res.reg = trunc_reg;
                 val_res.type = TYPE_BYTE;
             }
@@ -1292,7 +1399,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                     let dest_ty -> String = get_llvm_type_str(c, target_type_id);
                     let src_ty -> String = get_llvm_type_str(c, val_res.type);
                     if (dest_ty != src_ty) {
-                        write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to " + dest_ty + "\n");
+                        file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to " + dest_ty + "\n");
                         val_res.reg = cast_reg;
                     }
                     val_res.type = target_type_id;
@@ -1303,7 +1410,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 origin_id = val_res.type;
                 let cast_reg -> String = next_reg(c);
                 let src_ty -> String = get_llvm_type_str(c, val_res.type);
-                write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to i8*\n");
+                file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to i8*\n");
                 val_res.reg = cast_reg;
                 val_res.type = TYPE_GENERIC_STRUCT;
             }
@@ -1311,7 +1418,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 if (map_get(c.struct_id_map, "" + target_type_id) is !null) {
                     let cast_reg -> String = next_reg(c);
                     let dest_ty -> String = get_llvm_type_str(c, target_type_id);
-                    write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + val_res.reg + " to " + dest_ty + "\n");
+                    file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + val_res.reg + " to " + dest_ty + "\n");
                     val_res.reg = cast_reg;
                     val_res.type = target_type_id;
                 }
@@ -1330,7 +1437,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
             }
 
             if (target_type_id != val_res.type) {
-                throw_type_error(node.pos, "Cannot assign type '" + get_type_name(c, val_res.type) + "' to variable of type '" + get_type_name(c, target_type_id) + "'. ");
+                WhitelangExceptions.throw_type_error(node.pos, "Cannot assign type '" + get_type_name(c, val_res.type) + "' to variable of type '" + get_type_name(c, target_type_id) + "'. ");
             }
         }
 
@@ -1338,11 +1445,11 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
             emit_retain(c, val_res.reg, target_type_id);
         }
 
-        write(c.output_file, c.indent + "store " + llvm_ty_str + " " + val_res.reg + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
+        file_io.write(c.output_file, c.indent + "store " + llvm_ty_str + " " + val_res.reg + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
     }
     else {
         if (target_type_id == TYPE_GENERIC_STRUCT) {
-            throw_missing_initializer(node.pos, "Variable of generic type 'Struct' must be initialized explicitly.");
+            WhitelangExceptions.throw_missing_initializer(node.pos, "Variable of generic type 'Struct' must be initialized explicitly.");
         }
 
         let s_info -> StructInfo = map_get(c.struct_id_map, "" + target_type_id);
@@ -1354,12 +1461,12 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 emit_retain(c, init_res.reg, target_type_id);
             }
 
-            write(c.output_file, c.indent + "store " + llvm_ty_str + " " + init_res.reg + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
+            file_io.write(c.output_file, c.indent + "store " + llvm_ty_str + " " + init_res.reg + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
         } else {
             let zero -> String = "0";
             if (target_type_id == TYPE_STRING || target_type_id >= 100 || target_type_id == TYPE_GENERIC_STRUCT || target_type_id == TYPE_GENERIC_FUNCTION) { zero = "null"; }
             if (target_type_id == TYPE_FLOAT) { zero = "0.0"; }
-            write(c.output_file, c.indent + "store " + llvm_ty_str + " " + zero + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
+            file_io.write(c.output_file, c.indent + "store " + llvm_ty_str + " " + zero + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
         }
     }
 
@@ -1383,11 +1490,11 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
     let var_name -> String = node.name_tok.value;
     let info -> SymbolInfo = find_symbol(c, var_name);
     if (info is null) {
-        throw_name_error(node.pos, "Undefined variable '" + var_name + "'.");
+        WhitelangExceptions.throw_name_error(node.pos, "Undefined variable '" + var_name + "'.");
     }
 
     if (info.is_const) {
-        throw_type_error(node.pos, "Cannot assign to constant variable '" + var_name + "'.");
+        WhitelangExceptions.throw_type_error(node.pos, "Cannot assign to constant variable '" + var_name + "'.");
     }
 
     c.expected_type = info.type;
@@ -1396,19 +1503,19 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
 
     if (val_res.type == TYPE_NULLPTR) {
         if (is_pointer_type(c, info.type) == false) {
-            throw_type_error(node.pos, "nullptr can only be assigned to explicit pointer types.");
+            WhitelangExceptions.throw_type_error(node.pos, "nullptr can only be assigned to explicit pointer types.");
         }
     } else if (val_res.type == TYPE_NULL) {
         if (is_pointer_type(c, info.type) == true) {
-            throw_type_error(node.pos, "null cannot be assigned to explicit pointer types. Use 'nullptr'.");
+            WhitelangExceptions.throw_type_error(node.pos, "null cannot be assigned to explicit pointer types. Use 'nullptr'.");
         }
         if (info.type == TYPE_INT || info.type == TYPE_FLOAT || info.type == TYPE_BOOL) {
-            throw_type_error(node.pos, "Primitive types cannot be null.");
+            WhitelangExceptions.throw_type_error(node.pos, "Primitive types cannot be null.");
         }
     } else {
         if (info.type == TYPE_BYTE && val_res.type == TYPE_INT) {
             let trunc_reg -> String = next_reg(c);
-            write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + val_res.reg + " to i8\n");
+            file_io.write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + val_res.reg + " to i8\n");
             val_res.reg = trunc_reg;
             val_res.type = TYPE_BYTE;
         }
@@ -1424,7 +1531,7 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
         if (info.type == TYPE_GENERIC_STRUCT && val_res.type >= 100) {
             let cast_reg -> String = next_reg(c);
             let src_ty -> String = get_llvm_type_str(c, val_res.type);
-            write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to i8*\n");
+            file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to i8*\n");
             val_res.reg = cast_reg;
             val_res.type = TYPE_GENERIC_STRUCT;
         }
@@ -1434,7 +1541,7 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
                 let dest_ty -> String = get_llvm_type_str(c, info.type);
                 let src_ty -> String = get_llvm_type_str(c, val_res.type);
                 if (dest_ty != src_ty) {
-                    write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to " + dest_ty + "\n");
+                    file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to " + dest_ty + "\n");
                     val_res.reg = cast_reg;
                 }
                 val_res.type = info.type;
@@ -1444,7 +1551,7 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
              if (map_get(c.struct_id_map, "" + info.type) is !null) {
                 let cast_reg -> String = next_reg(c);
                 let dest_ty -> String = get_llvm_type_str(c, info.type);
-                write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + val_res.reg + " to " + dest_ty + "\n");
+                file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + val_res.reg + " to " + dest_ty + "\n");
                 val_res.reg = cast_reg;
                 val_res.type = info.type;
              }
@@ -1455,7 +1562,7 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
              }
         }
         if (info.type != val_res.type) {
-            throw_type_error(node.pos, "Type mismatch in assignment.");
+            WhitelangExceptions.throw_type_error(node.pos, "Type mismatch in assignment.");
         }
     }
 
@@ -1464,20 +1571,20 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
 
         let old_val_reg -> String = next_reg(c);
         let ty_str -> String = get_llvm_type_str(c, info.type);
-        write(c.output_file, c.indent + old_val_reg + " = load " + ty_str + ", " + ty_str + "* " + info.reg + "\n");
+        file_io.write(c.output_file, c.indent + old_val_reg + " = load " + ty_str + ", " + ty_str + "* " + info.reg + "\n");
 
         emit_release(c, old_val_reg, info.type);
     }
     
     let ty_str -> String = get_llvm_type_str(c, info.type);
-    write(c.output_file, c.indent + "store " + ty_str + " " + val_res.reg + ", " + ty_str + "* " + info.reg + "\n");
+    file_io.write(c.output_file, c.indent + "store " + ty_str + " " + val_res.reg + ", " + ty_str + "* " + info.reg + "\n");
     return val_res; 
 }
 
 func compile_if(c -> Compiler, node -> IfNode) -> CompileResult {
     let cond_res -> CompileResult = compile_node(c, node.condition);
     if (cond_res.type != TYPE_BOOL) {
-        throw_type_error(node.pos, "If condition must be a Bool. ");
+        WhitelangExceptions.throw_type_error(node.pos, "If condition must be a Bool. ");
     }
     
     let label_then -> String = next_label(c);
@@ -1489,19 +1596,19 @@ func compile_if(c -> Compiler, node -> IfNode) -> CompileResult {
         target_else = label_merge;
     }
     
-    write(c.output_file, c.indent + "br i1 " + cond_res.reg + ", label %" + label_then + ", label %" + target_else + "\n");
+    file_io.write(c.output_file, c.indent + "br i1 " + cond_res.reg + ", label %" + label_then + ", label %" + target_else + "\n");
     
-    write(c.output_file, "\n" + label_then + ":\n");
+    file_io.write(c.output_file, "\n" + label_then + ":\n");
     compile_node(c, node.body);
-    write(c.output_file, c.indent + "br label %" + label_merge + "\n");
+    file_io.write(c.output_file, c.indent + "br label %" + label_merge + "\n");
     
     if (node.else_body is !null) {
-        write(c.output_file, "\n" + label_else + ":\n");
+        file_io.write(c.output_file, "\n" + label_else + ":\n");
         compile_node(c, node.else_body);
-        write(c.output_file, c.indent + "br label %" + label_merge + "\n");
+        file_io.write(c.output_file, c.indent + "br label %" + label_merge + "\n");
     }
 
-    write(c.output_file, "\n" + label_merge + ":\n");
+    file_io.write(c.output_file, "\n" + label_merge + ":\n");
     return void_result();
 }
 
@@ -1513,20 +1620,20 @@ func compile_while(c -> Compiler, node -> WhileNode) -> CompileResult {
     let current_scope -> LoopScope = LoopScope(label_continue=label_cond, label_break=label_end, parent=c.loop_stack);
     c.loop_stack = current_scope;
 
-    write(c.output_file, c.indent + "br label %" + label_cond + "\n");
-    write(c.output_file, "\n" + label_cond + ":\n");
+    file_io.write(c.output_file, c.indent + "br label %" + label_cond + "\n");
+    file_io.write(c.output_file, "\n" + label_cond + ":\n");
     
     let cond_res -> CompileResult = compile_node(c, node.condition);
     if (cond_res.type != TYPE_BOOL) {
-        throw_type_error(node.pos, "While condition must be a Bool. ");
+        WhitelangExceptions.throw_type_error(node.pos, "While condition must be a Bool. ");
     }
-    write(c.output_file, c.indent + "br i1 " + cond_res.reg + ", label %" + label_body + ", label %" + label_end + "\n");
+    file_io.write(c.output_file, c.indent + "br i1 " + cond_res.reg + ", label %" + label_body + ", label %" + label_end + "\n");
 
-    write(c.output_file, "\n" + label_body + ":\n");
+    file_io.write(c.output_file, "\n" + label_body + ":\n");
     compile_node(c, node.body);
-    write(c.output_file, c.indent + "br label %" + label_cond + "\n");
+    file_io.write(c.output_file, c.indent + "br label %" + label_cond + "\n");
 
-    write(c.output_file, "\n" + label_end + ":\n");
+    file_io.write(c.output_file, "\n" + label_end + ":\n");
     c.loop_stack = current_scope.parent;
     return void_result();
 }
@@ -1543,28 +1650,28 @@ func compile_for(c -> Compiler, node -> ForNode) -> CompileResult {
     let current_scope -> LoopScope = LoopScope(label_continue=label_step, label_break=label_end, parent=c.loop_stack);
     c.loop_stack = current_scope;
     
-    write(c.output_file, c.indent + "br label %" + label_cond + "\n");
-    write(c.output_file, "\n" + label_cond + ":\n");
+    file_io.write(c.output_file, c.indent + "br label %" + label_cond + "\n");
+    file_io.write(c.output_file, "\n" + label_cond + ":\n");
     if (node.cond is !null) {
         let cond_res -> CompileResult = compile_node(c, node.cond);
         if (cond_res.type != TYPE_BOOL) {
-            throw_type_error(node.pos, "For condition must be a Bool. ");
+            WhitelangExceptions.throw_type_error(node.pos, "For condition must be a Bool. ");
         }
-        write(c.output_file, c.indent + "br i1 " + cond_res.reg + ", label %" + label_body + ", label %" + label_end + "\n");
+        file_io.write(c.output_file, c.indent + "br i1 " + cond_res.reg + ", label %" + label_body + ", label %" + label_end + "\n");
     } else {
-        write(c.output_file, c.indent + "br label %" + label_body + "\n");
+        file_io.write(c.output_file, c.indent + "br label %" + label_body + "\n");
     }
 
-    write(c.output_file, "\n" + label_body + ":\n");
+    file_io.write(c.output_file, "\n" + label_body + ":\n");
     compile_node(c, node.body);
 
-    write(c.output_file, c.indent + "br label %" + label_step + "\n");
-    write(c.output_file, "\n" + label_step + ":\n");
+    file_io.write(c.output_file, c.indent + "br label %" + label_step + "\n");
+    file_io.write(c.output_file, "\n" + label_step + ":\n");
     if (node.step is !null) {
         compile_node(c, node.step);
     }
-    write(c.output_file, c.indent + "br label %" + label_cond + "\n");
-    write(c.output_file, "\n" + label_end + ":\n");
+    file_io.write(c.output_file, c.indent + "br label %" + label_cond + "\n");
+    file_io.write(c.output_file, "\n" + label_end + ":\n");
     c.loop_stack = current_scope.parent;
     
     return void_result();
@@ -1582,20 +1689,20 @@ func compile_ptr_assign(c -> Compiler, node -> PtrAssignNode) -> CompileResult {
 
     while (i < d_node.level - 1) {
         if (curr_type == TYPE_NULL) { 
-            throw_type_error(node.pos, "Cannot dereference 'nullptr'."); 
+            WhitelangExceptions.throw_type_error(node.pos, "Cannot dereference 'nullptr'."); 
         }
         let base_info -> SymbolInfo = map_get(c.ptr_base_map, "" + curr_type);
         if (base_info is null) { 
-            throw_type_error(node.pos, "Cannot dereference non-pointer."); 
+            WhitelangExceptions.throw_type_error(node.pos, "Cannot dereference non-pointer."); 
         }
         
         let next_type -> Int = base_info.type;
         if (next_type == TYPE_VOID) {
-            throw_type_error(d_node.pos, "Cannot dereference 'ptr Void'. Cast it to a specific pointer type first.");
+            WhitelangExceptions.throw_type_error(d_node.pos, "Cannot dereference 'ptr Void'. Cast it to a specific pointer type first.");
         }
         let ty_str -> String = get_llvm_type_str(c, next_type);
         let next_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + next_reg + " = load " + ty_str + ", " + ty_str + "* " + curr_reg + "\n");
+        file_io.write(c.output_file, c.indent + next_reg + " = load " + ty_str + ", " + ty_str + "* " + curr_reg + "\n");
         
         curr_reg = next_reg;
         curr_type = next_type;
@@ -1603,31 +1710,31 @@ func compile_ptr_assign(c -> Compiler, node -> PtrAssignNode) -> CompileResult {
     }
 
     if (curr_type == TYPE_NULL) {
-        throw_null_dereference_error(node.pos, "Cannot dereference 'nullptr'. ");
+        WhitelangExceptions.throw_null_dereference_error(node.pos, "Cannot dereference 'nullptr'. ");
     }
 
     let final_base_info -> SymbolInfo = map_get(c.ptr_base_map, "" + curr_type);
     if (final_base_info is null) { 
-        throw_type_error(node.pos, "Cannot assign to non-pointer."); 
+        WhitelangExceptions.throw_type_error(node.pos, "Cannot assign to non-pointer."); 
     }
     
     // check type
     if (final_base_info.type != val_res.type) {
-        throw_type_error(node.pos, "Type mismatch in pointer assignment.");
+        WhitelangExceptions.throw_type_error(node.pos, "Type mismatch in pointer assignment.");
     }
     
     let target_type_id -> Int = final_base_info.type;
     if (val_res.type == TYPE_NULLPTR) {
         if (is_pointer_type(c, target_type_id) == false) {
-            throw_type_error(node.pos, "nullptr can only be assigned to pointer types.");
+            WhitelangExceptions.throw_type_error(node.pos, "nullptr can only be assigned to pointer types.");
         }
     }
     else if (val_res.type == TYPE_NULL) {
         if (is_pointer_type(c, target_type_id) == true) {
-            throw_type_error(node.pos, "null cannot be assigned to pointer types. Use 'nullptr'.");
+            WhitelangExceptions.throw_type_error(node.pos, "null cannot be assigned to pointer types. Use 'nullptr'.");
         }
         if (target_type_id == TYPE_INT || target_type_id == TYPE_FLOAT || target_type_id == TYPE_BOOL) {
-            throw_type_error(node.pos, "Primitive types (Int, Float, Bool) cannot be null.");
+            WhitelangExceptions.throw_type_error(node.pos, "Primitive types (Int, Float, Bool) cannot be null.");
         }
     }
 
@@ -1639,14 +1746,14 @@ func compile_ptr_assign(c -> Compiler, node -> PtrAssignNode) -> CompileResult {
         
         // load old value
         let old_val_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + old_val_reg + " = load " + llvm_ty + ", " + llvm_ty + "* " + curr_reg + "\n");
+        file_io.write(c.output_file, c.indent + old_val_reg + " = load " + llvm_ty + ", " + llvm_ty + "* " + curr_reg + "\n");
         
         // release old value
         emit_release(c, old_val_reg, target_type_id);
     }
     
     // store new value
-    write(c.output_file, c.indent + "store " + llvm_ty + " " + val_res.reg + ", " + llvm_ty + "* " + curr_reg + "\n");
+    file_io.write(c.output_file, c.indent + "store " + llvm_ty + " " + val_res.reg + ", " + llvm_ty + "* " + curr_reg + "\n");
 
     return val_res;
 }
@@ -1685,8 +1792,8 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         curr = curr.next;
     }
 
-    write(c.output_file, "define " + llvm_ret_type + " @" + func_name + "(" + params_str + ") {\n");
-    write(c.output_file, "entry:\n");
+    file_io.write(c.output_file, "define " + llvm_ret_type + " @" + func_name + "(" + params_str + ") {\n");
+    file_io.write(c.output_file, "entry:\n");
 
     let old_sym -> Scope = c.symbol_table;
     c.symbol_table = Scope(table=map_new(32), parent=null, gc_vars=null);
@@ -1704,8 +1811,8 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         let llvm_ty -> String = get_llvm_type_str(c, target_type_id);
         
         let addr_reg -> String = next_reg(c); 
-        write(c.output_file, c.indent + addr_reg + " = alloca " + llvm_ty + "\n");
-        write(c.output_file, c.indent + "store " + llvm_ty + " %arg" + arg_idx + ", " + llvm_ty + "* " + addr_reg + "\n");
+        file_io.write(c.output_file, c.indent + addr_reg + " = alloca " + llvm_ty + "\n");
+        file_io.write(c.output_file, c.indent + "store " + llvm_ty + " %arg" + arg_idx + ", " + llvm_ty + "* " + addr_reg + "\n");
         let curr_scope -> Scope = c.symbol_table;
         map_put(curr_scope.table, p_name, SymbolInfo(reg=addr_reg, type=target_type_id, origin_type=target_type_id));
         
@@ -1734,17 +1841,17 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
 
     if (!has_term) {
         if (ret_type_id == TYPE_VOID) {
-            write(c.output_file, c.indent + "ret void\n");
+            file_io.write(c.output_file, c.indent + "ret void\n");
         } else {
             let zero_val -> String = "0";
             if (ret_type_id == TYPE_FLOAT) { zero_val = "0.0"; }
             else if (ret_type_id == TYPE_STRING || ret_type_id >= 100 || ret_type_id == TYPE_GENERIC_STRUCT || ret_type_id == TYPE_GENERIC_FUNCTION) { zero_val = "null"; }
             
-            write(c.output_file, c.indent + "ret " + llvm_ret_type + " " + zero_val + "\n");
+            file_io.write(c.output_file, c.indent + "ret " + llvm_ret_type + " " + zero_val + "\n");
         }
     }
     
-    write(c.output_file, "}\n\n");
+    file_io.write(c.output_file, "}\n\n");
 
     // restore scope
     c.symbol_table = old_sym;
@@ -1759,7 +1866,7 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
     if (node.value is !null) {
         // return void check
         if (c.current_ret_type == TYPE_VOID) {
-            throw_type_error(node.pos, "Void function cannot return a value. ");
+            WhitelangExceptions.throw_type_error(node.pos, "Void function cannot return a value. ");
         }
 
         let res -> CompileResult = compile_node(c, node.value);
@@ -1769,7 +1876,7 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
         if (c.current_ret_type == TYPE_GENERIC_STRUCT && res.type >= 100) {
             let cast_reg -> String = next_reg(c);
             let src_ty -> String = get_llvm_type_str(c, res.type);
-            write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + res.reg + " to i8*\n");
+            file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + res.reg + " to i8*\n");
             ret_val_reg = cast_reg;
             res.type = TYPE_GENERIC_STRUCT;
 
@@ -1779,7 +1886,7 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
             if (map_get(c.struct_id_map, "" + c.current_ret_type) is !null) {
                 let cast_reg -> String = next_reg(c);
                 let dest_ty -> String = get_llvm_type_str(c, c.current_ret_type);
-                write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + res.reg + " to " + dest_ty + "\n");
+                file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + res.reg + " to " + dest_ty + "\n");
                 res.reg = cast_reg;
                 res.type = c.current_ret_type;
                 ret_val_reg = cast_reg;
@@ -1788,16 +1895,16 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
 
         if (res.type == TYPE_NULLPTR) {
             if (is_pointer_type(c, c.current_ret_type) == false) {
-                throw_type_error(node.pos, "nullptr can only be returned for explicit pointer types.");
+                WhitelangExceptions.throw_type_error(node.pos, "nullptr can only be returned for explicit pointer types.");
             }
             res.type = c.current_ret_type; // fake type
         } 
         else if (res.type == TYPE_NULL) {
             if (is_pointer_type(c, c.current_ret_type) == true) {
-                throw_type_error(node.pos, "null cannot be returned for explicit pointer types. Use 'nullptr'.");
+                WhitelangExceptions.throw_type_error(node.pos, "null cannot be returned for explicit pointer types. Use 'nullptr'.");
             }
             if (c.current_ret_type == TYPE_INT || c.current_ret_type == TYPE_FLOAT || c.current_ret_type == TYPE_BOOL || c.current_ret_type == TYPE_BYTE) {
-                throw_type_error(node.pos, "Primitive types cannot be null.");
+                WhitelangExceptions.throw_type_error(node.pos, "Primitive types cannot be null.");
             }
             res.type = c.current_ret_type; // fake type
         }
@@ -1809,7 +1916,7 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
             }
             if (c.current_ret_type == TYPE_BYTE && res.type == TYPE_INT) {
                 let trunc_reg -> String = next_reg(c);
-                write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + res.reg + " to i8\n");
+                file_io.write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + res.reg + " to i8\n");
                 ret_val_reg = trunc_reg;
             }
             if (is_pointer_type(c, c.current_ret_type) && is_pointer_type(c, res.type) && c.current_ret_type != res.type) {
@@ -1818,7 +1925,7 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
                     let dest_ty -> String = get_llvm_type_str(c, c.current_ret_type);
                     let src_ty -> String = get_llvm_type_str(c, res.type);
                     if (dest_ty != src_ty) {
-                        write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + res.reg + " to " + dest_ty + "\n");
+                        file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + res.reg + " to " + dest_ty + "\n");
                         res.reg = cast_reg;
                     }
                     res.type = c.current_ret_type;
@@ -1829,13 +1936,13 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
             if (res.type == TYPE_BOOL) {
                 if (c.current_ret_type == TYPE_INT) {
                     let cast_reg -> String = next_reg(c);
-                    write(c.output_file, c.indent + cast_reg + " = zext i1 " + res.reg + " to i32\n");
+                    file_io.write(c.output_file, c.indent + cast_reg + " = zext i1 " + res.reg + " to i32\n");
                     ret_val_reg = cast_reg;
                 } else {
-                    throw_type_error(node.pos, "Type mismatch in return. Expected " + get_type_name(c, c.current_ret_type) + ", got Bool. ");
+                    WhitelangExceptions.throw_type_error(node.pos, "Type mismatch in return. Expected " + get_type_name(c, c.current_ret_type) + ", got Bool. ");
                 }
             } else {
-                throw_type_error(node.pos, "Type mismatch in return. Expected " + get_type_name(c, c.current_ret_type) + ", got " + get_type_name(c, res.type));
+                WhitelangExceptions.throw_type_error(node.pos, "Type mismatch in return. Expected " + get_type_name(c, c.current_ret_type) + ", got " + get_type_name(c, res.type));
             }
         }
 
@@ -1845,13 +1952,13 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
 
         cleanup_all_scopes(c);
 
-        write(c.output_file, c.indent + "ret " + target_ty + " " + ret_val_reg + "\n");
+        file_io.write(c.output_file, c.indent + "ret " + target_ty + " " + ret_val_reg + "\n");
     } else {
         if (c.current_ret_type != TYPE_VOID) {
-            throw_type_error(node.pos, "Non-void function must return a value. ");
+            WhitelangExceptions.throw_type_error(node.pos, "Non-void function must return a value. ");
         }
         cleanup_all_scopes(c);
-        write(c.output_file, c.indent + "ret void\n");
+        file_io.write(c.output_file, c.indent + "ret void\n");
     }
     
     return void_result();
@@ -1862,12 +1969,12 @@ func compile_struct_def(c -> Compiler, node -> StructDefNode) -> CompileResult {
 
     let full_name -> String = "struct." + struct_name;
     if (map_get(c.struct_table, full_name) is !null) {
-        throw_import_error(node.pos, "Struct '" + struct_name + "' is already defined in another module.");
+        WhitelangExceptions.throw_import_error(node.pos, "Struct '" + struct_name + "' is already defined in another module.");
     }
 
     let info -> StructInfo = map_get(c.struct_table, struct_name);
     if (info is null) {
-        throw_type_error(node.pos, "Struct info missing for '" + struct_name + "'.");
+        WhitelangExceptions.throw_type_error(node.pos, "Struct info missing for '" + struct_name + "'.");
     }
 
     let llvm_body -> String = "";
@@ -1898,47 +2005,53 @@ func compile_struct_def(c -> Compiler, node -> StructDefNode) -> CompileResult {
 
     // %struct.Test = type { i32, i32 }
     let def_str -> String = info.llvm_name + " = type { " + llvm_body + " }\n\n";
-    write(c.output_file, def_str);
+    file_io.write(c.output_file, def_str);
     
     return void_result();
 }
 func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode) -> CompileResult {
     let size_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + size_ptr + " = getelementptr " + s_info.llvm_name + ", " + s_info.llvm_name + "* null, i64 1\n");
+    file_io.write(c.output_file, c.indent + size_ptr + " = getelementptr " + s_info.llvm_name + ", " + s_info.llvm_name + "* null, i64 1\n");
     let size_i64 -> String = next_reg(c);
-    write(c.output_file, c.indent + size_i64 + " = ptrtoint " + s_info.llvm_name + "* " + size_ptr + " to i64\n");
+    file_io.write(c.output_file, c.indent + size_i64 + " = ptrtoint " + s_info.llvm_name + "* " + size_ptr + " to i64\n");
     
     // add header size (+8 bytes)
     let total_size -> String = next_reg(c);
-    write(c.output_file, c.indent + total_size + " = add i64 " + size_i64 + ", 8\n");
+    file_io.write(c.output_file, c.indent + total_size + " = add i64 " + size_i64 + ", 8\n");
 
     // malloc
     let raw_mem -> String = next_reg(c);
-    write(c.output_file, c.indent + raw_mem + " = call i8* @malloc(i64 " + total_size + ")\n");
+    file_io.write(c.output_file, c.indent + raw_mem + " = call i8* @malloc(i64 " + total_size + ")\n");
 
     // init RC = 0
     let rc_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + rc_ptr + " = bitcast i8* " + raw_mem + " to i32*\n");
-    write(c.output_file, c.indent + "store i32 0, i32* " + rc_ptr + "\n");
+    file_io.write(c.output_file, c.indent + rc_ptr + " = bitcast i8* " + raw_mem + " to i32*\n");
+    file_io.write(c.output_file, c.indent + "store i32 0, i32* " + rc_ptr + "\n");
+
+    let type_ptr -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + type_ptr + " = getelementptr inbounds i8, i8* " + raw_mem + ", i32 4\n");
+    let type_ptr_i32 -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + type_ptr_i32 + " = bitcast i8* " + type_ptr + " to i32*\n");
+    file_io.write(c.output_file, c.indent + "store i32 " + s_info.type_id + ", i32* " + type_ptr_i32 + "\n");
 
     // offset pointer (+8)
     let user_ptr_i8 -> String = next_reg(c);
-    write(c.output_file, c.indent + user_ptr_i8 + " = getelementptr inbounds i8, i8* " + raw_mem + ", i32 8\n");
+    file_io.write(c.output_file, c.indent + user_ptr_i8 + " = getelementptr inbounds i8, i8* " + raw_mem + ", i32 8\n");
 
     // cast back to Struct*
     let obj_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + obj_ptr + " = bitcast i8* " + user_ptr_i8 + " to " + s_info.llvm_name + "*\n");
+    file_io.write(c.output_file, c.indent + obj_ptr + " = bitcast i8* " + user_ptr_i8 + " to " + s_info.llvm_name + "*\n");
 
     let f_curr -> FieldInfo = s_info.fields;
     while (f_curr is !null) {
         let f_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_ptr + ", i32 0, i32 " + f_curr.offset + "\n");
+        file_io.write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_ptr + ", i32 0, i32 " + f_curr.offset + "\n");
         
         let zero_val -> String = "0";
         if (f_curr.type == TYPE_FLOAT) { zero_val = "0.0"; }
         else if (f_curr.type == TYPE_STRING || f_curr.type >= 100 || f_curr.type == TYPE_GENERIC_STRUCT || f_curr.type == TYPE_GENERIC_FUNCTION) { zero_val = "null"; }
         
-        write(c.output_file, c.indent + "store " + f_curr.llvm_type + " " + zero_val + ", " + f_curr.llvm_type + "* " + f_ptr + "\n");
+        file_io.write(c.output_file, c.indent + "store " + f_curr.llvm_type + " " + zero_val + ", " + f_curr.llvm_type + "* " + f_ptr + "\n");
 
         f_curr = f_curr.next;
     }
@@ -1948,8 +2061,8 @@ func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode
         let this_ptr_addr -> String = next_reg(c);
         let struct_ptr_ty -> String = s_info.llvm_name + "*";
         
-        write(c.output_file, c.indent + this_ptr_addr + " = alloca " + struct_ptr_ty + "\n");
-        write(c.output_file, c.indent + "store " + struct_ptr_ty + " " + obj_ptr + ", " + struct_ptr_ty + "* " + this_ptr_addr + "\n");
+        file_io.write(c.output_file, c.indent + this_ptr_addr + " = alloca " + struct_ptr_ty + "\n");
+        file_io.write(c.output_file, c.indent + "store " + struct_ptr_ty + " " + obj_ptr + ", " + struct_ptr_ty + "* " + this_ptr_addr + "\n");
         map_put(c.symbol_table.table, "this", SymbolInfo(reg=this_ptr_addr, type=s_info.type_id, origin_type=s_info.type_id));
         compile_node(c, s_info.init_body);
         exit_scope(c);
@@ -1976,18 +2089,18 @@ func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode
                 let cast_reg -> String = next_reg(c);
                 let src_ty -> String = get_llvm_type_str(c, val_res.type);
 
-                write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to i8*\n");
+                file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to i8*\n");
                 val_res.reg = cast_reg;
                 val_res.type = TYPE_GENERIC_STRUCT;
 
             }
             
             let f_ptr -> String = next_reg(c);
-            write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_ptr + ", i32 0, i32 " + target_f.offset + "\n");
+            file_io.write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_ptr + ", i32 0, i32 " + target_f.offset + "\n");
             if (is_ref_type(c, target_f.type)) {
                 emit_retain(c, val_res.reg, target_f.type);
             }
-            write(c.output_file, c.indent + "store " + target_f.llvm_type + " " + val_res.reg + ", " + target_f.llvm_type + "* " + f_ptr + "\n");
+            file_io.write(c.output_file, c.indent + "store " + target_f.llvm_type + " " + val_res.reg + ", " + target_f.llvm_type + "* " + f_ptr + "\n");
         }
         arg_curr = arg_curr.next;
         arg_idx += 1;
@@ -2005,21 +2118,21 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
             if (s_check is !null) {
                 let ptr_is_null -> String = next_reg(c);
                 let ptr_ty_str -> String = get_llvm_type_str(c, obj_res.type);
-                write(c.output_file, c.indent + ptr_is_null + " = icmp eq " + ptr_ty_str + " " + obj_res.reg + ", null\n");
+                file_io.write(c.output_file, c.indent + ptr_is_null + " = icmp eq " + ptr_ty_str + " " + obj_res.reg + ", null\n");
                 
                 let label_ok -> String = "ptr_ok_" + c.reg_count;
                 let label_fail -> String = "ptr_fail_" + c.reg_count;
                 c.reg_count += 1;
                 
-                write(c.output_file, c.indent + "br i1 " + ptr_is_null + ", label %" + label_fail + ", label %" + label_ok + "\n");
-                write(c.output_file, "\n" + label_fail + ":\n");
+                file_io.write(c.output_file, c.indent + "br i1 " + ptr_is_null + ", label %" + label_fail + ", label %" + label_ok + "\n");
+                file_io.write(c.output_file, "\n" + label_fail + ":\n");
                 emit_runtime_error(c, node.pos, "Null pointer dereference");
                 
-                write(c.output_file, "\n" + label_ok + ":\n");
+                file_io.write(c.output_file, "\n" + label_ok + ":\n");
 
                 let loaded_reg -> String = next_reg(c);
                 let base_ty_str -> String = get_llvm_type_str(c, base_info.type);
-                write(c.output_file, c.indent + loaded_reg + " = load " + base_ty_str + ", " + base_ty_str + "* " + obj_res.reg + "\n");
+                file_io.write(c.output_file, c.indent + loaded_reg + " = load " + base_ty_str + ", " + base_ty_str + "* " + obj_res.reg + "\n");
 
                 obj_res.reg = loaded_reg;
                 obj_res.type = base_info.type;
@@ -2033,16 +2146,16 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
 
     let is_null -> String = next_reg(c);
     let obj_llvm_ty -> String = get_llvm_type_str(c, obj_res.type);
-    write(c.output_file, c.indent + is_null + " = icmp eq " + obj_llvm_ty + " " + obj_reg + ", null\n");
+    file_io.write(c.output_file, c.indent + is_null + " = icmp eq " + obj_llvm_ty + " " + obj_reg + ", null\n");
     let label_ok -> String = "access_ok_" + c.reg_count;
     let label_fail -> String = "access_fail_" + c.reg_count;
     c.reg_count += 1;
-    write(c.output_file, c.indent + "br i1 " + is_null + ", label %" + label_fail + ", label %" + label_ok + "\n");
+    file_io.write(c.output_file, c.indent + "br i1 " + is_null + ", label %" + label_fail + ", label %" + label_ok + "\n");
     
-    write(c.output_file, "\n" + label_fail + ":\n");
+    file_io.write(c.output_file, "\n" + label_fail + ":\n");
     emit_runtime_error(c, node.pos, "Null pointer dereference");
     
-    write(c.output_file, "\n" + label_ok + ":\n");
+    file_io.write(c.output_file, "\n" + label_ok + ":\n");
 
 
     if (type_id == TYPE_GENERIC_STRUCT) {
@@ -2057,7 +2170,7 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
                 let s_info_temp -> StructInfo = map_get(c.struct_id_map, "" + type_id);
                 if (s_info_temp is !null) {
                     let cast_reg -> String = next_reg(c);
-                    write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + obj_reg + " to " + s_info_temp.llvm_name + "*\n");
+                    file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + obj_reg + " to " + s_info_temp.llvm_name + "*\n");
                     obj_reg = cast_reg;
                 }
             }
@@ -2066,18 +2179,18 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
 
     let s_info -> StructInfo = map_get(c.struct_id_map, "" + type_id);
     if (s_info is null) {
-        throw_type_error(node.pos, "Cannot access field on non-struct type (or generic Struct without origin inference).");
+        WhitelangExceptions.throw_type_error(node.pos, "Cannot access field on non-struct type (or generic Struct without origin inference).");
     }
     
     let field -> FieldInfo = find_field(s_info, node.field_name);
     if (field is null) {
-        throw_name_error(node.pos, "Field '" + node.field_name + "' not found in struct '" + s_info.name + "'.");
+        WhitelangExceptions.throw_name_error(node.pos, "Field '" + node.field_name + "' not found in struct '" + s_info.name + "'.");
     }
     
     let f_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_reg + ", i32 0, i32 " + field.offset + "\n");
+    file_io.write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_reg + ", i32 0, i32 " + field.offset + "\n");
     let val_reg -> String = next_reg(c);
-    write(c.output_file, c.indent + val_reg + " = load " + field.llvm_type + ", " + field.llvm_type + "* " + f_ptr + "\n");
+    file_io.write(c.output_file, c.indent + val_reg + " = load " + field.llvm_type + ", " + field.llvm_type + "* " + f_ptr + "\n");
     return CompileResult(reg=val_reg, type=field.type);
 }
 
@@ -2091,12 +2204,12 @@ func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResu
         let ptr_res -> CompileResult = compile_node(c, d_node.node);
         let loaded_reg -> String = next_reg(c);
         let ptr_ty_str -> String = get_llvm_type_str(c, ptr_res.type);
-        write(c.output_file, c.indent + loaded_reg + " = load " + ptr_ty_str + ", " + ptr_ty_str + "* " + ptr_res.reg + "\n");
+        file_io.write(c.output_file, c.indent + loaded_reg + " = load " + ptr_ty_str + ", " + ptr_ty_str + "* " + ptr_res.reg + "\n");
         
         struct_ptr_reg = loaded_reg;
         let base_info -> SymbolInfo = map_get(c.ptr_base_map, "" + ptr_res.type);
         if (base_info is null) {
-            throw_type_error(node.pos, "Attempt to access field on non-pointer type (expected dereference).");
+            WhitelangExceptions.throw_type_error(node.pos, "Attempt to access field on non-pointer type (expected dereference).");
         }
         struct_type_id = base_info.type;
     }
@@ -2106,44 +2219,44 @@ func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResu
         let info -> SymbolInfo = find_symbol(c, var_name);
         
         if (info is null) {
-            throw_name_error(node.pos, "Undefined variable '" + var_name + "'.");
+            WhitelangExceptions.throw_name_error(node.pos, "Undefined variable '" + var_name + "'.");
         }
 
         let loaded_reg -> String = next_reg(c);
         let var_ty_str -> String = get_llvm_type_str(c, info.type);
-        write(c.output_file, c.indent + loaded_reg + " = load " + var_ty_str + ", " + var_ty_str + "* " + info.reg + "\n");
+        file_io.write(c.output_file, c.indent + loaded_reg + " = load " + var_ty_str + ", " + var_ty_str + "* " + info.reg + "\n");
 
         struct_ptr_reg = loaded_reg; 
         struct_type_id = info.type;
     }
     else {
-        throw_invalid_syntax(node.pos, "Invalid assignment target. Only variables and dereferences are supported for field assignment.");
+        WhitelangExceptions.throw_invalid_syntax(node.pos, "Invalid assignment target. Only variables and dereferences are supported for field assignment.");
     }
 
     let s_info -> StructInfo = map_get(c.struct_id_map, "" + struct_type_id);
     if (s_info is null) {
-        throw_type_error(node.pos, "Cannot assign field to non-struct type.");
+        WhitelangExceptions.throw_type_error(node.pos, "Cannot assign field to non-struct type.");
     }
 
     let field -> FieldInfo = find_field(s_info, node.field_name);
     if (field is null) {
-        throw_name_error(node.pos, "Field '" + node.field_name + "' not found in struct '" + s_info.name + "'.");
+        WhitelangExceptions.throw_name_error(node.pos, "Field '" + node.field_name + "' not found in struct '" + s_info.name + "'.");
     }
 
     let val_res -> CompileResult = compile_node(c, node.value);
 
     if (val_res.type == TYPE_NULLPTR) {
         if (is_pointer_type(c, field.type) == false) {
-            throw_type_error(node.pos, "nullptr can only be assigned to explicit pointer types.");
+            WhitelangExceptions.throw_type_error(node.pos, "nullptr can only be assigned to explicit pointer types.");
         }
     }
 
     else if (val_res.type == TYPE_NULL) {
         if (is_pointer_type(c, field.type) == true) {
-            throw_type_error(node.pos, "Keyword 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
+            WhitelangExceptions.throw_type_error(node.pos, "Keyword 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
         }
         if (field.type == TYPE_INT || field.type == TYPE_FLOAT || field.type == TYPE_BOOL) {
-            throw_type_error(node.pos, "Primitive types (Int, Float, Bool) cannot be null.");
+            WhitelangExceptions.throw_type_error(node.pos, "Primitive types (Int, Float, Bool) cannot be null.");
         }
     } else {
         if (field.type == TYPE_INT && val_res.type == TYPE_BYTE) {
@@ -2151,7 +2264,7 @@ func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResu
         }
         if (field.type == TYPE_BYTE && val_res.type == TYPE_INT) {
             let trunc_reg -> String = next_reg(c);
-            write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + val_res.reg + " to i8\n");
+            file_io.write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + val_res.reg + " to i8\n");
             val_res.reg = trunc_reg;
             val_res.type = TYPE_BYTE;
         }
@@ -2166,7 +2279,7 @@ func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResu
             let cast_reg -> String = next_reg(c);
             let src_ty -> String = get_llvm_type_str(c, val_res.type);
 
-            write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to i8*\n");
+            file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to i8*\n");
             val_res.reg = cast_reg;
             val_res.type = TYPE_GENERIC_STRUCT;
         }
@@ -2175,32 +2288,32 @@ func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResu
             if (map_get(c.struct_id_map, "" + field.type) is !null) {
                 let cast_reg -> String = next_reg(c);
                 let dest_ty -> String = get_llvm_type_str(c, field.type);
-                write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + val_res.reg + " to " + dest_ty + "\n");
+                file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + val_res.reg + " to " + dest_ty + "\n");
                 val_res.reg = cast_reg;
                 val_res.type = field.type;
             }
         }
 
         if (field.type != val_res.type) {
-            throw_type_error(node.pos, "Type mismatch in field assignment. Expected " + get_type_name(c, field.type) + ", got " + get_type_name(c, val_res.type));
+            WhitelangExceptions.throw_type_error(node.pos, "Type mismatch in field assignment. Expected " + get_type_name(c, field.type) + ", got " + get_type_name(c, val_res.type));
         }
     }
     
     let f_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + struct_ptr_reg + ", i32 0, i32 " + field.offset + "\n");
+    file_io.write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + struct_ptr_reg + ", i32 0, i32 " + field.offset + "\n");
 
     if (is_ref_type(c, field.type)) {
         emit_retain(c, val_res.reg, field.type);
 
         let old_val_reg -> String = next_reg(c);
         let field_ty_str -> String = get_llvm_type_str(c, field.type);
-        write(c.output_file, c.indent + old_val_reg + " = load " + field_ty_str + ", " + field_ty_str + "* " + f_ptr + "\n");
+        file_io.write(c.output_file, c.indent + old_val_reg + " = load " + field_ty_str + ", " + field_ty_str + "* " + f_ptr + "\n");
 
         emit_release(c, old_val_reg, field.type);
     }
 
     let store_ty -> String = get_llvm_type_str(c, field.type);
-    write(c.output_file, c.indent + "store " + store_ty + " " + val_res.reg + ", " + store_ty + "* " + f_ptr + "\n");
+    file_io.write(c.output_file, c.indent + "store " + store_ty + " " + val_res.reg + ", " + store_ty + "* " + f_ptr + "\n");
     return val_res;
 }
 
@@ -2238,7 +2351,7 @@ func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult
     map_put(c.func_table, func_name, FuncInfo(name=func_name, ret_type=ret_type_id, arg_types=arg_head, is_varargs=node.is_varargs));
     if (map_get(c.declared_externs, func_name) is null) {
         let ret_llvm -> String = get_llvm_type_str(c, ret_type_id);
-        write(c.output_file, "declare " + ret_llvm + " @" + func_name + "(" + params_str + ")\n");
+        file_io.write(c.output_file, "declare " + ret_llvm + " @" + func_name + "(" + params_str + ")\n");
 
         map_put(c.declared_externs, func_name, StringConstant(id=0, value="", next=null)); 
     }
@@ -2257,45 +2370,52 @@ func compile_extern_block(c -> Compiler, node -> ExternBlockNode) -> CompileResu
 
 func emit_vector_bounds_check(c -> Compiler, vec_reg -> String, idx_reg -> String, struct_ty -> String, pos -> Position) -> Void {
     let size_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_reg + ", i32 0, i32 0\n");
+    file_io.write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_reg + ", i32 0, i32 0\n");
     let size_val -> String = next_reg(c);
-    write(c.output_file, c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
+    file_io.write(c.output_file, c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
 
     let idx_i64 -> String = next_reg(c);
-    write(c.output_file, c.indent + idx_i64 + " = sext i32 " + idx_reg + " to i64\n");
+    file_io.write(c.output_file, c.indent + idx_i64 + " = sext i32 " + idx_reg + " to i64\n");
 
     let cmp_reg -> String = next_reg(c);
-    write(c.output_file, c.indent + cmp_reg + " = icmp uge i64 " + idx_i64 + ", " + size_val + "\n");
+    file_io.write(c.output_file, c.indent + cmp_reg + " = icmp uge i64 " + idx_i64 + ", " + size_val + "\n");
 
     let fail_label -> String = "bounds_fail_" + c.type_counter;
     let ok_label -> String = "bounds_ok_" + c.type_counter;
     c.type_counter += 1;
     
-    write(c.output_file, c.indent + "br i1 " + cmp_reg + ", label %" + fail_label + ", label %" + ok_label + "\n");
+    file_io.write(c.output_file, c.indent + "br i1 " + cmp_reg + ", label %" + fail_label + ", label %" + ok_label + "\n");
 
-    write(c.output_file, "\n" + fail_label + ":\n");
+    file_io.write(c.output_file, "\n" + fail_label + ":\n");
     emit_runtime_error(c, pos, "Index out of bounds");
 
-    write(c.output_file, "\n" + ok_label + ":\n");
+    file_io.write(c.output_file, "\n" + ok_label + ":\n");
 }
 func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallNode) -> CompileResult {
     let args -> ArgNode = call_node.args;
 
-    if (args is null) { throw_type_error(call_node.pos, "append expects 1 argument."); }
-    if (args.next is !null) { throw_type_error(call_node.pos, "append expects exactly 1 argument."); }
+    if (args is null) { WhitelangExceptions.throw_type_error(call_node.pos, "append expects 1 argument."); }
+    if (args.next is !null) { WhitelangExceptions.throw_type_error(call_node.pos, "append expects exactly 1 argument."); }
     
     let vec_res -> CompileResult = compile_node(c, vec_node);
     let arg_res -> CompileResult = compile_node(c, args.val);
 
     let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + vec_res.type);
-    if (v_info is null) { throw_type_error(call_node.pos, "append is only for Vectors."); }
+    if (v_info is null) { WhitelangExceptions.throw_type_error(call_node.pos, "append is only for Vectors."); }
     
     let elem_type -> Int = v_info.type;
+    if (elem_type == TYPE_GENERIC_STRUCT && arg_res.type >= 100) {
+        let cast_reg -> String = next_reg(c);
+        let src_ty -> String = get_llvm_type_str(c, arg_res.type);
+        file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + arg_res.reg + " to i8*\n");
+        arg_res.reg = cast_reg;
+        arg_res.type = TYPE_GENERIC_STRUCT;
+    }
     if (arg_res.type != elem_type) {
         if (elem_type == TYPE_INT && arg_res.type == TYPE_BYTE) {
             arg_res = promote_to_int(c, arg_res);
         } else {
-            throw_type_error(call_node.pos, "Type mismatch. Vector expects " + get_type_name(c, elem_type));
+            WhitelangExceptions.throw_type_error(call_node.pos, "Type mismatch. Vector expects " + get_type_name(c, elem_type));
         }
     }
     
@@ -2303,83 +2423,83 @@ func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallN
     let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
 
     let size_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 0\n");
+    file_io.write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 0\n");
     let size_val -> String = next_reg(c);
-    write(c.output_file, c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
+    file_io.write(c.output_file, c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
     
     let cap_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + cap_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 1\n");
+    file_io.write(c.output_file, c.indent + cap_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 1\n");
     let cap_val -> String = next_reg(c);
-    write(c.output_file, c.indent + cap_val + " = load i64, i64* " + cap_ptr + "\n");
+    file_io.write(c.output_file, c.indent + cap_val + " = load i64, i64* " + cap_ptr + "\n");
 
     let cmp_reg -> String = next_reg(c);
-    write(c.output_file, c.indent + cmp_reg + " = icmp uge i64 " + size_val + ", " + cap_val + "\n");
+    file_io.write(c.output_file, c.indent + cmp_reg + " = icmp uge i64 " + size_val + ", " + cap_val + "\n");
     
     let grow_label -> String = "vec_grow_" + c.type_counter;
     let push_label -> String = "vec_push_" + c.type_counter;
     c.type_counter += 1;
     
-    write(c.output_file, c.indent + "br i1 " + cmp_reg + ", label %" + grow_label + ", label %" + push_label + "\n");
+    file_io.write(c.output_file, c.indent + "br i1 " + cmp_reg + ", label %" + grow_label + ", label %" + push_label + "\n");
 
-    write(c.output_file, "\n" + grow_label + ":\n");
+    file_io.write(c.output_file, "\n" + grow_label + ":\n");
     
     // new_cap = (cap == 0) ? 4 : cap * 2
     let is_zero_cap -> String = next_reg(c);
-    write(c.output_file, c.indent + is_zero_cap + " = icmp eq i64 " + cap_val + ", 0\n");
+    file_io.write(c.output_file, c.indent + is_zero_cap + " = icmp eq i64 " + cap_val + ", 0\n");
     let dbl_cap -> String = next_reg(c);
-    write(c.output_file, c.indent + dbl_cap + " = mul i64 " + cap_val + ", 2\n");
+    file_io.write(c.output_file, c.indent + dbl_cap + " = mul i64 " + cap_val + ", 2\n");
     let new_cap -> String = next_reg(c);
-    write(c.output_file, c.indent + new_cap + " = select i1 " + is_zero_cap + ", i64 4, i64 " + dbl_cap + "\n");
+    file_io.write(c.output_file, c.indent + new_cap + " = select i1 " + is_zero_cap + ", i64 4, i64 " + dbl_cap + "\n");
     
-    write(c.output_file, c.indent + "store i64 " + new_cap + ", i64* " + cap_ptr + "\n");
+    file_io.write(c.output_file, c.indent + "store i64 " + new_cap + ", i64* " + cap_ptr + "\n");
     
     // realloc
     let data_field_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 2\n");
+    file_io.write(c.output_file, c.indent + data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 2\n");
     let old_data -> String = next_reg(c);
-    write(c.output_file, c.indent + old_data + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
+    file_io.write(c.output_file, c.indent + old_data + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
     
     let old_data_i8 -> String = next_reg(c);
-    write(c.output_file, c.indent + old_data_i8 + " = bitcast " + elem_ty_str + "* " + old_data + " to i8*\n");
+    file_io.write(c.output_file, c.indent + old_data_i8 + " = bitcast " + elem_ty_str + "* " + old_data + " to i8*\n");
 
     let elem_size -> Int = 8; 
     if (elem_type == TYPE_INT) { elem_size = 4; } 
     if (elem_type == TYPE_BYTE || elem_type == TYPE_BOOL) { elem_size = 1; }
     
     let new_bytes -> String = next_reg(c);
-    write(c.output_file, c.indent + new_bytes + " = mul i64 " + new_cap + ", " + elem_size + "\n");
+    file_io.write(c.output_file, c.indent + new_bytes + " = mul i64 " + new_cap + ", " + elem_size + "\n");
     
     let new_data_i8 -> String = next_reg(c);
-    write(c.output_file, c.indent + new_data_i8 + " = call i8* @realloc(i8* " + old_data_i8 + ", i64 " + new_bytes + ")\n");
+    file_io.write(c.output_file, c.indent + new_data_i8 + " = call i8* @realloc(i8* " + old_data_i8 + ", i64 " + new_bytes + ")\n");
     
     let new_data_typed -> String = next_reg(c);
-    write(c.output_file, c.indent + new_data_typed + " = bitcast i8* " + new_data_i8 + " to " + elem_ty_str + "*\n");
-    write(c.output_file, c.indent + "store " + elem_ty_str + "* " + new_data_typed + ", " + elem_ty_str + "** " + data_field_ptr + "\n");
+    file_io.write(c.output_file, c.indent + new_data_typed + " = bitcast i8* " + new_data_i8 + " to " + elem_ty_str + "*\n");
+    file_io.write(c.output_file, c.indent + "store " + elem_ty_str + "* " + new_data_typed + ", " + elem_ty_str + "** " + data_field_ptr + "\n");
     
-    write(c.output_file, c.indent + "br label %" + push_label + "\n");
-    write(c.output_file, "\n" + push_label + ":\n");
+    file_io.write(c.output_file, c.indent + "br label %" + push_label + "\n");
+    file_io.write(c.output_file, "\n" + push_label + ":\n");
     
     let final_data_field_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + final_data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 2\n");
+    file_io.write(c.output_file, c.indent + final_data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 2\n");
     let final_data -> String = next_reg(c);
-    write(c.output_file, c.indent + final_data + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + final_data_field_ptr + "\n");
+    file_io.write(c.output_file, c.indent + final_data + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + final_data_field_ptr + "\n");
     
     let slot_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + final_data + ", i64 " + size_val + "\n");
+    file_io.write(c.output_file, c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + final_data + ", i64 " + size_val + "\n");
     
     if (is_ref_type(c, elem_type)) { emit_retain(c, arg_res.reg, elem_type); }
-    write(c.output_file, c.indent + "store " + elem_ty_str + " " + arg_res.reg + ", " + elem_ty_str + "* " + slot_ptr + "\n");
+    file_io.write(c.output_file, c.indent + "store " + elem_ty_str + " " + arg_res.reg + ", " + elem_ty_str + "* " + slot_ptr + "\n");
     
     let new_size -> String = next_reg(c);
-    write(c.output_file, c.indent + new_size + " = add i64 " + size_val + ", 1\n");
-    write(c.output_file, c.indent + "store i64 " + new_size + ", i64* " + size_ptr + "\n");
+    file_io.write(c.output_file, c.indent + new_size + " = add i64 " + size_val + ", 1\n");
+    file_io.write(c.output_file, c.indent + "store i64 " + new_size + ", i64* " + size_ptr + "\n");
     
     return void_result();
 }
 func compile_vector_drop(c -> Compiler, vec_node -> Struct, call_node -> CallNode) -> CompileResult {
     let args -> ArgNode = call_node.args;
     
-    if (args is !null) { throw_type_error(call_node.pos, "drop expects 0 arguments."); }
+    if (args is !null) { WhitelangExceptions.throw_type_error(call_node.pos, "drop expects 0 arguments."); }
     
     let vec_res -> CompileResult = compile_node(c, vec_node);
     let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + vec_res.type);
@@ -2388,45 +2508,45 @@ func compile_vector_drop(c -> Compiler, vec_node -> Struct, call_node -> CallNod
     let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
 
     let size_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 0\n");
+    file_io.write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 0\n");
     let size_val -> String = next_reg(c);
-    write(c.output_file, c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
+    file_io.write(c.output_file, c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
 
     let cmp_reg -> String = next_reg(c);
-    write(c.output_file, c.indent + cmp_reg + " = icmp ugt i64 " + size_val + ", 0\n");
+    file_io.write(c.output_file, c.indent + cmp_reg + " = icmp ugt i64 " + size_val + ", 0\n");
     
     let pop_label -> String = "vec_pop_" + c.type_counter;
     let empty_label -> String = "vec_empty_" + c.type_counter;
     let end_label -> String = "vec_pop_end_" + c.type_counter;
     c.type_counter += 1;
     
-    write(c.output_file, c.indent + "br i1 " + cmp_reg + ", label %" + pop_label + ", label %" + empty_label + "\n");
+    file_io.write(c.output_file, c.indent + "br i1 " + cmp_reg + ", label %" + pop_label + ", label %" + empty_label + "\n");
 
-    write(c.output_file, "\n" + empty_label + ":\n");
+    file_io.write(c.output_file, "\n" + empty_label + ":\n");
 
     emit_runtime_error(c, call_node.pos, "drop from empty vector");
 
-    write(c.output_file, "\n" + pop_label + ":\n");
+    file_io.write(c.output_file, "\n" + pop_label + ":\n");
     
     // size--
     let new_size -> String = next_reg(c);
-    write(c.output_file, c.indent + new_size + " = sub i64 " + size_val + ", 1\n");
-    write(c.output_file, c.indent + "store i64 " + new_size + ", i64* " + size_ptr + "\n");
+    file_io.write(c.output_file, c.indent + new_size + " = sub i64 " + size_val + ", 1\n");
+    file_io.write(c.output_file, c.indent + "store i64 " + new_size + ", i64* " + size_ptr + "\n");
 
     let data_field_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 2\n");
+    file_io.write(c.output_file, c.indent + data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 2\n");
     let data_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
+    file_io.write(c.output_file, c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
     
     let slot_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + new_size + "\n");
+    file_io.write(c.output_file, c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + new_size + "\n");
     
     let ret_val -> String = next_reg(c);
-    write(c.output_file, c.indent + ret_val + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot_ptr + "\n");
+    file_io.write(c.output_file, c.indent + ret_val + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot_ptr + "\n");
     
-    write(c.output_file, c.indent + "br label %" + end_label + "\n");
+    file_io.write(c.output_file, c.indent + "br label %" + end_label + "\n");
     
-    write(c.output_file, "\n" + end_label + ":\n");
+    file_io.write(c.output_file, "\n" + end_label + ":\n");
     return CompileResult(reg=ret_val, type=elem_type);
 }
 func compile_vector_lit(c -> Compiler, node -> VectorLitNode) -> CompileResult {
@@ -2451,42 +2571,61 @@ func compile_vector_lit(c -> Compiler, node -> VectorLitNode) -> CompileResult {
     
     // malloc vector struct header
     let struct_size_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + struct_size_ptr + " = getelementptr " + struct_name + ", " + struct_name + "* null, i32 1\n");
+    file_io.write(c.output_file, c.indent + struct_size_ptr + " = getelementptr " + struct_name + ", " + struct_name + "* null, i32 1\n");
     let struct_size -> String = next_reg(c);
-    write(c.output_file, c.indent + struct_size + " = ptrtoint " + struct_name + "* " + struct_size_ptr + " to i64\n");
+    file_io.write(c.output_file, c.indent + struct_size + " = ptrtoint " + struct_name + "* " + struct_size_ptr + " to i64\n");
+
+    let total_size -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + total_size + " = add i64 " + struct_size + ", 8\n");
+
     let raw_struct -> String = next_reg(c);
-    write(c.output_file, c.indent + raw_struct + " = call i8* @malloc(i64 " + struct_size + ")\n");
+    file_io.write(c.output_file, c.indent + raw_struct + " = call i8* @malloc(i64 " + total_size + ")\n");
+
+    // RC = 0
+    let rc_ptr -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + rc_ptr + " = bitcast i8* " + raw_struct + " to i32*\n");
+    file_io.write(c.output_file, c.indent + "store i32 0, i32* " + rc_ptr + "\n");
+
+    let type_ptr -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + type_ptr + " = getelementptr inbounds i8, i8* " + raw_struct + ", i32 4\n");
+    let type_ptr_i32 -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + type_ptr_i32 + " = bitcast i8* " + type_ptr + " to i32*\n");
+    file_io.write(c.output_file, c.indent + "store i32 " + vec_type_id + ", i32* " + type_ptr_i32 + "\n");
+
+    let user_ptr_i8 -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + user_ptr_i8 + " = getelementptr inbounds i8, i8* " + raw_struct + ", i32 8\n");
+
     let vec_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + vec_ptr + " = bitcast i8* " + raw_struct + " to " + struct_name + "*\n");
+    file_io.write(c.output_file, c.indent + vec_ptr + " = bitcast i8* " + raw_struct + " to " + struct_name + "*\n");
     
     // malloc data array
     let arr_size_ptr -> String = next_reg(c);
     // size = count * sizeof(T)
-    write(c.output_file, c.indent + arr_size_ptr + " = getelementptr " + elem_ty_str + ", " + elem_ty_str + "* null, i64 " + count + "\n");
+    file_io.write(c.output_file, c.indent + arr_size_ptr + " = getelementptr " + elem_ty_str + ", " + elem_ty_str + "* null, i64 " + count + "\n");
     let arr_bytes -> String = next_reg(c);
-    write(c.output_file, c.indent + arr_bytes + " = ptrtoint " + elem_ty_str + "* " + arr_size_ptr + " to i64\n");
+    file_io.write(c.output_file, c.indent + arr_bytes + " = ptrtoint " + elem_ty_str + "* " + arr_size_ptr + " to i64\n");
     
     let raw_data -> String = next_reg(c);
     // TODO: Handle count == 0 case carefully
-    write(c.output_file, c.indent + raw_data + " = call i8* @malloc(i64 " + arr_bytes + ")\n");
+    file_io.write(c.output_file, c.indent + raw_data + " = call i8* @malloc(i64 " + arr_bytes + ")\n");
     let data_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + data_ptr + " = bitcast i8* " + raw_data + " to " + elem_ty_str + "*\n");
+    file_io.write(c.output_file, c.indent + data_ptr + " = bitcast i8* " + raw_data + " to " + elem_ty_str + "*\n");
 
     // struct { i64 size, i64 capacity, T* data }
     // size
     let size_ptr -> String = next_reg(c); 
-    write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_name + ", " + struct_name + "* " + vec_ptr + ", i32 0, i32 0\n");
-    write(c.output_file, c.indent + "store i64 " + count + ", i64* " + size_ptr + "\n");
+    file_io.write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_name + ", " + struct_name + "* " + vec_ptr + ", i32 0, i32 0\n");
+    file_io.write(c.output_file, c.indent + "store i64 " + count + ", i64* " + size_ptr + "\n");
     
     // capacity
     let cap_ptr -> String = next_reg(c); 
-    write(c.output_file, c.indent + cap_ptr + " = getelementptr inbounds " + struct_name + ", " + struct_name + "* " + vec_ptr + ", i32 0, i32 1\n");
-    write(c.output_file, c.indent + "store i64 " + count + ", i64* " + cap_ptr + "\n"); 
+    file_io.write(c.output_file, c.indent + cap_ptr + " = getelementptr inbounds " + struct_name + ", " + struct_name + "* " + vec_ptr + ", i32 0, i32 1\n");
+    file_io.write(c.output_file, c.indent + "store i64 " + count + ", i64* " + cap_ptr + "\n"); 
     
     // data pointer
     let data_field_ptr -> String = next_reg(c); 
-    write(c.output_file, c.indent + data_field_ptr + " = getelementptr inbounds " + struct_name + ", " + struct_name + "* " + vec_ptr + ", i32 0, i32 2\n");
-    write(c.output_file, c.indent + "store " + elem_ty_str + "* " + data_ptr + ", " + elem_ty_str + "** " + data_field_ptr + "\n");
+    file_io.write(c.output_file, c.indent + data_field_ptr + " = getelementptr inbounds " + struct_name + ", " + struct_name + "* " + vec_ptr + ", i32 0, i32 2\n");
+    file_io.write(c.output_file, c.indent + "store " + elem_ty_str + "* " + data_ptr + ", " + elem_ty_str + "** " + data_field_ptr + "\n");
     
     let curr -> ArgNode = node.elements;
     let idx -> Int = 0;
@@ -2497,18 +2636,18 @@ func compile_vector_lit(c -> Compiler, node -> VectorLitNode) -> CompileResult {
             if (elem_type_id == TYPE_INT && val_res.type == TYPE_BYTE) {
                 val_res = promote_to_int(c, val_res);
             } else {
-                throw_type_error(node.pos, "Mixed types in vector literal. Expected " + get_type_name(c, elem_type_id) + ", got " + get_type_name(c, val_res.type) + ".");
+                WhitelangExceptions.throw_type_error(node.pos, "Mixed types in vector literal. Expected " + get_type_name(c, elem_type_id) + ", got " + get_type_name(c, val_res.type) + ".");
             }
         }
         
         let slot_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + idx + "\n");
+        file_io.write(c.output_file, c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + idx + "\n");
 
         if (is_ref_type(c, elem_type_id)) {
             emit_retain(c, val_res.reg, elem_type_id);
         }
         
-        write(c.output_file, c.indent + "store " + elem_ty_str + " " + val_res.reg + ", " + elem_ty_str + "* " + slot_ptr + "\n");
+        file_io.write(c.output_file, c.indent + "store " + elem_ty_str + " " + val_res.reg + ", " + elem_ty_str + "* " + slot_ptr + "\n");
         
         idx += 1;
         curr = curr.next;
@@ -2519,7 +2658,7 @@ func compile_vector_lit(c -> Compiler, node -> VectorLitNode) -> CompileResult {
 
 func compile_length_method(c -> Compiler, obj_node -> Struct, call_node -> CallNode) -> CompileResult {
     if (call_node.args is !null) {
-        throw_type_error(call_node.pos, "Method 'length' does not accept arguments.");
+        WhitelangExceptions.throw_type_error(call_node.pos, "Method 'length' does not accept arguments.");
     }
 
     let obj_res -> CompileResult = compile_node(c, obj_node);
@@ -2529,7 +2668,7 @@ func compile_length_method(c -> Compiler, obj_node -> Struct, call_node -> CallN
     if (type_id == TYPE_STRING) {
         let len_reg -> String = next_reg(c);
         // strlen returns i32 in our declaration
-        write(c.output_file, c.indent + len_reg + " = call i32 @strlen(i8* " + obj_res.reg + ")\n");
+        file_io.write(c.output_file, c.indent + len_reg + " = call i32 @strlen(i8* " + obj_res.reg + ")\n");
         return CompileResult(reg=len_reg, type=TYPE_INT);
     }
 
@@ -2546,18 +2685,18 @@ func compile_length_method(c -> Compiler, obj_node -> Struct, call_node -> CallN
         let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
         
         let size_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + obj_res.reg + ", i32 0, i32 0\n");
+        file_io.write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + obj_res.reg + ", i32 0, i32 0\n");
         
         let size_val -> String = next_reg(c);
-        write(c.output_file, c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
+        file_io.write(c.output_file, c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
 
         let trunc_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + trunc_reg + " = trunc i64 " + size_val + " to i32\n");
+        file_io.write(c.output_file, c.indent + trunc_reg + " = trunc i64 " + size_val + " to i32\n");
         
         return CompileResult(reg=trunc_reg, type=TYPE_INT);
     }
 
-    throw_type_error(call_node.pos, "Method 'length' is not defined for type " + get_type_name(c, type_id));
+    WhitelangExceptions.throw_type_error(call_node.pos, "Method 'length' is not defined for type " + get_type_name(c, type_id));
     return void_result();
 }
 
@@ -2591,7 +2730,7 @@ func check_out_index(c -> Compiler, target_node -> Struct, index_node -> Struct,
         }
 
         if (idx_val < 0) {
-            throw_index_error(pos, "Negative index " + val_str + " is not supported yet.");
+            WhitelangExceptions.throw_index_error(pos, "Negative index " + val_str + " is not supported yet.");
         }
 
         let base_target -> BaseNode = target_node;
@@ -2600,7 +2739,7 @@ func check_out_index(c -> Compiler, target_node -> Struct, index_node -> Struct,
             let count -> Int = vec_node.count;
             
             if (idx_val >= count) {
-                throw_index_error(pos, "Index " + val_str + " is out of bounds for vector of size " + count + ".");
+                WhitelangExceptions.throw_index_error(pos, "Index " + val_str + " is out of bounds for vector of size " + count + ".");
             }
         }
 
@@ -2609,7 +2748,7 @@ func check_out_index(c -> Compiler, target_node -> Struct, index_node -> Struct,
             let s_len -> Int = str_node.tok.value.length();
 
             if (idx_val >= s_len) {
-                throw_index_error(pos, "Index " + val_str + " is out of bounds for string of length " + s_len + ".");
+                WhitelangExceptions.throw_index_error(pos, "Index " + val_str + " is out of bounds for string of length " + s_len + ".");
             }
         }
     }
@@ -2621,7 +2760,7 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
     
     // idx type
     if (index_res.type != TYPE_INT) {
-        throw_type_error(node.pos, "Index must be an Integer.");
+        WhitelangExceptions.throw_type_error(node.pos, "Index must be an Integer.");
     }
 
     if (is_pointer_type(c, target_res.type)) {
@@ -2630,16 +2769,16 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
             let elem_type -> Int = base_info.type;
             
             if (elem_type == TYPE_VOID) {
-                throw_type_error(node.pos, "Cannot index 'ptr Void'. Cast it to a specific pointer type first.");
+                WhitelangExceptions.throw_type_error(node.pos, "Cannot index 'ptr Void'. Cast it to a specific pointer type first.");
             }
             
             let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
             
             let addr_reg -> String = next_reg(c);
-            write(c.output_file, c.indent + addr_reg + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + target_res.reg + ", i32 " + index_res.reg + "\n");
+            file_io.write(c.output_file, c.indent + addr_reg + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + target_res.reg + ", i32 " + index_res.reg + "\n");
             
             let load_reg -> String = next_reg(c);
-            write(c.output_file, c.indent + load_reg + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + addr_reg + "\n");
+            file_io.write(c.output_file, c.indent + load_reg + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + addr_reg + "\n");
             
             return CompileResult(reg=load_reg, type=elem_type, origin_type=elem_type);
         }
@@ -2662,20 +2801,20 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
         emit_vector_bounds_check(c, target_res.reg, index_res.reg, struct_ty, node.pos);
 
         let data_field_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + target_res.reg + ", i32 0, i32 2\n");
+        file_io.write(c.output_file, c.indent + data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + target_res.reg + ", i32 0, i32 2\n");
         
         let data_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
+        file_io.write(c.output_file, c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
 
         let slot_ptr -> String = next_reg(c);
         
         let idx_i64 -> String = next_reg(c);
-        write(c.output_file, c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
+        file_io.write(c.output_file, c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
         
-        write(c.output_file, c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + idx_i64 + "\n");
+        file_io.write(c.output_file, c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + idx_i64 + "\n");
         
         let val_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + val_reg + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot_ptr + "\n");
+        file_io.write(c.output_file, c.indent + val_reg + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot_ptr + "\n");
         
         return CompileResult(reg=val_reg, type=elem_type);
     }
@@ -2683,18 +2822,18 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
     // str access(-> Byte)
     if (target_res.type == TYPE_STRING) {
         let idx_i64 -> String = next_reg(c);
-        write(c.output_file, c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
+        file_io.write(c.output_file, c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
         
         let char_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + char_ptr + " = getelementptr inbounds i8, i8* " + target_res.reg + ", i64 " + idx_i64 + "\n");
+        file_io.write(c.output_file, c.indent + char_ptr + " = getelementptr inbounds i8, i8* " + target_res.reg + ", i64 " + idx_i64 + "\n");
         
         let char_val -> String = next_reg(c);
-        write(c.output_file, c.indent + char_val + " = load i8, i8* " + char_ptr + "\n");
+        file_io.write(c.output_file, c.indent + char_val + " = load i8, i8* " + char_ptr + "\n");
         
         return CompileResult(reg=char_val, type=TYPE_BYTE);
     }
     
-    throw_type_error(node.pos, "Type " + get_type_name(c, target_res.type) + " is not indexable.");
+    WhitelangExceptions.throw_type_error(node.pos, "Type " + get_type_name(c, target_res.type) + " is not indexable.");
     return void_result();
 }
 func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResult {
@@ -2704,7 +2843,7 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
     let val_res -> CompileResult = compile_node(c, node.value);
     
     if (index_res.type != TYPE_INT) {
-        throw_type_error(node.pos, "Index must be an Integer.");
+        WhitelangExceptions.throw_type_error(node.pos, "Index must be an Integer.");
     }
 
     if (is_pointer_type(c, target_res.type)) {
@@ -2713,7 +2852,7 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
             let elem_type -> Int = base_info.type;
             
             if (elem_type == TYPE_VOID) {
-                throw_type_error(node.pos, "Cannot index 'ptr Void'. Cast it to a specific pointer type first.");
+                WhitelangExceptions.throw_type_error(node.pos, "Cannot index 'ptr Void'. Cast it to a specific pointer type first.");
             }
             
             if (val_res.type != elem_type) {
@@ -2725,30 +2864,30 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
                         let dest_ty -> String = get_llvm_type_str(c, elem_type);
                         let src_ty -> String = get_llvm_type_str(c, val_res.type);
                         if (dest_ty != src_ty) {
-                            write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to " + dest_ty + "\n");
+                            file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to " + dest_ty + "\n");
                             val_res.reg = cast_reg;
                         }
                         val_res.type = elem_type;
                     } else {
-                        throw_type_error(node.pos, "Pointer type mismatch in index assignment.");
+                        WhitelangExceptions.throw_type_error(node.pos, "Pointer type mismatch in index assignment.");
                     }
                 } else {
-                    throw_type_error(node.pos, "Type mismatch in pointer index assignment.");
+                    WhitelangExceptions.throw_type_error(node.pos, "Type mismatch in pointer index assignment.");
                 }
             }
             
             let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
             let addr_reg -> String = next_reg(c);
-            write(c.output_file, c.indent + addr_reg + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + target_res.reg + ", i32 " + index_res.reg + "\n");
+            file_io.write(c.output_file, c.indent + addr_reg + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + target_res.reg + ", i32 " + index_res.reg + "\n");
             
             if (is_ref_type(c, elem_type)) {
                 emit_retain(c, val_res.reg, elem_type);
                 let old_val -> String = next_reg(c);
-                write(c.output_file, c.indent + old_val + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + addr_reg + "\n");
+                file_io.write(c.output_file, c.indent + old_val + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + addr_reg + "\n");
                 emit_release(c, old_val, elem_type);
             }
             
-            write(c.output_file, c.indent + "store " + elem_ty_str + " " + val_res.reg + ", " + elem_ty_str + "* " + addr_reg + "\n");
+            file_io.write(c.output_file, c.indent + "store " + elem_ty_str + " " + val_res.reg + ", " + elem_ty_str + "* " + addr_reg + "\n");
             return val_res;
         }
     }
@@ -2769,25 +2908,25 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
 
         if is_magic_func {
             let idx_i64 -> String = next_reg(c);
-            write(c.output_file, c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
+            file_io.write(c.output_file, c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
 
             let ptr_reg -> String = next_reg(c);
-            write(c.output_file, c.indent + ptr_reg + " = getelementptr inbounds i8, i8* " + target_res.reg + ", i64 " + idx_i64 + "\n");
+            file_io.write(c.output_file, c.indent + ptr_reg + " = getelementptr inbounds i8, i8* " + target_res.reg + ", i64 " + idx_i64 + "\n");
 
             let val_reg_i8 -> String = val_res.reg;
             
             if (val_res.type == TYPE_INT) {
                 let trunc_reg -> String = next_reg(c);
-                write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + val_res.reg + " to i8\n");
+                file_io.write(c.output_file, c.indent + trunc_reg + " = trunc i32 " + val_res.reg + " to i8\n");
                 val_reg_i8 = trunc_reg;
             }
 
-            write(c.output_file, c.indent + "store i8 " + val_reg_i8 + ", i8* " + ptr_reg + "\n");
+            file_io.write(c.output_file, c.indent + "store i8 " + val_reg_i8 + ", i8* " + ptr_reg + "\n");
             
             return val_res;
         }
 
-        throw_type_error(node.pos, "Strings are immutable. Cannot assign to index.");
+        WhitelangExceptions.throw_type_error(node.pos, "Strings are immutable. Cannot assign to index.");
     }
 
     if is_vec {
@@ -2795,11 +2934,18 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
         let elem_type -> Int = v_info.type;
         let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
 
+        if (elem_type == TYPE_GENERIC_STRUCT && val_res.type >= 100) {
+            let cast_reg -> String = next_reg(c);
+            let src_ty -> String = get_llvm_type_str(c, val_res.type);
+            file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to i8*\n");
+            val_res.reg = cast_reg;
+            val_res.type = TYPE_GENERIC_STRUCT;
+        }
         if (val_res.type != elem_type) {
             if (elem_type == TYPE_INT && val_res.type == TYPE_BYTE) {
                 val_res = promote_to_int(c, val_res);
             } else {
-                throw_type_error(node.pos, "Type mismatch. Vector expects " + get_type_name(c, elem_type) + ", got " + get_type_name(c, val_res.type));
+                WhitelangExceptions.throw_type_error(node.pos, "Type mismatch. Vector expects " + get_type_name(c, elem_type) + ", got " + get_type_name(c, val_res.type));
             }
         }
 
@@ -2808,30 +2954,30 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
         emit_vector_bounds_check(c, target_res.reg, index_res.reg, struct_ty, node.pos);
 
         let data_field_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + target_res.reg + ", i32 0, i32 2\n");
+        file_io.write(c.output_file, c.indent + data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + target_res.reg + ", i32 0, i32 2\n");
         let data_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
+        file_io.write(c.output_file, c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
         
         let idx_i64 -> String = next_reg(c);
-        write(c.output_file, c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
+        file_io.write(c.output_file, c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
         let slot_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + idx_i64 + "\n");
+        file_io.write(c.output_file, c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + idx_i64 + "\n");
 
         if (is_ref_type(c, elem_type)) {
             emit_retain(c, val_res.reg, elem_type);
     
             let old_val -> String = next_reg(c);
-            write(c.output_file, c.indent + old_val + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot_ptr + "\n");
+            file_io.write(c.output_file, c.indent + old_val + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot_ptr + "\n");
 
             emit_release(c, old_val, elem_type);
         }
 
-        write(c.output_file, c.indent + "store " + elem_ty_str + " " + val_res.reg + ", " + elem_ty_str + "* " + slot_ptr + "\n");
+        file_io.write(c.output_file, c.indent + "store " + elem_ty_str + " " + val_res.reg + ", " + elem_ty_str + "* " + slot_ptr + "\n");
         
         return val_res;
     }
     
-    throw_type_error(node.pos, "Type " + get_type_name(c, target_res.type) + " does not support index assignment.");
+    WhitelangExceptions.throw_type_error(node.pos, "Type " + get_type_name(c, target_res.type) + " does not support index assignment.");
     return void_result();
 }
 
@@ -2841,29 +2987,29 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
 
     if (op_type == TOK_AND || op_type == TOK_OR) {
         if (left.type != TYPE_BOOL) {
-            throw_type_error(node.pos, "Logic operators '&&' and '||' require Bool operands. ");
+            WhitelangExceptions.throw_type_error(node.pos, "Logic operators '&&' and '||' require Bool operands. ");
         }
         let label_rhs -> String = next_label(c);
         let label_merge -> String = next_label(c);
         let res_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + res_ptr + " = alloca i1\n");
-        write(c.output_file, c.indent + "store i1 " + left.reg + ", i1* " + res_ptr + "\n");
+        file_io.write(c.output_file, c.indent + res_ptr + " = alloca i1\n");
+        file_io.write(c.output_file, c.indent + "store i1 " + left.reg + ", i1* " + res_ptr + "\n");
         
         if (op_type == TOK_AND) {
-            write(c.output_file, c.indent + "br i1 " + left.reg + ", label %" + label_rhs + ", label %" + label_merge + "\n");
+            file_io.write(c.output_file, c.indent + "br i1 " + left.reg + ", label %" + label_rhs + ", label %" + label_merge + "\n");
         } else {
-            write(c.output_file, c.indent + "br i1 " + left.reg + ", label %" + label_merge + ", label %" + label_rhs + "\n");
+            file_io.write(c.output_file, c.indent + "br i1 " + left.reg + ", label %" + label_merge + ", label %" + label_rhs + "\n");
         }
 
-        write(c.output_file, "\n" + label_rhs + ":\n");
+        file_io.write(c.output_file, "\n" + label_rhs + ":\n");
         let right_res -> CompileResult = compile_node(c, node.right);
-        if (right_res.type != TYPE_BOOL) { throw_type_error(node.pos, "Right operand must be Bool."); }
-        write(c.output_file, c.indent + "store i1 " + right_res.reg + ", i1* " + res_ptr + "\n");
-        write(c.output_file, c.indent + "br label %" + label_merge + "\n");
+        if (right_res.type != TYPE_BOOL) { WhitelangExceptions.throw_type_error(node.pos, "Right operand must be Bool."); }
+        file_io.write(c.output_file, c.indent + "store i1 " + right_res.reg + ", i1* " + res_ptr + "\n");
+        file_io.write(c.output_file, c.indent + "br label %" + label_merge + "\n");
 
-        write(c.output_file, "\n" + label_merge + ":\n");
+        file_io.write(c.output_file, "\n" + label_merge + ":\n");
         let final_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + final_reg + " = load i1, i1* " + res_ptr + "\n");
+        file_io.write(c.output_file, c.indent + final_reg + " = load i1, i1* " + res_ptr + "\n");
         return CompileResult(reg=final_reg, type=TYPE_BOOL);
     }
 
@@ -2871,7 +3017,7 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
     if (op_type == TOK_EE || op_type == TOK_NE) {
         if (left.type == TYPE_NULL || left.type == TYPE_NULLPTR ||
             right.type == TYPE_NULL || right.type == TYPE_NULLPTR) {
-            throw_type_error(node.pos, "Invalid operator. Do not use '==' or '!=' with null/nullptr. Use 'is' or 'is !'.");
+            WhitelangExceptions.throw_type_error(node.pos, "Invalid operator. Do not use '==' or '!=' with null/nullptr. Use 'is' or 'is !'.");
         }
     }
 
@@ -2888,51 +3034,58 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
 
             // get str length
             let len1 -> String = next_reg(c);
-            write(c.output_file, c.indent + len1 + " = call i32 @strlen(i8* " + left.reg + ")\n");
+            file_io.write(c.output_file, c.indent + len1 + " = call i32 @strlen(i8* " + left.reg + ")\n");
             
             let len2 -> String = next_reg(c);
-            write(c.output_file, c.indent + len2 + " = call i32 @strlen(i8* " + right.reg + ")\n");
+            file_io.write(c.output_file, c.indent + len2 + " = call i32 @strlen(i8* " + right.reg + ")\n");
 
             // upgrade to i64
             let len1_64 -> String = next_reg(c);
-            write(c.output_file, c.indent + len1_64 + " = zext i32 " + len1 + " to i64\n");
+            file_io.write(c.output_file, c.indent + len1_64 + " = zext i32 " + len1 + " to i64\n");
             let len2_64 -> String = next_reg(c);
-            write(c.output_file, c.indent + len2_64 + " = zext i32 " + len2 + " to i64\n");
+            file_io.write(c.output_file, c.indent + len2_64 + " = zext i32 " + len2 + " to i64\n");
             
             // total length
             let sum_len -> String = next_reg(c);
-            write(c.output_file, c.indent + sum_len + " = add i64 " + len1_64 + ", " + len2_64 + "\n");
+            file_io.write(c.output_file, c.indent + sum_len + " = add i64 " + len1_64 + ", " + len2_64 + "\n");
             
             // for \0
             let total_size -> String = next_reg(c);
-            write(c.output_file, c.indent + total_size + " = add i64 " + sum_len + ", 1\n");
+            file_io.write(c.output_file, c.indent + total_size + " = add i64 " + sum_len + ", 1\n");
 
             let alloc_size -> String = next_reg(c);
-            write(c.output_file, c.indent + alloc_size + " = add i64 " + total_size + ", 8\n");
+            file_io.write(c.output_file, c.indent + alloc_size + " = add i64 " + total_size + ", 8\n");
 
             // malloc(alloc_size)
             let raw_mem -> String = next_reg(c);
-            write(c.output_file, c.indent + raw_mem + " = call i8* @malloc(i64 " + alloc_size + ")\n");
+            file_io.write(c.output_file, c.indent + raw_mem + " = call i8* @malloc(i64 " + alloc_size + ")\n");
 
             let rc_ptr -> String = next_reg(c);
-            write(c.output_file, c.indent + rc_ptr + " = bitcast i8* " + raw_mem + " to i32*\n");
-            write(c.output_file, c.indent + "store i32 0, i32* " + rc_ptr + "\n");
+            file_io.write(c.output_file, c.indent + rc_ptr + " = bitcast i8* " + raw_mem + " to i32*\n");
+            file_io.write(c.output_file, c.indent + "store i32 0, i32* " + rc_ptr + "\n");
+
+            let type_ptr -> String = next_reg(c);
+            file_io.write(c.output_file, c.indent + type_ptr + " = getelementptr inbounds i8, i8* " + raw_mem + ", i32 4\n");
+            let type_ptr_i32 -> String = next_reg(c);
+            file_io.write(c.output_file, c.indent + type_ptr_i32 + " = bitcast i8* " + type_ptr + " to i32*\n");
+            file_io.write(c.output_file, c.indent + "store i32 " + TYPE_STRING + ", i32* " + type_ptr_i32 + "\n");
+
             let new_str_ptr -> String = next_reg(c);
-            write(c.output_file, c.indent + new_str_ptr + " = getelementptr inbounds i8, i8* " + raw_mem + ", i32 8\n");
+            file_io.write(c.output_file, c.indent + new_str_ptr + " = getelementptr inbounds i8, i8* " + raw_mem + ", i32 8\n");
             
             // strcpy(new_ptr, left) -> null
             let ign1 -> String = next_reg(c);
-            write(c.output_file, c.indent + ign1 + " = call i8* @strcpy(i8* " + new_str_ptr + ", i8* " + left.reg + ")\n");
+            file_io.write(c.output_file, c.indent + ign1 + " = call i8* @strcpy(i8* " + new_str_ptr + ", i8* " + left.reg + ")\n");
             
             // strcat(new_ptr, right) -> null
             let ign2 -> String = next_reg(c);
-            write(c.output_file, c.indent + ign2 + " = call i8* @strcat(i8* " + new_str_ptr + ", i8* " + right.reg + ")\n");
+            file_io.write(c.output_file, c.indent + ign2 + " = call i8* @strcat(i8* " + new_str_ptr + ", i8* " + right.reg + ")\n");
             
             return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
         }
 
         if (left.type != right.type) {
-            throw_type_error(node.pos, "Cannot operate on String with other types.");
+            WhitelangExceptions.throw_type_error(node.pos, "Cannot operate on String with other types.");
         }
 
 
@@ -2941,18 +3094,18 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         if (op_type == TOK_NE) { allowed = true; }
         
         if (!allowed) {
-            throw_type_error(node.pos, "Arithmetic operations on Strings are not supported (except +).");
+            WhitelangExceptions.throw_type_error(node.pos, "Arithmetic operations on Strings are not supported (except +).");
         }
 
         let cmp_val -> String = next_reg(c);
-        write(c.output_file, c.indent + cmp_val + " = call i32 @strcmp(i8* " + left.reg + ", i8* " + right.reg + ")\n");
+        file_io.write(c.output_file, c.indent + cmp_val + " = call i32 @strcmp(i8* " + left.reg + ", i8* " + right.reg + ")\n");
 
         let res_reg -> String = next_reg(c);
         let op_code -> String = "icmp eq";
 
         if (op_type == TOK_NE) { op_code = "icmp ne"; }
 
-        write(c.output_file, c.indent + res_reg + " = " + op_code + " i32 " + cmp_val + ", 0\n");
+        file_io.write(c.output_file, c.indent + res_reg + " = " + op_code + " i32 " + cmp_val + ", 0\n");
         
         return CompileResult(reg=res_reg, type=TYPE_BOOL);
     }
@@ -2961,7 +3114,7 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         left = promote_to_float(c, left);
         right = promote_to_float(c, right);
         let res_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + res_reg + " = call double @llvm.pow.f64(double " + left.reg + ", double " + right.reg + ")\n");
+        file_io.write(c.output_file, c.indent + res_reg + " = call double @llvm.pow.f64(double " + left.reg + ", double " + right.reg + ")\n");
         return CompileResult(reg=res_reg, type=TYPE_FLOAT);
     }
 
@@ -2975,15 +3128,15 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
 
     if is_cmp {
         if (left.type >= 100 || right.type >= 100 || left.type == TYPE_NULL || right.type == TYPE_NULL) {
-            throw_type_error(node.pos, "Pointer comparison is not supported yet. Please use loop counters.");
+            WhitelangExceptions.throw_type_error(node.pos, "Pointer comparison is not supported yet. Please use loop counters.");
         }
         if (left.type == TYPE_BOOL || right.type == TYPE_BOOL) {
-            if (left.type != right.type) { throw_type_error(node.pos, "Cannot compare Bool with other types."); }
-            if (op_type != TOK_EE && op_type != TOK_NE) { throw_type_error(node.pos, "Invalid Bool comparison."); }
+            if (left.type != right.type) { WhitelangExceptions.throw_type_error(node.pos, "Cannot compare Bool with other types."); }
+            if (op_type != TOK_EE && op_type != TOK_NE) { WhitelangExceptions.throw_type_error(node.pos, "Invalid Bool comparison."); }
             let res_reg -> String = next_reg(c);
             let op_code -> String = "icmp eq";
             if (op_type == TOK_NE) { op_code = "icmp ne"; }
-            write(c.output_file, c.indent + res_reg + " = " + op_code + " i1 " + left.reg + ", " + right.reg + "\n");
+            file_io.write(c.output_file, c.indent + res_reg + " = " + op_code + " i1 " + left.reg + ", " + right.reg + "\n");
             return CompileResult(reg=res_reg, type=TYPE_BOOL);
         }
 
@@ -3035,12 +3188,12 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
             else if (op_type == TOK_LTE) { op_code = "icmp " + suffix + "le"; }
         }
         
-        write(c.output_file, c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
+        file_io.write(c.output_file, c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
         return CompileResult(reg=res_reg, type=TYPE_BOOL);
     }
 
     if (left.type == TYPE_BOOL || right.type == TYPE_BOOL) {
-        throw_type_error(node.pos, "Arithmetic operators cannot be used on Bool. ");
+        WhitelangExceptions.throw_type_error(node.pos, "Arithmetic operators cannot be used on Bool. ");
     }
 
     let target_type -> Int = TYPE_BYTE;
@@ -3088,29 +3241,29 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
 
     if (op_type == TOK_DIV || op_type == TOK_MOD) {
             if (right.reg == "0" || right.reg == "0.0") {
-                throw_zero_division_error(node.pos, "Cannot divide by zero. ");
+                WhitelangExceptions.throw_zero_division_error(node.pos, "Cannot divide by zero. ");
             }
 
             let is_zero_reg -> String = next_reg(c);
             if (target_type == TYPE_FLOAT) {
-                write(c.output_file, c.indent + is_zero_reg + " = fcmp oeq double " + right.reg + ", 0.0\n");
+                file_io.write(c.output_file, c.indent + is_zero_reg + " = fcmp oeq double " + right.reg + ", 0.0\n");
             } else {
-                write(c.output_file, c.indent + is_zero_reg + " = icmp eq " + type_str + " " + right.reg + ", 0\n");
+                file_io.write(c.output_file, c.indent + is_zero_reg + " = icmp eq " + type_str + " " + right.reg + ", 0\n");
             }
             
             let err_label -> String = "div_zero_" + c.type_counter;
             let ok_label -> String = "div_ok_" + c.type_counter;
             c.type_counter += 1;
             
-            write(c.output_file, c.indent + "br i1 " + is_zero_reg + ", label %" + err_label + ", label %" + ok_label + "\n");
+            file_io.write(c.output_file, c.indent + "br i1 " + is_zero_reg + ", label %" + err_label + ", label %" + ok_label + "\n");
             
-            write(c.output_file, "\n" + err_label + ":\n");
+            file_io.write(c.output_file, "\n" + err_label + ":\n");
             emit_runtime_error(c, node.pos, "Division by zero");
             
-            write(c.output_file, "\n" + ok_label + ":\n");
+            file_io.write(c.output_file, "\n" + ok_label + ":\n");
         }
 
-    write(c.output_file, c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
+    file_io.write(c.output_file, c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
     return CompileResult(reg=res_reg, type=target_type);
 }
 
@@ -3133,20 +3286,26 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
         let total_size -> Int = len + 8;
         let raw_mem -> String = next_reg(c);
-        write(c.output_file, c.indent + raw_mem + " = call i8* @malloc(i64 " + total_size + ")\n");
+        file_io.write(c.output_file, c.indent + raw_mem + " = call i8* @malloc(i64 " + total_size + ")\n");
 
         let rc_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + rc_ptr + " = bitcast i8* " + raw_mem + " to i32*\n");
-        write(c.output_file, c.indent + "store i32 0, i32* " + rc_ptr + "\n");
+        file_io.write(c.output_file, c.indent + rc_ptr + " = bitcast i8* " + raw_mem + " to i32*\n");
+        file_io.write(c.output_file, c.indent + "store i32 0, i32* " + rc_ptr + "\n");
+
+        let type_ptr -> String = next_reg(c);
+        file_io.write(c.output_file, c.indent + type_ptr + " = getelementptr inbounds i8, i8* " + raw_mem + ", i32 4\n");
+        let type_ptr_i32 -> String = next_reg(c);
+        file_io.write(c.output_file, c.indent + type_ptr_i32 + " = bitcast i8* " + type_ptr + " to i32*\n");
+        file_io.write(c.output_file, c.indent + "store i32 " + TYPE_STRING + ", i32* " + type_ptr_i32 + "\n");
 
         // get pointer (Offset +8)
         let user_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + user_ptr + " = getelementptr inbounds i8, i8* " + raw_mem + ", i32 8\n");
+        file_io.write(c.output_file, c.indent + user_ptr + " = getelementptr inbounds i8, i8* " + raw_mem + ", i32 8\n");
 
         // strcpy(ptr, constant_ptr)
         let const_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + const_ptr + " = getelementptr inbounds [" + len + " x i8], [" + len + " x i8]* @.str." + id + ", i32 0, i32 0\n");
-        write(c.output_file, c.indent + "call i8* @strcpy(i8* " + user_ptr + ", i8* " + const_ptr + ")\n");
+        file_io.write(c.output_file, c.indent + const_ptr + " = getelementptr inbounds [" + len + " x i8], [" + len + " x i8]* @.str." + id + ", i32 0, i32 0\n");
+        file_io.write(c.output_file, c.indent + "call i8* @strcpy(i8* " + user_ptr + ", i8* " + const_ptr + ")\n");
 
         return CompileResult(reg=user_ptr, type=TYPE_STRING);
     }
@@ -3174,7 +3333,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         let target -> BaseNode = r_node.node;
         
         if (target.type != NODE_VAR_ACCESS) {
-            throw_invalid_syntax(r_node.pos, "Cannot take ref of r-value.");
+            WhitelangExceptions.throw_invalid_syntax(r_node.pos, "Cannot take ref of r-value.");
         }
         
         let v -> VarAccessNode = r_node.node;
@@ -3190,12 +3349,12 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 let func_ptr -> String = "@" + name;
                 
                 let cast_reg -> String = next_reg(c);
-                write(c.output_file, c.indent + cast_reg + " = bitcast " + sig + " " + func_ptr + " to i8*\n");
+                file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + sig + " " + func_ptr + " to i8*\n");
                 
                 return CompileResult(reg=cast_reg, type=specific_type_id);
             }
             
-            throw_name_error(r_node.pos, "Unknown variable or function '" + name + "'.");
+            WhitelangExceptions.throw_name_error(r_node.pos, "Unknown variable or function '" + name + "'.");
         }
 
         let ptr_id -> Int = get_ptr_type_id(c, info.type);
@@ -3212,19 +3371,19 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         
         while (i < d_node.level) {
             if (curr_type == TYPE_NULL) {
-                throw_null_dereference_error(d_node.pos, "Cannot dereference 'nullptr'. ");
+                WhitelangExceptions.throw_null_dereference_error(d_node.pos, "Cannot dereference 'nullptr'. ");
             }
             let base_info -> SymbolInfo = map_get(c.ptr_base_map, "" + curr_type);
-            if (base_info is null) { throw_type_error(d_node.pos, "Attempt to dereference non-pointer. "); }
+            if (base_info is null) { WhitelangExceptions.throw_type_error(d_node.pos, "Attempt to dereference non-pointer. "); }
             
             let next_type -> Int = base_info.type;
             if (next_type == TYPE_VOID) {
-                throw_type_error(d_node.pos, "Cannot dereference 'ptr Void'. Cast it to a specific pointer type first.");
+                WhitelangExceptions.throw_type_error(d_node.pos, "Cannot dereference 'ptr Void'. Cast it to a specific pointer type first.");
             }
             let ty_str -> String = get_llvm_type_str(c, next_type);
             let next_reg -> String = next_reg(c);
             
-            write(c.output_file, c.indent + next_reg + " = load " + ty_str + ", " + ty_str + "* " + curr_reg + "\n");
+            file_io.write(c.output_file, c.indent + next_reg + " = load " + ty_str + ", " + ty_str + "* " + curr_reg + "\n");
             
             curr_reg = next_reg;
             curr_type = next_type;
@@ -3258,13 +3417,13 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         if (lhs_res.type != TYPE_STRING && lhs_res.type != TYPE_NULL && lhs_res.type != TYPE_NULLPTR) {
             let cast_l -> String = next_reg(c);
             let ty_l -> String = get_llvm_type_str(c, lhs_res.type);
-            write(c.output_file, c.indent + cast_l + " = bitcast " + ty_l + " " + l_reg + " to i8*\n");
+            file_io.write(c.output_file, c.indent + cast_l + " = bitcast " + ty_l + " " + l_reg + " to i8*\n");
             l_reg = cast_l;
         }
         if (rhs_res.type != TYPE_STRING && rhs_res.type != TYPE_NULL && rhs_res.type != TYPE_NULLPTR) {
             let cast_r -> String = next_reg(c);
             let ty_r -> String = get_llvm_type_str(c, rhs_res.type);
-            write(c.output_file, c.indent + cast_r + " = bitcast " + ty_r + " " + r_reg + " to i8*\n");
+            file_io.write(c.output_file, c.indent + cast_r + " = bitcast " + ty_r + " " + r_reg + " to i8*\n");
             r_reg = cast_r;
         }
 
@@ -3272,7 +3431,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         let cond -> String = "eq";
         if (base.type == 33) { cond = "ne"; } // NODE_IS_NOT
         
-        write(c.output_file, c.indent + cmp_reg + " = icmp " + cond + " i8* " + l_reg + ", " + r_reg + "\n");
+        file_io.write(c.output_file, c.indent + cmp_reg + " = icmp " + cond + " i8* " + l_reg + ", " + r_reg + "\n");
         return CompileResult(reg=cmp_reg, type=TYPE_BOOL);
     }
 
@@ -3306,21 +3465,21 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 let func_ptr -> String = "@" + var_name;
                 
                 let cast_reg -> String = next_reg(c);
-                write(c.output_file, c.indent + cast_reg + " = bitcast " + sig + " " + func_ptr + " to i8*\n");
+                file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + sig + " " + func_ptr + " to i8*\n");
                 
                 return CompileResult(reg=cast_reg, type=specific_type_id);
             }
 
-            throw_name_error(v.pos, "Undefined variable or function '" + var_name + "'. ");
+            WhitelangExceptions.throw_name_error(v.pos, "Undefined variable or function '" + var_name + "'. ");
         }
         
         let val_reg -> String = next_reg(c);
         let llvm_ty_str -> String = get_llvm_type_str(c, info.type);
         if (llvm_ty_str == "") {
-            throw_type_error(v.pos, "Variable '" + var_name + "' has invalid internal type ID. ");
+            WhitelangExceptions.throw_type_error(v.pos, "Variable '" + var_name + "' has invalid internal type ID. ");
         }
         
-        write(c.output_file, c.indent + val_reg + " = load " + llvm_ty_str + ", " + llvm_ty_str + "* " + info.reg + "\n");
+        file_io.write(c.output_file, c.indent + val_reg + " = load " + llvm_ty_str + ", " + llvm_ty_str + "* " + info.reg + "\n");
         return CompileResult(reg=val_reg, type=info.type, origin_type=info.origin_type);
     }
 
@@ -3409,7 +3568,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 
                 if (curr_arg is null) {
                     let fmt_ptr -> String = next_reg(c);
-                    write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
+                    file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
                     return void_result();
                 }
                 
@@ -3419,7 +3578,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                     curr_arg = curr_arg.next;
                 }
 
-                write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
+                file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
 
                 return void_result();
             }
@@ -3432,7 +3591,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             let func_info -> FuncInfo = map_get(c.func_table, func_name);
 
             if (func_info is null) {
-                throw_name_error(n_call.pos, "Function '" + func_name + "' is not defined.");
+                WhitelangExceptions.throw_name_error(n_call.pos, "Function '" + func_name + "' is not defined.");
             }
 
             let args_str -> String = "";
@@ -3443,7 +3602,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             while (arg_node_curr is !null) {
                 if (type_node_curr is null) { 
                     if (!func_info.is_varargs) {
-                        throw_type_error(n_call.pos, "Too many arguments."); 
+                        WhitelangExceptions.throw_type_error(n_call.pos, "Too many arguments."); 
                     }
                     let arg_val -> CompileResult = compile_node(c, arg_node_curr.val);
 
@@ -3454,7 +3613,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                     // Bool -> Int
                     if (arg_val.type == TYPE_BOOL) {
                         let zext_reg -> String = next_reg(c);
-                        write(c.output_file, c.indent + zext_reg + " = zext i1 " + arg_val.reg + " to i32\n");
+                        file_io.write(c.output_file, c.indent + zext_reg + " = zext i1 " + arg_val.reg + " to i32\n");
                         arg_val = CompileResult(reg=zext_reg, type=TYPE_INT);
                     }
                     // Float -> double(Float)
@@ -3483,7 +3642,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 if (expected_type == TYPE_GENERIC_STRUCT && arg_val.type >= 100) {
                     let cast_reg -> String = next_reg(c);
                     let src_ty -> String = get_llvm_type_str(c, arg_val.type);
-                    write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + arg_val.reg + " to i8*\n");
+                    file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + arg_val.reg + " to i8*\n");
                     arg_val = CompileResult(reg=cast_reg, type=TYPE_GENERIC_STRUCT);
                 }
 
@@ -3491,7 +3650,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                     if (map_get(c.struct_id_map, "" + expected_type) is !null) {
                         let cast_reg -> String = next_reg(c);
                         let dest_ty -> String = get_llvm_type_str(c, expected_type);
-                        write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + arg_val.reg + " to " + dest_ty + "\n");
+                        file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + arg_val.reg + " to " + dest_ty + "\n");
                         arg_val.reg = cast_reg;
                         arg_val.type = expected_type;
                     }
@@ -3507,7 +3666,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                         let dest_ty -> String = get_llvm_type_str(c, expected_type);
                         let src_ty -> String = get_llvm_type_str(c, arg_val.type);
                         if (dest_ty != src_ty) {
-                            write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + arg_val.reg + " to " + dest_ty + "\n");
+                            file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + arg_val.reg + " to " + dest_ty + "\n");
                             arg_val.reg = cast_reg;
                         }
                         arg_val.type = expected_type;
@@ -3516,21 +3675,21 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
                 if (arg_val.type == TYPE_NULLPTR) {
                     if (is_pointer_type(c, expected_type) == false) {
-                        throw_type_error(n_call.pos, "nullptr can only be passed to explicit pointer types.");
+                        WhitelangExceptions.throw_type_error(n_call.pos, "nullptr can only be passed to explicit pointer types.");
                     }
                     arg_val.type = expected_type; // fake type
                 } 
                 else if (arg_val.type == TYPE_NULL) {
                     if (is_pointer_type(c, expected_type) == true) {
-                        throw_type_error(n_call.pos, "null cannot be passed to explicit pointer types. Use 'nullptr'.");
+                        WhitelangExceptions.throw_type_error(n_call.pos, "null cannot be passed to explicit pointer types. Use 'nullptr'.");
                     }
                     if (expected_type == TYPE_INT || expected_type == TYPE_FLOAT || expected_type == TYPE_BOOL || expected_type == TYPE_BYTE) {
-                        throw_type_error(n_call.pos, "Primitive types cannot be null.");
+                        WhitelangExceptions.throw_type_error(n_call.pos, "Primitive types cannot be null.");
                     }
                     arg_val.type = expected_type; // fake type
                 }
 
-                if (arg_val.type != expected_type) { throw_type_error(n_call.pos, "Argument type mismatch."); }
+                if (arg_val.type != expected_type) { WhitelangExceptions.throw_type_error(n_call.pos, "Argument type mismatch."); }
 
                 let ty_str -> String = get_llvm_type_str(c, arg_val.type);
                 if (is_first == false) { args_str = args_str + ", "; }
@@ -3541,7 +3700,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 type_node_curr = type_node_curr.next;
             }
             
-            if (type_node_curr is !null) { throw_type_error(n_call.pos, "Too few arguments."); }
+            if (type_node_curr is !null) { WhitelangExceptions.throw_type_error(n_call.pos, "Too few arguments."); }
 
             let ret_type_str -> String = get_llvm_type_str(c, func_info.ret_type);
             let call_res_reg -> String = "";
@@ -3564,14 +3723,14 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             
             if (func_info.ret_type == TYPE_VOID) {
                 if (func_info.is_varargs) {
-                    write(c.output_file, c.indent + "call " + call_prefix + "@" + func_info.name + "(" + args_str + ")\n");
+                    file_io.write(c.output_file, c.indent + "call " + call_prefix + "@" + func_info.name + "(" + args_str + ")\n");
                 } else {
-                    write(c.output_file, c.indent + "call void @" + func_info.name + "(" + args_str + ")\n");
+                    file_io.write(c.output_file, c.indent + "call void @" + func_info.name + "(" + args_str + ")\n");
                 }
                 return void_result();
             } else {
                 call_res_reg = next_reg(c);
-                write(c.output_file, c.indent + call_res_reg + " = call " + call_prefix + "@" + func_info.name + "(" + args_str + ")\n");
+                file_io.write(c.output_file, c.indent + call_res_reg + " = call " + call_prefix + "@" + func_info.name + "(" + args_str + ")\n");
                 return CompileResult(reg=call_res_reg, type=func_info.ret_type);
             }
         }
@@ -3605,7 +3764,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 }
                 
                 if (!is_valid_call) {
-                    throw_type_error(n_call.pos, "Generic Function must specify return type.");
+                    WhitelangExceptions.throw_type_error(n_call.pos, "Generic Function must specify return type.");
                 }
             } 
 
@@ -3641,30 +3800,30 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 let func_ptr_ty -> String = ret_ty_str + " (" + args_sig + ")*";
                 
                 let cast_reg -> String = next_reg(c);
-                write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + callee_res.reg + " to " + func_ptr_ty + "\n");
+                file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + callee_res.reg + " to " + func_ptr_ty + "\n");
 
                 let call_reg -> String = "";
                 if (ret_type_id == TYPE_VOID) {
-                    write(c.output_file, c.indent + "call void " + cast_reg + "(" + args_val_str + ")\n");
+                    file_io.write(c.output_file, c.indent + "call void " + cast_reg + "(" + args_val_str + ")\n");
                     return void_result();
                 } else {
                     call_reg = next_reg(c);
-                    write(c.output_file, c.indent + call_reg + " = call " + ret_ty_str + " " + cast_reg + "(" + args_val_str + ")\n");
+                    file_io.write(c.output_file, c.indent + call_reg + " = call " + ret_ty_str + " " + cast_reg + "(" + args_val_str + ")\n");
                     return CompileResult(reg=call_reg, type=ret_type_id); 
                 }
             }
 
-            throw_name_error(n_call.pos, "Call target is not a function or function pointer.");
+            WhitelangExceptions.throw_name_error(n_call.pos, "Call target is not a function or function pointer.");
         }
     }
 
     if (base.type == NODE_BREAK) {
         let n_break -> BreakNode = node;
         if (c.loop_stack is null) {
-            throw_invalid_syntax(n_break.pos, "'break' outside of loop. ");
+            WhitelangExceptions.throw_invalid_syntax(n_break.pos, "'break' outside of loop. ");
         }
         let scope -> LoopScope = c.loop_stack;
-        write(c.output_file, c.indent + "br label %" + scope.label_break + "\n");
+        file_io.write(c.output_file, c.indent + "br label %" + scope.label_break + "\n");
 
         return void_result();
     }
@@ -3672,10 +3831,10 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_CONTINUE) {
         let n_cont -> ContinueNode = node;
         if (c.loop_stack is null) {
-            throw_invalid_syntax(n_cont.pos, "'continue' outside of loop. ");
+            WhitelangExceptions.throw_invalid_syntax(n_cont.pos, "'continue' outside of loop. ");
         }
         let scope -> LoopScope = c.loop_stack;
-        write(c.output_file, c.indent + "br label %" + scope.label_continue + "\n");
+        file_io.write(c.output_file, c.indent + "br label %" + scope.label_continue + "\n");
 
         return void_result();
     }
@@ -3695,8 +3854,8 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             let var_name -> String = v_acc.name_tok.value;
 
             let info -> SymbolInfo = find_symbol(c, var_name);
-            if (info is null) { throw_name_error(v_acc.pos, "Undefined variable '" + var_name + "'. "); }
-            if (info.is_const) { throw_type_error(u.pos, "Cannot modify constant variable '" + var_name + "'."); }
+            if (info is null) { WhitelangExceptions.throw_name_error(v_acc.pos, "Undefined variable '" + var_name + "'. "); }
+            if (info.is_const) { WhitelangExceptions.throw_type_error(u.pos, "Cannot modify constant variable '" + var_name + "'."); }
 
             target_reg = info.reg;
             target_type = info.type;
@@ -3720,7 +3879,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                         let s_info_temp -> StructInfo = map_get(c.struct_id_map, "" + type_id);
                         if (s_info_temp is !null) {
                             let cast_reg -> String = next_reg(c);
-                            write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + obj_reg + " to " + s_info_temp.llvm_name + "*\n");
+                            file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + obj_reg + " to " + s_info_temp.llvm_name + "*\n");
                             obj_reg = cast_reg;
                         }
                     }
@@ -3728,51 +3887,51 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             }
             
             let s_info -> StructInfo = map_get(c.struct_id_map, "" + type_id);
-            if (s_info is null) { throw_type_error(u.pos, "Cannot access field on non-struct type."); }
+            if (s_info is null) { WhitelangExceptions.throw_type_error(u.pos, "Cannot access field on non-struct type."); }
             
             let field -> FieldInfo = find_field(s_info, f_acc.field_name);
-            if (field is null) { throw_name_error(u.pos, "Field '" + f_acc.field_name + "' not found."); }
+            if (field is null) { WhitelangExceptions.throw_name_error(u.pos, "Field '" + f_acc.field_name + "' not found."); }
             
             target_type = field.type;
             type_str = field.llvm_type;
             target_reg = next_reg(c);
 
-            write(c.output_file, c.indent + target_reg + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_reg + ", i32 0, i32 " + field.offset + "\n");
+            file_io.write(c.output_file, c.indent + target_reg + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_reg + ", i32 0, i32 " + field.offset + "\n");
             
         } else {
             let op_str -> String = "++";
             if (op_type == TOK_DEC) { op_str = "--"; }
-            throw_type_error(u.pos, "Operator '" + op_str + "' can only be applied to variables or struct fields.");
+            WhitelangExceptions.throw_type_error(u.pos, "Operator '" + op_str + "' can only be applied to variables or struct fields.");
         }
         
         if (target_type == TYPE_BOOL) {
-            throw_type_error(u.pos, "Cannot increment/decrement Bool type. ");
+            WhitelangExceptions.throw_type_error(u.pos, "Cannot increment/decrement Bool type. ");
         }
 
         let old_val_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + old_val_reg + " = load " + type_str + ", " + type_str + "* " + target_reg + "\n");
+        file_io.write(c.output_file, c.indent + old_val_reg + " = load " + type_str + ", " + type_str + "* " + target_reg + "\n");
         
         let new_val_reg -> String = next_reg(c);
         if (target_type == TYPE_INT) {
             let op_code -> String = "add i32";
             if (op_type == TOK_DEC) { op_code = "sub i32"; }
-            write(c.output_file, c.indent + new_val_reg + " = " + op_code + " " + old_val_reg + ", 1\n");
+            file_io.write(c.output_file, c.indent + new_val_reg + " = " + op_code + " " + old_val_reg + ", 1\n");
         } 
         else if (target_type == TYPE_LONG) {
             let op_code -> String = "add i64";
             if (op_type == TOK_DEC) { op_code = "sub i64"; }
-            write(c.output_file, c.indent + new_val_reg + " = " + op_code + " " + old_val_reg + ", 1\n");
+            file_io.write(c.output_file, c.indent + new_val_reg + " = " + op_code + " " + old_val_reg + ", 1\n");
         }
         else if (target_type == TYPE_FLOAT) {
             let op_code -> String = "fadd double";
             if (op_type == TOK_DEC) { op_code = "fsub double"; }
-            write(c.output_file, c.indent + new_val_reg + " = " + op_code + " " + old_val_reg + ", 1.0\n");
+            file_io.write(c.output_file, c.indent + new_val_reg + " = " + op_code + " " + old_val_reg + ", 1.0\n");
         }
         else {
-            throw_type_error(u.pos, "Cannot increment/decrement type " + get_type_name(c, target_type));
+            WhitelangExceptions.throw_type_error(u.pos, "Cannot increment/decrement type " + get_type_name(c, target_type));
         }
 
-        write(c.output_file, c.indent + "store " + type_str + " " + new_val_reg + ", " + type_str + "* " + target_reg + "\n");
+        file_io.write(c.output_file, c.indent + "store " + type_str + " " + new_val_reg + ", " + type_str + "* " + target_reg + "\n");
         return CompileResult(reg=old_val_reg, type=target_type);
     }
 
@@ -3785,19 +3944,19 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         
         if (op_type == TOK_SUB) {
             if (operand.type == TYPE_INT) {
-                write(c.output_file, c.indent + res_reg + " = sub i32 0, " + operand.reg + "\n");
+                file_io.write(c.output_file, c.indent + res_reg + " = sub i32 0, " + operand.reg + "\n");
                 return CompileResult(reg=res_reg, type=TYPE_INT);
             } else if (operand.type == TYPE_FLOAT) {
-                write(c.output_file, c.indent + res_reg + " = fneg double " + operand.reg + "\n");
+                file_io.write(c.output_file, c.indent + res_reg + " = fneg double " + operand.reg + "\n");
                 return CompileResult(reg=res_reg, type=TYPE_FLOAT);
             } else {
-                throw_type_error(u.pos, "Cannot negate non-numeric type. ");
+                WhitelangExceptions.throw_type_error(u.pos, "Cannot negate non-numeric type. ");
             }
         } else if (op_type == TOK_NOT) {
             if (operand.type != TYPE_BOOL) {
-                throw_type_error(u.pos, "Operator '!' requires Bool type. ");
+                WhitelangExceptions.throw_type_error(u.pos, "Operator '!' requires Bool type. ");
             }
-            write(c.output_file, c.indent + res_reg + " = xor i1 " + operand.reg + ", 1\n");
+            file_io.write(c.output_file, c.indent + res_reg + " = xor i1 " + operand.reg + ", 1\n");
             return CompileResult(reg=res_reg, type=TYPE_BOOL);
         } else {
             return operand;
@@ -3810,25 +3969,25 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 // BUILTIN HELPER
 func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position, origin_id -> Int) -> Void {
     if (type_id == TYPE_INT) {
-        write(c.output_file, c.indent + "call void @builtin.print_i(i32 " + reg + ")\n");
+        file_io.write(c.output_file, c.indent + "call void @builtin.print_i(i32 " + reg + ")\n");
     } else if (type_id == TYPE_LONG) {
-        write(c.output_file, c.indent + "call void @builtin.print_l(i64 " + reg + ")\n");
+        file_io.write(c.output_file, c.indent + "call void @builtin.print_l(i64 " + reg + ")\n");
     } else if (type_id == TYPE_FLOAT) {
-        write(c.output_file, c.indent + "call void @builtin.print_f(double " + reg + ")\n");
+        file_io.write(c.output_file, c.indent + "call void @builtin.print_f(double " + reg + ")\n");
     } else if (type_id == TYPE_STRING) {
-        write(c.output_file, c.indent + "call void @builtin.print_s(i8* " + reg + ")\n");
+        file_io.write(c.output_file, c.indent + "call void @builtin.print_s(i8* " + reg + ")\n");
     } else if (type_id == TYPE_BOOL) {
-        write(c.output_file, c.indent + "call void @builtin.print_b(i1 " + reg + ")\n");
+        file_io.write(c.output_file, c.indent + "call void @builtin.print_b(i1 " + reg + ")\n");
     } else if (type_id == TYPE_BYTE) {
-        write(c.output_file, c.indent + "call void @builtin.print_c(i8 " + reg + ")\n");
+        file_io.write(c.output_file, c.indent + "call void @builtin.print_c(i8 " + reg + ")\n");
     }
     else if (is_pointer_type(c, type_id)) {
         let base_info -> SymbolInfo = map_get(c.ptr_base_map, "" + type_id);
 
         if (base_info is !null && base_info.type == TYPE_BYTE) {
-            write(c.output_file, c.indent + "call void @builtin.print_s(i8* " + reg + ")\n");
+            file_io.write(c.output_file, c.indent + "call void @builtin.print_s(i8* " + reg + ")\n");
         } else {
-            write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_hex_ptr, i32 0, i32 0), i8* " + reg + ")\n");
+            file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_hex_ptr, i32 0, i32 0), i8* " + reg + ")\n");
         }
     }
     else if (type_id == TYPE_GENERIC_STRUCT) {
@@ -3836,14 +3995,14 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
             let s_info_real -> StructInfo = map_get(c.struct_id_map, "" + origin_id);
             if (s_info_real is !null) {
                 let cast_reg -> String = next_reg(c);
-                write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + reg + " to " + s_info_real.llvm_name + "*\n");
+                file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + reg + " to " + s_info_real.llvm_name + "*\n");
                 compile_print_struct_internal(c, cast_reg, s_info_real, pos);
             } else {
-                write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_hex_ptr, i32 0, i32 0), i8* " + reg + ")\n");
+                file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_hex_ptr, i32 0, i32 0), i8* " + reg + ")\n");
             }
         }
         else {
-            write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_hex_ptr, i32 0, i32 0), i8* " + reg + ")\n");
+            file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_hex_ptr, i32 0, i32 0), i8* " + reg + ")\n");
         }
     }
     else if (type_id >= 100) {
@@ -3858,7 +4017,7 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
         }
     } 
     else if (type_id == TYPE_NULL || type_id == TYPE_NULLPTR) {
-        write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
+        file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
     }
 }
 
@@ -3867,7 +4026,7 @@ func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> S
     let header_id -> Int = c.str_count;
     c.str_count += 1;
     c.string_list = StringConstant(id=header_id, value=header, next=c.string_list);
-    write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([" + (header.length() + 1) + " x i8], [" + (header.length() + 1) + " x i8]* @.str." + header_id + ", i32 0, i32 0))\n");
+    file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([" + (header.length() + 1) + " x i8], [" + (header.length() + 1) + " x i8]* @.str." + header_id + ", i32 0, i32 0))\n");
 
     let f_curr -> FieldInfo = s_info.fields;
     while (f_curr is !null) {
@@ -3875,20 +4034,20 @@ func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> S
         let fn_id -> Int = c.str_count;
         c.str_count += 1;
         c.string_list = StringConstant(id=fn_id, value=f_name_eq, next=c.string_list);
-        write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([" + (f_name_eq.length() + 1) + " x i8], [" + (f_name_eq.length() + 1) + " x i8]* @.str." + fn_id + ", i32 0, i32 0))\n");
+        file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([" + (f_name_eq.length() + 1) + " x i8], [" + (f_name_eq.length() + 1) + " x i8]* @.str." + fn_id + ", i32 0, i32 0))\n");
 
         let f_ptr -> String = next_reg(c);
-        write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_reg + ", i32 0, i32 " + f_curr.offset + "\n");
+        file_io.write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_reg + ", i32 0, i32 " + f_curr.offset + "\n");
         let f_val_reg -> String = next_reg(c);
-        write(c.output_file, c.indent + f_val_reg + " = load " + f_curr.llvm_type + ", " + f_curr.llvm_type + "* " + f_ptr + "\n");
+        file_io.write(c.output_file, c.indent + f_val_reg + " = load " + f_curr.llvm_type + ", " + f_curr.llvm_type + "* " + f_ptr + "\n");
         compile_print(c, f_val_reg, f_curr.type, pos, f_curr.type); 
 
         f_curr = f_curr.next;
         if (f_curr is !null) {
-            write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
+            file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
         }
     }
-    write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_paren, i32 0, i32 0))\n");
+    file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_paren, i32 0, i32 0))\n");
 }
 
 func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> SymbolInfo, pos -> Position) -> Void {
@@ -3897,16 +4056,16 @@ func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> S
     let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
 
     let size_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_reg + ", i32 0, i32 0\n");
+    file_io.write(c.output_file, c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_reg + ", i32 0, i32 0\n");
     let size_val -> String = next_reg(c);
-    write(c.output_file, c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
+    file_io.write(c.output_file, c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
     
     let data_ptr_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + data_ptr_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_reg + ", i32 0, i32 2\n");
+    file_io.write(c.output_file, c.indent + data_ptr_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_reg + ", i32 0, i32 2\n");
     let data_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_ptr_ptr + "\n");
+    file_io.write(c.output_file, c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_ptr_ptr + "\n");
 
-    write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_open_bracket, i32 0, i32 0))\n");
+    file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_open_bracket, i32 0, i32 0))\n");
 
     let label_cond -> String = next_label(c);
     let label_body -> String = next_label(c);
@@ -3914,39 +4073,39 @@ func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> S
     let label_end  -> String = next_label(c);
 
     let idx_ptr -> String = next_reg(c);
-    write(c.output_file, c.indent + idx_ptr + " = alloca i64\n");
-    write(c.output_file, c.indent + "store i64 0, i64* " + idx_ptr + "\n");
-    write(c.output_file, c.indent + "br label %" + label_cond + "\n");
+    file_io.write(c.output_file, c.indent + idx_ptr + " = alloca i64\n");
+    file_io.write(c.output_file, c.indent + "store i64 0, i64* " + idx_ptr + "\n");
+    file_io.write(c.output_file, c.indent + "br label %" + label_cond + "\n");
 
-    write(c.output_file, "\n" + label_cond + ":\n");
+    file_io.write(c.output_file, "\n" + label_cond + ":\n");
     let curr_idx -> String = next_reg(c);
-    write(c.output_file, c.indent + curr_idx + " = load i64, i64* " + idx_ptr + "\n");
+    file_io.write(c.output_file, c.indent + curr_idx + " = load i64, i64* " + idx_ptr + "\n");
     let cmp -> String = next_reg(c);
-    write(c.output_file, c.indent + cmp + " = icmp slt i64 " + curr_idx + ", " + size_val + "\n");
-    write(c.output_file, c.indent + "br i1 " + cmp + ", label %" + label_body + ", label %" + label_end + "\n");
+    file_io.write(c.output_file, c.indent + cmp + " = icmp slt i64 " + curr_idx + ", " + size_val + "\n");
+    file_io.write(c.output_file, c.indent + "br i1 " + cmp + ", label %" + label_body + ", label %" + label_end + "\n");
 
-    write(c.output_file, "\n" + label_body + ":\n");
+    file_io.write(c.output_file, "\n" + label_body + ":\n");
     let slot -> String = next_reg(c);
-    write(c.output_file, c.indent + slot + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + curr_idx + "\n");
+    file_io.write(c.output_file, c.indent + slot + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + curr_idx + "\n");
     let val -> String = next_reg(c);
-    write(c.output_file, c.indent + val + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot + "\n");
+    file_io.write(c.output_file, c.indent + val + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot + "\n");
     
     compile_print(c, val, elem_type, pos, elem_type);
 
     let next_idx -> String = next_reg(c);
-    write(c.output_file, c.indent + next_idx + " = add i64 " + curr_idx + ", 1\n");
-    write(c.output_file, c.indent + "store i64 " + next_idx + ", i64* " + idx_ptr + "\n");
+    file_io.write(c.output_file, c.indent + next_idx + " = add i64 " + curr_idx + ", 1\n");
+    file_io.write(c.output_file, c.indent + "store i64 " + next_idx + ", i64* " + idx_ptr + "\n");
     
     let is_not_last -> String = next_reg(c);
-    write(c.output_file, c.indent + is_not_last + " = icmp slt i64 " + next_idx + ", " + size_val + "\n");
-    write(c.output_file, c.indent + "br i1 " + is_not_last + ", label %" + label_sep + ", label %" + label_cond + "\n");
+    file_io.write(c.output_file, c.indent + is_not_last + " = icmp slt i64 " + next_idx + ", " + size_val + "\n");
+    file_io.write(c.output_file, c.indent + "br i1 " + is_not_last + ", label %" + label_sep + ", label %" + label_cond + "\n");
 
-    write(c.output_file, "\n" + label_sep + ":\n");
-    write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
-    write(c.output_file, c.indent + "br label %" + label_cond + "\n");
+    file_io.write(c.output_file, "\n" + label_sep + ":\n");
+    file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
+    file_io.write(c.output_file, c.indent + "br label %" + label_cond + "\n");
 
-    write(c.output_file, "\n" + label_end + ":\n");
-    write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0))\n");
+    file_io.write(c.output_file, "\n" + label_end + ":\n");
+    file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0))\n");
 }
 
 func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -> String, call_node -> CallNode) -> CompileResult {
@@ -3973,7 +4132,7 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
         if (arg_res.type == TYPE_BYTE) { arg_res = promote_to_int(c, arg_res); }
         if (arg_res.type == TYPE_BOOL) { 
             let zext_reg -> String = next_reg(c);
-            write(c.output_file, c.indent + zext_reg + " = zext i1 " + arg_res.reg + " to i32\n");
+            file_io.write(c.output_file, c.indent + zext_reg + " = zext i1 " + arg_res.reg + " to i32\n");
             arg_res = CompileResult(reg=zext_reg, type=TYPE_INT);
         }
         
@@ -3985,74 +4144,73 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
     let ret_ty_str -> String = get_llvm_type_str(c, f_info.ret_type);
     let call_reg -> String = "";
     if (f_info.ret_type == TYPE_VOID) {
-        write(c.output_file, c.indent + "call void @" + real_func_name + "(" + args_str + ")\n");
+        file_io.write(c.output_file, c.indent + "call void @" + real_func_name + "(" + args_str + ")\n");
         return void_result();
     } else {
         call_reg = next_reg(c);
-        write(c.output_file, c.indent + call_reg + " = call " + ret_ty_str + " @" + real_func_name + "(" + args_str + ")\n");
+        file_io.write(c.output_file, c.indent + call_reg + " = call " + ret_ty_str + " @" + real_func_name + "(" + args_str + ")\n");
         return CompileResult(reg=call_reg, type=f_info.ret_type);
     }
 }
 // --------------
 
 func compile_start(c -> Compiler) -> Void {
-    write(c.output_file, "declare i32 @printf(i8*, ...)\n");
+    file_io.write(c.output_file, "declare i32 @printf(i8*, ...)\n");
     map_put(c.declared_externs, "printf", StringConstant(id=0, value="", next=null));
 
-    write(c.output_file, "declare i32 @snprintf(i8*, i64, i8*, ...)\n");
+    file_io.write(c.output_file, "declare i32 @snprintf(i8*, i64, i8*, ...)\n");
     map_put(c.declared_externs, "snprintf", StringConstant(id=0, value="", next=null)); 
 
-    write(c.output_file, "declare double @llvm.pow.f64(double, double)\n\n");
+    file_io.write(c.output_file, "declare double @llvm.pow.f64(double, double)\n\n");
 
-    write(c.output_file, "declare i8* @malloc(i64)\n");
+    file_io.write(c.output_file, "declare i8* @malloc(i64)\n");
     map_put(c.declared_externs, "malloc", StringConstant(id=0, value="", next=null));
 
-    write(c.output_file, "declare i32 @strlen(i8*)\n");
+    file_io.write(c.output_file, "declare i32 @strlen(i8*)\n");
     map_put(c.declared_externs, "strlen", StringConstant(id=0, value="", next=null)); 
 
-    write(c.output_file, "declare i8* @strcpy(i8*, i8*)\n");
+    file_io.write(c.output_file, "declare i8* @strcpy(i8*, i8*)\n");
     map_put(c.declared_externs, "strcpy", StringConstant(id=0, value="", next=null)); 
 
-    write(c.output_file, "declare i8* @strcat(i8*, i8*)\n\n");
+    file_io.write(c.output_file, "declare i8* @strcat(i8*, i8*)\n\n");
     map_put(c.declared_externs, "strcat", StringConstant(id=0, value="", next=null)); 
 
-    write(c.output_file, "declare i32 @strcmp(i8*, i8*)\n\n");
+    file_io.write(c.output_file, "declare i32 @strcmp(i8*, i8*)\n\n");
     map_put(c.declared_externs, "strcmp", StringConstant(id=0, value="", next=null)); 
 
-    write(c.output_file, "declare void @free(i8*)\n");
+    file_io.write(c.output_file, "declare void @free(i8*)\n");
     map_put(c.declared_externs, "free", StringConstant(id=0, value="", next=null));
 
-    write(c.output_file, "declare void @exit(i32)\n");
+    file_io.write(c.output_file, "declare void @exit(i32)\n");
     map_put(c.declared_externs, "exit", StringConstant(id=0, value="", next=null));
 
-    write(c.output_file, "declare i8* @realloc(i8*, i64)\n");
+    file_io.write(c.output_file, "declare i8* @realloc(i8*, i64)\n");
     map_put(c.declared_externs, "realloc", StringConstant(id=0, value="", next=null));
 
-    compile_arc_hooks(c);
-    
-    write(c.output_file, "@.fmt_int = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\"\n");
-    write(c.output_file, "@.fmt_long = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n");
-    write(c.output_file, "@.fmt_float = private unnamed_addr constant [4 x i8] c\"%f\\0A\\00\"\n");
-    write(c.output_file, "@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n\n");
-    write(c.output_file, "@.fmt_hex_ptr = private unnamed_addr constant [3 x i8] c\"%p\\00\"\n");
 
-    write(c.output_file, "@.fmt_int_simple = private unnamed_addr constant [3 x i8] c\"%d\\00\"\n");
-    write(c.output_file, "@.fmt_float_simple = private unnamed_addr constant [3 x i8] c\"%f\\00\"\n");
-    write(c.output_file, "@.str_true = private unnamed_addr constant [5 x i8] c\"true\\00\"\n");
-    write(c.output_file, "@.str_false = private unnamed_addr constant [6 x i8] c\"false\\00\"\n");
-    write(c.output_file, "@.str_null = private unnamed_addr constant [5 x i8] c\"null\\00\"\n\n");
-    write(c.output_file, "@.str_newline = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n");
+    file_io.write(c.output_file, "@.fmt_int = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\"\n");
+    file_io.write(c.output_file, "@.fmt_long = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n");
+    file_io.write(c.output_file, "@.fmt_float = private unnamed_addr constant [4 x i8] c\"%f\\0A\\00\"\n");
+    file_io.write(c.output_file, "@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n\n");
+    file_io.write(c.output_file, "@.fmt_hex_ptr = private unnamed_addr constant [3 x i8] c\"%p\\00\"\n");
 
-    write(c.output_file, "@.str_idx_err = private unnamed_addr constant [21 x i8] c\"Index out of bounds\\0A\\00\"\n\n");
-    write(c.output_file, "@.fmt_err_bounds = private unnamed_addr constant [66 x i8] c\"\\0ARuntimeError\\1B[0m: Index out of bounds\\0A    at Line %d, Column %d\\0A\\00\"\n\n");
+    file_io.write(c.output_file, "@.fmt_int_simple = private unnamed_addr constant [3 x i8] c\"%d\\00\"\n");
+    file_io.write(c.output_file, "@.fmt_float_simple = private unnamed_addr constant [3 x i8] c\"%f\\00\"\n");
+    file_io.write(c.output_file, "@.str_true = private unnamed_addr constant [5 x i8] c\"true\\00\"\n");
+    file_io.write(c.output_file, "@.str_false = private unnamed_addr constant [6 x i8] c\"false\\00\"\n");
+    file_io.write(c.output_file, "@.str_null = private unnamed_addr constant [5 x i8] c\"null\\00\"\n\n");
+    file_io.write(c.output_file, "@.str_newline = private unnamed_addr constant [2 x i8] c\"\\0A\\00\"\n");
+
+    file_io.write(c.output_file, "@.str_idx_err = private unnamed_addr constant [21 x i8] c\"Index out of bounds\\0A\\00\"\n\n");
+    file_io.write(c.output_file, "@.fmt_err_bounds = private unnamed_addr constant [66 x i8] c\"\\0ARuntimeError\\1B[0m: Index out of bounds\\0A    at Line %d, Column %d\\0A\\00\"\n\n");
 
     // builtin.print
-    write(c.output_file, "@.str_open_bracket = private unnamed_addr constant [2 x i8] c\"[\\00\"\n");
-    write(c.output_file, "@.str_close_bracket = private unnamed_addr constant [2 x i8] c\"]\\00\"\n");
-    write(c.output_file, "@.str_comma_space = private unnamed_addr constant [3 x i8] c\", \\00\"\n");
-    write(c.output_file, "@.str_open_paren = private unnamed_addr constant [2 x i8] c\"(\\00\"\n");
-    write(c.output_file, "@.str_close_paren = private unnamed_addr constant [2 x i8] c\")\\00\"\n");
-    write(c.output_file, "@.str_equal = private unnamed_addr constant [2 x i8] c\"=\\00\"\n");
+    file_io.write(c.output_file, "@.str_open_bracket = private unnamed_addr constant [2 x i8] c\"[\\00\"\n");
+    file_io.write(c.output_file, "@.str_close_bracket = private unnamed_addr constant [2 x i8] c\"]\\00\"\n");
+    file_io.write(c.output_file, "@.str_comma_space = private unnamed_addr constant [3 x i8] c\", \\00\"\n");
+    file_io.write(c.output_file, "@.str_open_paren = private unnamed_addr constant [2 x i8] c\"(\\00\"\n");
+    file_io.write(c.output_file, "@.str_close_paren = private unnamed_addr constant [2 x i8] c\")\\00\"\n");
+    file_io.write(c.output_file, "@.str_equal = private unnamed_addr constant [2 x i8] c\"=\\00\"\n");
 }
 
 func compile(c -> Compiler, node -> Struct) -> Void {
@@ -4063,8 +4221,10 @@ func compile(c -> Compiler, node -> Struct) -> Void {
 
 func compile_end(c -> Compiler) -> Void {
     if (!c.has_main) {
-        throw_missing_main_function();
+        WhitelangExceptions.throw_missing_main_function();
     }
+    compile_arc_hooks(c);
+
     let curr -> StringConstant = c.string_list;
 
     while (curr is !null) {
@@ -4075,9 +4235,9 @@ func compile_end(c -> Compiler) -> Void {
         let len -> Int = val.length() + 1; 
         
         let def -> String = "@.str." + id + " = private unnamed_addr constant [" + len + " x i8] c\"" + escaped_val + "\\00\"\n";
-        write(c.output_file, def);
+        file_io.write(c.output_file, def);
         
         curr = curr.next;
     }
-    close(c.output_file);
+    file_io.close(c.output_file);
 }

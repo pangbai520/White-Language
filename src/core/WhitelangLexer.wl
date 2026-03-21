@@ -77,11 +77,11 @@ func get_string(l -> Lexer) -> Token {
     
     if (l.current_char == 34) {
         lexer_advance(l); // skip closing "
-        return Token(type=TOK_STR_LIT, value=result, line=start_ln, col=start_col);
+        return WhitelangTokens.Token(type=TOK_STR_LIT, value=result, line=start_ln, col=start_col);
     }
     
-    throw_illegal_char(l.pos, "Unterminated string literal. ");
-    return Token(type=TOK_EOF, value="", line=0, col=0);
+    WhitelangExceptions.throw_illegal_char(l.pos, "Unterminated string literal. ");
+    return WhitelangTokens.Token(type=TOK_EOF, value="", line=0, col=0);
 }
 
 
@@ -108,9 +108,9 @@ func get_number(l -> Lexer) -> Token {
     }
 
     if (dot_count == 1) {
-        return Token(type=TOK_FLOAT, value=value, line=start_line, col=start_col);
+        return WhitelangTokens.Token(type=TOK_FLOAT, value=value, line=start_line, col=start_col);
     }
-    return Token(type=TOK_INT, value=value, line=start_line, col=start_col);
+    return WhitelangTokens.Token(type=TOK_INT, value=value, line=start_line, col=start_col);
 }
 
 func get_identifier(l -> Lexer) -> Token {
@@ -125,37 +125,37 @@ func get_identifier(l -> Lexer) -> Token {
     let value -> String = l.text.slice(start_pos, l.pos.idx);
 
     // Keywords mapping
-    if (value == "let") {return Token(type=TOK_LET, value=value, line=start_line, col=start_col);}
-    if (value == "Int") {return Token(type=TOK_T_INT, value=value, line=start_line, col=start_col);}
-    if (value == "Float") {return Token(type=TOK_T_FLOAT, value=value, line=start_line, col=start_col);}
-    if (value == "String") {return Token(type=TOK_T_STRING, value=value, line=start_line, col=start_col);}
-    if (value == "Bool") {return Token(type=TOK_T_BOOL, value=value, line=start_line, col=start_col);}
-    if (value == "Void") {return Token(type=TOK_T_VOID, value=value, line=start_line, col=start_col);}
-    if (value == "true") {return Token(type=TOK_TRUE, value=value, line=start_line, col=start_col);}
-    if (value == "false") {return Token(type=TOK_FALSE, value=value, line=start_line, col=start_col);}
-    if (value == "if") {return Token(type=TOK_IF, value=value, line=start_line, col=start_col);}
-    if (value == "else") {return Token(type=TOK_ELSE, value=value, line=start_line, col=start_col);}
-    if (value == "while") {return Token(type=TOK_WHILE, value=value, line=start_line, col=start_col);}
-    if (value == "break") { return Token(type=TOK_BREAK, value=value, line=start_line, col=start_col); }
-    if (value == "continue") { return Token(type=TOK_CONTINUE, value=value, line=start_line, col=start_col); }
-    if (value == "for")      { return Token(type=TOK_FOR, value=value, line=start_line, col=start_col); }
-    if (value == "func")     { return Token(type=TOK_FUNC, value=value, line=start_line, col=start_col); }
-    if (value == "return")   { return Token(type=TOK_RETURN, value=value, line=start_line, col=start_col); }
-    if (value == "struct") { return Token(type=TOK_STRUCT, value=value, line=start_line, col=start_col); }
-    if (value == "this")   { return Token(type=TOK_THIS, value=value, line=start_line, col=start_col); }
-    if (value == "ptr") { return Token(type=TOK_PTR, value=value, line=start_line, col=start_col); }
-    if (value == "ref") { return Token(type=TOK_REF, value=value, line=start_line, col=start_col); }
-    if (value == "deref") { return Token(type=TOK_DEREF, value=value, line=start_line, col=start_col); }
-    if (value == "nullptr") { return Token(type=TOK_NULLPTR, value=value, line=start_line, col=start_col); }
-    if (value == "null") { return Token(type=TOK_NULL, value=value, line=start_line, col=start_col); }
-    if (value == "is") { return Token(type=TOK_IS, value=value, line=start_line, col=start_col); }
-    if (value == "extern") { return Token(type=TOK_EXTERN, value=value, line=start_line, col=start_col); }
-    if (value == "from") { return Token(type=TOK_FROM, value=value, line=start_line, col=start_col); }
-    if (value == "import") { return Token(type=TOK_IMPORT, value=value, line=start_line, col=start_col); }
-    if (value == "const") { return Token(type=TOK_CONST, value=value, line=start_line, col=start_col); }
-    if (value == "as") { return Token(type=TOK_AS, value=value, line=start_line, col=start_col); }
+    if (value == "let") {return WhitelangTokens.Token(type=TOK_LET, value=value, line=start_line, col=start_col);}
+    if (value == "Int") {return WhitelangTokens.Token(type=TOK_T_INT, value=value, line=start_line, col=start_col);}
+    if (value == "Float") {return WhitelangTokens.Token(type=TOK_T_FLOAT, value=value, line=start_line, col=start_col);}
+    if (value == "String") {return WhitelangTokens.Token(type=TOK_T_STRING, value=value, line=start_line, col=start_col);}
+    if (value == "Bool") {return WhitelangTokens.Token(type=TOK_T_BOOL, value=value, line=start_line, col=start_col);}
+    if (value == "Void") {return WhitelangTokens.Token(type=TOK_T_VOID, value=value, line=start_line, col=start_col);}
+    if (value == "true") {return WhitelangTokens.Token(type=TOK_TRUE, value=value, line=start_line, col=start_col);}
+    if (value == "false") {return WhitelangTokens.Token(type=TOK_FALSE, value=value, line=start_line, col=start_col);}
+    if (value == "if") {return WhitelangTokens.Token(type=TOK_IF, value=value, line=start_line, col=start_col);}
+    if (value == "else") {return WhitelangTokens.Token(type=TOK_ELSE, value=value, line=start_line, col=start_col);}
+    if (value == "while") {return WhitelangTokens.Token(type=TOK_WHILE, value=value, line=start_line, col=start_col);}
+    if (value == "break") { return WhitelangTokens.Token(type=TOK_BREAK, value=value, line=start_line, col=start_col); }
+    if (value == "continue") { return WhitelangTokens.Token(type=TOK_CONTINUE, value=value, line=start_line, col=start_col); }
+    if (value == "for")      { return WhitelangTokens.Token(type=TOK_FOR, value=value, line=start_line, col=start_col); }
+    if (value == "func")     { return WhitelangTokens.Token(type=TOK_FUNC, value=value, line=start_line, col=start_col); }
+    if (value == "return")   { return WhitelangTokens.Token(type=TOK_RETURN, value=value, line=start_line, col=start_col); }
+    if (value == "struct") { return WhitelangTokens.Token(type=TOK_STRUCT, value=value, line=start_line, col=start_col); }
+    if (value == "this")   { return WhitelangTokens.Token(type=TOK_THIS, value=value, line=start_line, col=start_col); }
+    if (value == "ptr") { return WhitelangTokens.Token(type=TOK_PTR, value=value, line=start_line, col=start_col); }
+    if (value == "ref") { return WhitelangTokens.Token(type=TOK_REF, value=value, line=start_line, col=start_col); }
+    if (value == "deref") { return WhitelangTokens.Token(type=TOK_DEREF, value=value, line=start_line, col=start_col); }
+    if (value == "nullptr") { return WhitelangTokens.Token(type=TOK_NULLPTR, value=value, line=start_line, col=start_col); }
+    if (value == "null") { return WhitelangTokens.Token(type=TOK_NULL, value=value, line=start_line, col=start_col); }
+    if (value == "is") { return WhitelangTokens.Token(type=TOK_IS, value=value, line=start_line, col=start_col); }
+    if (value == "extern") { return WhitelangTokens.Token(type=TOK_EXTERN, value=value, line=start_line, col=start_col); }
+    if (value == "from") { return WhitelangTokens.Token(type=TOK_FROM, value=value, line=start_line, col=start_col); }
+    if (value == "import") { return WhitelangTokens.Token(type=TOK_IMPORT, value=value, line=start_line, col=start_col); }
+    if (value == "const") { return WhitelangTokens.Token(type=TOK_CONST, value=value, line=start_line, col=start_col); }
+    if (value == "as") { return WhitelangTokens.Token(type=TOK_AS, value=value, line=start_line, col=start_col); }
 
-    return Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
+    return WhitelangTokens.Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }
 
 
@@ -167,7 +167,7 @@ func handle_slash(l -> Lexer) -> Token {
     // /=
     if (l.current_char == 61) {
         lexer_advance(l);
-        return Token(type=TOK_DIV_ASSIGN, value="/=", line=line, col=col);
+        return WhitelangTokens.Token(type=TOK_DIV_ASSIGN, value="/=", line=line, col=col);
     }
 
     // //
@@ -189,11 +189,11 @@ func handle_slash(l -> Lexer) -> Token {
                 }
             } else { lexer_advance(l); }
         }
-        if (comment_closed == 0) { throw_illegal_char(l.pos, "Unterminated block comment."); }
+        if (comment_closed == 0) { WhitelangExceptions.throw_illegal_char(l.pos, "Unterminated block comment."); }
         return null;
     }
 
-    return Token(type=TOK_DIV, value="/", line=line, col=col);
+    return WhitelangTokens.Token(type=TOK_DIV, value="/", line=line, col=col);
 }
 
 
@@ -233,40 +233,40 @@ func get_next_token(l -> Lexer) -> Token {
 
             if is_ellipsis {
                 lexer_advance(l); lexer_advance(l); lexer_advance(l); // consume ...
-                return Token(type=TOK_ELLIPSIS, value="...", line=char_line, col=char_col);
+                return WhitelangTokens.Token(type=TOK_ELLIPSIS, value="...", line=char_line, col=char_col);
             } else {
                 lexer_advance(l);
-                return Token(type=TOK_DOT, value=".", line=char_line, col=char_col);
+                return WhitelangTokens.Token(type=TOK_DOT, value=".", line=char_line, col=char_col);
             }
         }
 
         // + and ++ and +=
         if (char == 43) { 
             lexer_advance(l);
-            if (l.current_char == 61) { lexer_advance(l); return Token(type=TOK_PLUS_ASSIGN, value="+=", line=char_line, col=char_col); } // +=
-            if (l.current_char == 43) { lexer_advance(l); return Token(type=TOK_INC, value="++", line=char_line, col=char_col); } // ++
-            return Token(type=TOK_PLUS, value="+", line=char_line, col=char_col); 
+            if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_PLUS_ASSIGN, value="+=", line=char_line, col=char_col); } // +=
+            if (l.current_char == 43) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_INC, value="++", line=char_line, col=char_col); } // ++
+            return WhitelangTokens.Token(type=TOK_PLUS, value="+", line=char_line, col=char_col); 
         }
 
         // - and -- and -> and -=
         if (char == 45) { 
             lexer_advance(l); 
-            if (l.current_char == 61) { lexer_advance(l); return Token(type=TOK_SUB_ASSIGN, value="-=", line=char_line, col=char_col); } // -=
-            if (l.current_char == 62) { lexer_advance(l); return Token(type=TOK_TYPE_ARROW, value="->", line=char_line, col=char_col); } // ->
-            if (l.current_char == 45) { lexer_advance(l); return Token(type=TOK_DEC, value="--", line=char_line, col=char_col); } // --
-            return Token(type=TOK_SUB, value="-", line=char_line, col=char_col); 
+            if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_SUB_ASSIGN, value="-=", line=char_line, col=char_col); } // -=
+            if (l.current_char == 62) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_TYPE_ARROW, value="->", line=char_line, col=char_col); } // ->
+            if (l.current_char == 45) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_DEC, value="--", line=char_line, col=char_col); } // --
+            return WhitelangTokens.Token(type=TOK_SUB, value="-", line=char_line, col=char_col); 
         }
 
         // * *= ** **=
         if (char == 42) { 
             lexer_advance(l); 
-            if (l.current_char == 61) { lexer_advance(l); return Token(type=TOK_MUL_ASSIGN, value="*=", line=char_line, col=char_col); } // *=
+            if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_MUL_ASSIGN, value="*=", line=char_line, col=char_col); } // *=
             if (l.current_char == 42) { 
                 lexer_advance(l); 
-                if (l.current_char == 61) { lexer_advance(l); return Token(type=TOK_POW_ASSIGN, value="**=", line=char_line, col=char_col); } // **=
-                return Token(type=TOK_POW, value="**", line=char_line, col=char_col); // **
+                if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_POW_ASSIGN, value="**=", line=char_line, col=char_col); } // **=
+                return WhitelangTokens.Token(type=TOK_POW, value="**", line=char_line, col=char_col); // **
             }
-            return Token(type=TOK_MUL, value="*", line=char_line, col=char_col); 
+            return WhitelangTokens.Token(type=TOK_MUL, value="*", line=char_line, col=char_col); 
         }
 
         // / /= // /*
@@ -278,64 +278,64 @@ func get_next_token(l -> Lexer) -> Token {
 
         if (char == 37) { 
             lexer_advance(l); 
-            if (l.current_char == 61) { lexer_advance(l); return Token(type=TOK_MOD_ASSIGN, value="%=", line=char_line, col=char_col); } // %=
-            return Token(type=TOK_MOD, value="%", line=char_line, col=char_col); 
+            if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_MOD_ASSIGN, value="%=", line=char_line, col=char_col); } // %=
+            return WhitelangTokens.Token(type=TOK_MOD, value="%", line=char_line, col=char_col); 
         }
 
         // ! and !=
         if (char == 33) {
             lexer_advance(l);
-            if (l.current_char == 61) { lexer_advance(l); return Token(type=TOK_NE, value="!=", line=char_line, col=char_col); }
-            return Token(type=TOK_NOT, value="!", line=char_line, col=char_col);
+            if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_NE, value="!=", line=char_line, col=char_col); }
+            return WhitelangTokens.Token(type=TOK_NOT, value="!", line=char_line, col=char_col);
         }
 
         // = and ==
         if (char == 61) {
             lexer_advance(l);
-            if (l.current_char == 61) { lexer_advance(l); return Token(type=TOK_EE, value="==", line=char_line, col=char_col); }
-            return Token(type=TOK_ASSIGN, value="=", line=char_line, col=char_col);
+            if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_EE, value="==", line=char_line, col=char_col); }
+            return WhitelangTokens.Token(type=TOK_ASSIGN, value="=", line=char_line, col=char_col);
         }
 
         // < and <=
         if (char == 60) {
             lexer_advance(l);
-            if (l.current_char == 61) { lexer_advance(l); return Token(type=TOK_LTE, value="<=", line=char_line, col=char_col); }
-            return Token(type=TOK_LT, value="<", line=char_line, col=char_col);
+            if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_LTE, value="<=", line=char_line, col=char_col); }
+            return WhitelangTokens.Token(type=TOK_LT, value="<", line=char_line, col=char_col);
         }
 
         // > and >=
         if (char == 62) {
             lexer_advance(l);
-            if (l.current_char == 61) { lexer_advance(l); return Token(type=TOK_GTE, value=">=", line=char_line, col=char_col); }
-            return Token(type=TOK_GT, value=">", line=char_line, col=char_col);
+            if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_GTE, value=">=", line=char_line, col=char_col); }
+            return WhitelangTokens.Token(type=TOK_GT, value=">", line=char_line, col=char_col);
         }
 
         // &&
         if (char == 38) {
             lexer_advance(l);
-            if (l.current_char == 38) { lexer_advance(l); return Token(type=TOK_AND, value="&&", line=char_line, col=char_col); }
-            throw_illegal_char(l.pos, "Expected '&' after '&'.");
+            if (l.current_char == 38) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_AND, value="&&", line=char_line, col=char_col); }
+            WhitelangExceptions.throw_illegal_char(l.pos, "Expected '&' after '&'.");
         }
 
         // ||
         if (char == 124) {
             lexer_advance(l);
-            if (l.current_char == 124) { lexer_advance(l); return Token(type=TOK_OR, value="||", line=char_line, col=char_col); }
-            throw_illegal_char(l.pos, "Expected '|' after '|'.");
+            if (l.current_char == 124) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_OR, value="||", line=char_line, col=char_col); }
+            WhitelangExceptions.throw_illegal_char(l.pos, "Expected '|' after '|'.");
         }
 
         // Single char tokens
-        if (char == 40) { lexer_advance(l);  return Token(type=TOK_LPAREN,   value="(", line=char_line, col=char_col); }
-        if (char == 41) { lexer_advance(l);  return Token(type=TOK_RPAREN,   value=")", line=char_line, col=char_col); }
-        if (char == 59) { lexer_advance(l);  return Token(type=TOK_SEMICOLON,value=";", line=char_line, col=char_col); }
-        if (char == 123) { lexer_advance(l); return Token(type=TOK_LBRACE,   value="{", line=char_line, col=char_col); }
-        if (char == 125) { lexer_advance(l); return Token(type=TOK_RBRACE,   value="}", line=char_line, col=char_col); }
-        if (char == 44) { lexer_advance(l);  return Token(type=TOK_COMMA,    value=",", line=char_line, col=char_col); }
-        if (char == 91) { lexer_advance(l); return Token(type=TOK_LBRACKET, value="[", line=char_line, col=char_col); }
-        if (char == 93) { lexer_advance(l); return Token(type=TOK_RBRACKET, value="]", line=char_line, col=char_col); }
+        if (char == 40) { lexer_advance(l);  return WhitelangTokens.Token(type=TOK_LPAREN,   value="(", line=char_line, col=char_col); }
+        if (char == 41) { lexer_advance(l);  return WhitelangTokens.Token(type=TOK_RPAREN,   value=")", line=char_line, col=char_col); }
+        if (char == 59) { lexer_advance(l);  return WhitelangTokens.Token(type=TOK_SEMICOLON,value=";", line=char_line, col=char_col); }
+        if (char == 123) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_LBRACE,   value="{", line=char_line, col=char_col); }
+        if (char == 125) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_RBRACE,   value="}", line=char_line, col=char_col); }
+        if (char == 44) { lexer_advance(l);  return WhitelangTokens.Token(type=TOK_COMMA,    value=",", line=char_line, col=char_col); }
+        if (char == 91) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_LBRACKET, value="[", line=char_line, col=char_col); }
+        if (char == 93) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_RBRACKET, value="]", line=char_line, col=char_col); }
 
-        throw_illegal_char(l.pos, "unknown character '" + char + "'. ");
+        WhitelangExceptions.throw_illegal_char(l.pos, "unknown character '" + char + "'. ");
     }
 
-    return Token(type=TOK_EOF, value="", line=l.pos.ln, col=l.pos.col);
+    return WhitelangTokens.Token(type=TOK_EOF, value="", line=l.pos.ln, col=l.pos.col);
 }

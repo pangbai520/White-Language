@@ -20,6 +20,9 @@ char* to_wl_str(const char* c_str) {
     int* rc = (int*)mem;
     *rc = 0;
     
+    int* type_id = (int*)((char*)mem + 4);
+    *type_id = 5; 
+    
     char* wl_str = (char*)mem + 8;
     strcpy(wl_str, c_str);
     
@@ -62,6 +65,9 @@ char* wl_alloc_string(long long size) {
 
     int* rc = (int*)mem;
     *rc = 0;
+
+    int* type_id = (int*)((char*)mem + 4);
+    *type_id = 5; // TYPE_STRING
 
     char* str = (char*)mem + 8;
     memset(str, 0, size + 1);
