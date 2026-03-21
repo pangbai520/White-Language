@@ -1,7 +1,7 @@
 # White Language
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-red.svg)
-![Version](https://img.shields.io/badge/version-0.1.1-green.svg)
+![Version](https://img.shields.io/github/v/tag/pangbai520/White-Language?label=version&color=green&sort=semver)
 ![Status](https://img.shields.io/badge/status-Bootstrapped-success.svg)
 
 White Language (suffix: `.wl`) is a statically-typed, self-hosted system programming language designed for predictability, clean syntax, and seamless C interoperability. 
@@ -62,10 +62,9 @@ White Language is a passion project and a work in progress. If you are consideri
    * **No Generics**: True generic programming (templates/monomorphization) is severely limited.
    * **No Algebraic Data Types (ADTs)**: There is currently no support for Rust-style `Enum`s or pattern matching.
    * **No Traits/Interfaces**: Polymorphism and interface-based dispatch are not yet implemented.
-3. **Naive AST-to-IR Generation**: The compiler currently translates the Abstract Syntax Tree (AST) directly to Intermediate Representation without advanced middle-end optimization passes. For example, stack allocations (`alloca`) are currently generated inside loop bodies rather than hoisted to the entry block, which can cause stack overflow in extremely deep loops.
-4. **Limited Standard Library**: The standard library (`std`) is still in its infancy. It lacks robust cross-platform abstractions for networking, multithreading, async I/O, and advanced file system operations.
-5. **Basic Error Handling**: White Language does not currently have a robust `try/catch` exception mechanism or Monadic error handling (like `Result<T, E>`). Error management heavily relies on manual checking and C-style return codes.
-6. **No Built-in Package Manager**: There is no equivalent to `cargo` or `npm`. Dependency management relies on physical file paths and environment variables (`WL_PATH`).
+3. **Limited Standard Library**: The standard library (`std`) is still in its infancy. It lacks robust cross-platform abstractions for networking, multithreading, async I/O, and advanced file system operations.
+4. **Basic Error Handling**: White Language does not currently have a robust `try/catch` exception mechanism or Monadic error handling (like `Result<T, E>`). Error management heavily relies on manual checking and C-style return codes.
+5. **No Built-in Package Manager**: There is no equivalent to `cargo` or `npm`. Dependency management relies on physical file paths and environment variables (`WL_PATH`).
 
 ## Tooling & Ecosystem
 
@@ -102,7 +101,7 @@ Test the newly built compiler:
 ./wlc_new --help
 ```
 
-You should see the `White Language Compiler (v0.1.1)` output.
+You should see the `White Language Compiler (v0.1.2)` output.
 
 ## License
 

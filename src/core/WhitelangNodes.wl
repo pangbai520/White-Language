@@ -97,6 +97,7 @@ struct VarDeclareNode(
     type_node    -> Struct,  // Type Name Token
     value        -> Struct, 
     is_const     -> Bool, 
+    alloc_reg    -> String, 
     pos          -> Position    // Error position
 )
 
@@ -308,6 +309,7 @@ struct IndexAssignNode(
 
 struct ImportSymbolNode(
     name_tok -> Token,
+    alias_tok -> Token,
     next     -> Struct
 )
 
@@ -315,5 +317,6 @@ struct ImportNode(
     type       -> Int,    // NODE_IMPORT
     path_tok   -> Token,
     symbols    -> Struct,
+    alias_tok  -> Token,
     pos        -> Position
 )

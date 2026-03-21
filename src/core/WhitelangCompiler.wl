@@ -109,6 +109,7 @@ struct Compiler(
     imported_modules -> HashMap,
     current_package_prefix -> String,
     loaded_packages -> HashMap,
+    loaded_files -> HashMap,
     current_dir -> String,
     curr_func -> FuncInfo,
     expected_type -> Int
@@ -152,6 +153,7 @@ func new_compiler(out_path -> String) -> Compiler {
         imported_modules=map_new(32),
         current_package_prefix = "",
         loaded_packages = map_new(32),
+        loaded_files = map_new(32),
         current_dir = ".",
         curr_func = null,
         expected_type = 0
@@ -703,6 +705,40 @@ func cleanup_all_scopes(c -> Compiler) -> Void {
     }
 }
 
+func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
+    if (node is null) { return; }
+    let base -> BaseNode = node;
+    
+    if (base.type == NODE_BLOCK) {
+        let block -> BlockNode = node;
+        let curr -> StmtListNode = block.stmts;
+        while (curr is !null) {
+            hoist_allocas(c, curr.stmt);
+            curr = curr.next;
+        }
+    } else if (base.type == NODE_IF) {
+        let if_n -> IfNode = node;
+        hoist_allocas(c, if_n.body);
+        hoist_allocas(c, if_n.else_body);
+    } else if (base.type == NODE_WHILE) {
+        let w_n -> WhileNode = node;
+        hoist_allocas(c, w_n.body);
+    } else if (base.type == NODE_FOR) {
+        let f_n -> ForNode = node;
+        hoist_allocas(c, f_n.init);
+        hoist_allocas(c, f_n.body);
+    } else if (base.type == NODE_VAR_DECL) {
+        let v_node -> VarDeclareNode = node;
+        if (c.scope_depth > 0) {
+            let target_type_id -> Int = resolve_type(c, v_node.type_node);
+            let llvm_ty_str -> String = get_llvm_type_str(c, target_type_id);
+            let ptr_reg -> String = next_reg(c);
+            write(c.output_file, c.indent + ptr_reg + " = alloca " + llvm_ty_str + "\n");
+            v_node.alloc_reg = ptr_reg;
+        }
+    }
+}
+
 
 func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
     let header_fmt -> String = "RuntimeError: " + msg + "\n    at Line %d, Column %d\n\n";
@@ -753,13 +789,36 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
         let code_ptr -> String = "getelementptr inbounds ([" + code_len + " x i8], [" + code_len + " x i8]* @.str." + code_id + ", i32 0, i32 0)";
         write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* " + code_ptr + ")\n");
 
+        let err_len -> Int = 1;
+        let line_len -> Int = raw_line.length();
+        if (pos.col < line_len) {
+            let ch -> Int = raw_line[pos.col];
+            if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95) {
+                let cur -> Int = pos.col + 1;
+                while (cur < line_len) {
+                    let c2 -> Int = raw_line[cur];
+                    if ((c2 >= 65 && c2 <= 90) || (c2 >= 97 && c2 <= 122) || c2 == 95 || (c2 >= 48 && c2 <= 57)) {
+                        cur += 1;
+                    } else {
+                        break;
+                    }
+                }
+                err_len = cur - pos.col;
+            }
+        }
+
         let arrow_str -> String = "    ";
         let k -> Int = 0;
         while (k < pos.col) {
             arrow_str += " ";
             k += 1;
         }
-        arrow_str += "^\n";
+        let j -> Int = 0;
+        while (j < err_len) {
+            arrow_str += "^";
+            j += 1;
+        }
+        arrow_str += "\n";
     
         let arrow_id -> Int = c.str_count;
         c.str_count += 1;
@@ -882,40 +941,124 @@ func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> 
     return "";
 }
 
+func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) -> Void {
+    let curr_sym -> ImportSymbolNode = node.symbols;
+    while (curr_sym is !null) {
+        let orig_name -> String = curr_sym.name_tok.value;
+        let target_name -> String = orig_name;
+        
+        if (curr_sym.alias_tok is !null) {
+            let a_tok -> Token = curr_sym.alias_tok;
+            target_name = a_tok.value;
+        }
+
+        let lookup_name -> String = prefix + orig_name;
+
+        if (target_name != lookup_name) {
+            if (map_get(c.func_table, target_name) is !null ||
+                map_get(c.struct_table, target_name) is !null ||
+                map_get(c.global_symbol_table, target_name) is !null) {
+                throw_import_error(node.pos, "Name '" + target_name + "' is already defined. Use 'as' to alias it.");
+            }
+        }
+
+        let found -> Bool = false;
+
+        let f_info -> FuncInfo = map_get(c.func_table, lookup_name);
+        if (f_info is !null) {
+            map_put(c.func_table, target_name, f_info);
+            found = true;
+        }
+
+        let s_info -> StructInfo = map_get(c.struct_table, lookup_name);
+        if (s_info is !null) {
+            map_put(c.struct_table, target_name, s_info);
+            found = true;
+        }
+
+        let g_info -> SymbolInfo = map_get(c.global_symbol_table, lookup_name);
+        if (g_info is !null) {
+            map_put(c.global_symbol_table, target_name, g_info);
+            found = true;
+        }
+
+        if (!found) {
+            throw_import_error(node.pos, "Cannot import '" + orig_name + "': symbol not found in module.");
+        }
+
+        curr_sym = curr_sym.next;
+    }
+}
+
 func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     let raw_path -> String = node.path_tok.value;
     let final_path -> String = resolve_import_path(c, raw_path, node.pos);
 
+    let import_prefix -> String = "";
+    let is_pkg -> Bool = false;
+    if (!raw_path.ends_with(".wl")) {
+        if (final_path.ends_with("/_pkg.wl") || final_path.ends_with("\\_pkg.wl") || final_path.ends_with("\\_pgk.wl")) {
+            import_prefix = raw_path + ".";
+            is_pkg = true;
+        }
+    }
+
     if (map_get(c.imported_modules, final_path) is !null) { 
         if (node.symbols is !null) {
-            throw_import_error(node.pos, "syntax `import ... from ...` is not currently supported.");
+            bind_import_symbols(c, node, import_prefix);
         }
         return; 
     }
-    if (node.symbols is !null) {
-        throw_import_error(node.pos, "syntax `import ... from ...` is not currently supported");
-    }
-    let marker -> StringConstant = StringConstant(id=0, value="imported", next=null);
-    map_put(c.imported_modules, final_path, marker);
 
+    let marker -> StringConstant = StringConstant(id=0, value="imported", next=null);
+
+    if is_pkg {
+        let pkg_mod_name -> String = raw_path;
+        if (node.alias_tok is !null) {
+            pkg_mod_name = node.alias_tok.value;
+        }
+        let pkg_val -> StringConstant = StringConstant(id=0, value=raw_path, next=null);
+        map_put(c.loaded_packages, pkg_mod_name, pkg_val);
+    } else {
+        let file_mod_name -> String = "";
+        if (node.alias_tok is !null) {
+            file_mod_name = node.alias_tok.value;
+        } else {
+            let len -> Int = raw_path.length();
+            let end_idx -> Int = len - 3;
+            let start_idx -> Int = 0;
+            let i -> Int = len - 1;
+            while (i >= 0) {
+                let ch -> Int = raw_path[i];
+                if (ch == 47 || ch == 92) {
+                    start_idx = i + 1;
+                    break;
+                }
+                i -= 1;
+            }
+            file_mod_name = raw_path.slice(start_idx, end_idx);
+        }
+        map_put(c.loaded_files, file_mod_name, marker);
+    }
+
+    if (map_get(c.imported_modules, final_path) is !null) { 
+        if (node.symbols is !null) {
+            bind_import_symbols(c, node, import_prefix);
+        }
+        return; 
+    }
+
+    map_put(c.imported_modules, final_path, marker);
+    
     let old_prefix -> String = c.current_package_prefix;
     let is_package_entry -> Bool = false;
 
     let old_dir -> String = c.current_dir;
     c.current_dir = get_dir_name(final_path);
 
-    if (!raw_path.ends_with(".wl")) {
-        if (final_path.ends_with("/_pkg.wl") || final_path.ends_with("\\_pgk.wl")) {
-            c.current_package_prefix = raw_path + ".";
-            is_package_entry = true;
-            map_put(c.loaded_packages, raw_path, marker);
-
-        } else {
-            c.current_package_prefix = "";
-        }
-    } 
-    else {
-        // pass
+    if is_pkg {
+        c.current_package_prefix = raw_path + ".";
+        is_package_entry = true;
     }
 
     let f -> File = open(final_path, "rb");
@@ -931,6 +1074,10 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
 
     c.current_package_prefix = old_prefix;
     c.current_dir = old_dir;
+
+    if (node.symbols is !null) {
+        bind_import_symbols(c, node, import_prefix);
+    }
 }
 // ==============
 
@@ -1102,12 +1249,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         return void_result();
     }
 
-    let ptr_reg -> String = next_reg(c);
-    // FIXME: Potential STACK OVERFLOW
-    // Current implementation generates 'alloca' inside the loop body
-    // This causes stack space to grow on every iteration
-    // TODO: Move alloca to the function's entry block
-    write(c.output_file, c.indent + ptr_reg + " = alloca " + llvm_ty_str + "\n");
+    let ptr_reg -> String = node.alloc_reg;
     let origin_id -> Int = target_type_id;
 
     if (node.value is !null) {
@@ -1570,6 +1712,8 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         arg_idx += 1;
         curr = curr.next;
     }
+
+    hoist_allocas(c, node.body);
 
     compile_node(c, node.body);
 
@@ -2091,7 +2235,7 @@ func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult
         params_str = params_str + "...";
     }
 
-    map_put(c.func_table, func_name, FuncInfo(ret_type=ret_type_id, arg_types=arg_head, is_varargs=node.is_varargs));
+    map_put(c.func_table, func_name, FuncInfo(name=func_name, ret_type=ret_type_id, arg_types=arg_head, is_varargs=node.is_varargs));
     if (map_get(c.declared_externs, func_name) is null) {
         let ret_llvm -> String = get_llvm_type_str(c, ret_type_id);
         write(c.output_file, "declare " + ret_llvm + " @" + func_name + "(" + params_str + ")\n");
@@ -3222,8 +3366,12 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 let v_node -> VarAccessNode = f_acc.obj;
                 let pkg_name -> String = v_node.name_tok.value;
                 if (find_symbol(c, pkg_name) is null) {
-                    if (map_get(c.loaded_packages, pkg_name) is !null) {
-                        func_name = pkg_name + "." + f_acc.field_name;
+                    let pkg_marker -> StringConstant = map_get(c.loaded_packages, pkg_name);
+                    if (pkg_marker is !null) {
+                        func_name = pkg_marker.value + "." + f_acc.field_name;
+                        is_package_call = true;
+                    } else if (map_get(c.loaded_files, pkg_name) is !null) {
+                        func_name = f_acc.field_name; 
                         is_package_call = true;
                     }
                 }
@@ -3416,14 +3564,14 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             
             if (func_info.ret_type == TYPE_VOID) {
                 if (func_info.is_varargs) {
-                    write(c.output_file, c.indent + "call " + call_prefix + "@" + func_name + "(" + args_str + ")\n");
+                    write(c.output_file, c.indent + "call " + call_prefix + "@" + func_info.name + "(" + args_str + ")\n");
                 } else {
-                    write(c.output_file, c.indent + "call void @" + func_name + "(" + args_str + ")\n");
+                    write(c.output_file, c.indent + "call void @" + func_info.name + "(" + args_str + ")\n");
                 }
                 return void_result();
             } else {
                 call_res_reg = next_reg(c);
-                write(c.output_file, c.indent + call_res_reg + " = call " + call_prefix + "@" + func_name + "(" + args_str + ")\n");
+                write(c.output_file, c.indent + call_res_reg + " = call " + call_prefix + "@" + func_info.name + "(" + args_str + ")\n");
                 return CompileResult(reg=call_res_reg, type=func_info.ret_type);
             }
         }
