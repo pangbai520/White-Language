@@ -59,3 +59,19 @@ func string_ends_with(s -> String, suffix -> String) -> Bool {
     }
     return true;
 }
+
+func string_starts_with(s -> String, prefix -> String) -> Bool {
+    let s_len -> Int = s.length();
+    let pre_len -> Int = prefix.length();
+    
+    if (pre_len > s_len) { return false; }
+    
+    let i -> Int = 0;
+    while (i < pre_len) {
+        if (s[i] != prefix[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}

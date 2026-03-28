@@ -11,10 +11,11 @@ Built from the ground up and fully bootstrapped (the White Language Compiler `wl
 ## Key Features
 
 * **Self-Hosted & Independent**: The compiler has successfully passed the bootstrapping milestone. White Language compiles White Language.
+* **Modern Compiler Architecture**: Under the hood, `wlc` operates on a completely flat, `Vector`-driven Abstract Syntax Tree (AST), ensuring blazing fast compilation times and rock-solid memory safety during the compilation phase.
 * **Predictable Memory Management**: Employs Automatic Reference Counting (ARC) for complex types (`String`, `Struct`, `Vector`) to ensure memory safety without the non-deterministic pauses of a Garbage Collector.
 * **Seamless C Interoperability (FFI)**: Bind to C functions effortlessly with the `extern "C"` syntax. No complex wrappers or boilerplate required.
-* **Modern, Clean Syntax**: Features trailing return types (`-> Type`), straightforward variable declarations (`let`, `const`), and an intuitive module import system.
-* **First-class Pointers**: While ARC handles high-level data, you still have full access to raw memory manipulation using `ptr`, `ref`, and `deref` when performance or hardware interaction demands it.
+* **First-class Pointers**: While ARC handles high-level data, you still have full access to raw memory manipulation using pointers when ultimate performance or hardware interaction is demanded.
+* **Industrial-Grade CLI**: Comes with a standard, Unix-philosophy CLI interface (supporting `-c`, `-S`, `--emit-llvm`, `-O3`, and custom `--ldflags`), making it perfectly suited for modern build systems.
 
 ## A Taste of White Language
 
@@ -64,7 +65,7 @@ White Language is a passion project and a work in progress. If you are consideri
    * **No Traits/Interfaces**: Polymorphism and interface-based dispatch are not yet implemented.
 3. **Limited Standard Library**: The standard library (`std`) is still in its infancy. It lacks robust cross-platform abstractions for networking, multithreading, async I/O, and advanced file system operations.
 4. **Basic Error Handling**: White Language does not currently have a robust `try/catch` exception mechanism or Monadic error handling (like `Result<T, E>`). Error management heavily relies on manual checking and C-style return codes.
-5. **No Built-in Package Manager**: There is no equivalent to `cargo` or `npm`. Dependency management relies on physical file paths and environment variables (`WL_PATH`).
+5. **No Built-in Package Manager (Yet)**: There is no equivalent to `cargo` or `npm`. Dependency management currently relies on physical file paths and environment variables (`WL_PATH`). However, a decentralized package manager WhiteLang Package manager (`wlp`) is on the roadmap.
 
 ## Tooling & Ecosystem
 
@@ -88,10 +89,10 @@ export WL_PATH=/path/to/WhiteLanguage
 Use the existing compiler to compile the `wlc.wl` driver and its core components:
 
 ```bash
-wlc src/wlc.wl wlc_new
+wlc src/wlc.wl -o wlc_new -O3
 ```
 
-*(Use `wlc.exe` on Windows).*
+*(Use `wlc.exe` and `-o wlc_new.exe` on Windows).*
 
 ### 3. Verify Build
 
@@ -101,7 +102,7 @@ Test the newly built compiler:
 ./wlc_new
 ```
 
-You should see the `White Language Compiler (v0.1.3)` output.
+You should see the `White Language Compiler (v0.1.4)` output.
 
 ## License
 

@@ -38,7 +38,7 @@ struct CompilerConfig(
 )
 
 func print_usage() -> Void {
-    builtin.print("White Language Compiler (v0.1.3)");
+    builtin.print("White Language Compiler (v0.1.4)");
     builtin.print("Usage: wlc <source.wl> [options]");
     builtin.print("");
     builtin.print("Options:");

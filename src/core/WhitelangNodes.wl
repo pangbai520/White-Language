@@ -121,7 +121,7 @@ struct StmtListNode(
 
 struct BlockNode(
     type  -> Int,      // NODE_BLOCK
-    stmts -> Struct   // StmtListNode head node
+    stmts -> Vector(Struct)   // StmtListNode head node
 )
 
 struct IfNode(
@@ -161,14 +161,13 @@ struct ForNode(
 struct CallNode(
     type   -> Int,    // NODE_CALL
     callee -> Struct,
-    args   -> Struct,
+    args   -> Vector(Struct),
     pos    -> Position
 )
 
 struct ArgNode(
     val  -> Struct, // expression
-    name -> String,
-    next -> Struct  // next parameter
+    name -> String
 )
 
 struct ParamNode(
@@ -189,7 +188,7 @@ struct ParamListNode(
 struct FunctionDefNode(
     type     -> Int,    // NODE_FUNC_DEF
     name_tok -> Token,
-    params   -> Struct, // ParamListNode
+    params   -> Vector(Struct), // ParamListNode
     ret_type_tok -> Struct,
     body     -> Struct,
     pos      -> Position
@@ -211,7 +210,7 @@ struct FunctionTypeNode(
 struct StructDefNode(
     type     -> Int,    // NODE_STRUCT_DEF
     name_tok -> Token,
-    fields   -> Struct,
+    fields   -> Vector(Struct),
     body     -> Struct,
     pos      -> Position
 )
@@ -266,14 +265,14 @@ struct NullNode(
 
 struct ExternBlockNode(
     type  -> Int, // NODE_EXTERN_BLOCK
-    funcs -> Struct,
+    funcs -> Vector(Struct),
     pos   -> Position
 )
 
 struct ExternFuncNode(
     type         -> Int, // NODE_EXTERN_FUNC
     name_tok     -> Token,
-    params       -> Struct,
+    params       -> Vector(Struct),
     ret_type_tok -> Struct,
     is_varargs   -> Bool,    // 1 if has '...', else 0
     pos          -> Position
@@ -287,7 +286,7 @@ struct VectorTypeNode(
 
 struct VectorLitNode(
     type     -> Int, // NODE_VECTOR_LIT
-    elements -> Struct,
+    elements -> Vector(Struct),
     count    -> Int,
     pos      -> Position
 )
@@ -316,7 +315,7 @@ struct ImportSymbolNode(
 struct ImportNode(
     type       -> Int,    // NODE_IMPORT
     path_tok   -> Token,
-    symbols    -> Struct,
+    symbols    -> Vector(Struct),
     alias_tok  -> Token,
     pos        -> Position
 )

@@ -28,8 +28,7 @@ extern func wl_getenv(name -> String) -> String from "C";
 
 struct GCTracker(
     reg  -> String,
-    type -> Int,
-    next -> Struct
+    type -> Int
 )
 
 struct CompileResult(
@@ -48,38 +47,35 @@ struct SymbolInfo(
 struct FuncInfo(
     name     -> String,
     ret_type -> Int, 
-    arg_types -> Struct,
+    arg_types -> Vector(Struct),
     is_varargs -> Bool
 )
 
 struct TypeListNode(
-    type -> Int,
-    next -> Struct
+    type -> Int
 )
 
 struct Scope(
     table  -> HashMap, // symbol table of the current level
     parent -> Struct,  // parent scope or null
-    gc_vars -> Struct
+    gc_vars -> Vector(Struct)
 )
 
 struct StringConstant(
     id    -> Int,
-    value -> String,
-    next  -> Struct
+    value -> String
 )
 
 struct FieldInfo(
     name      -> String,
     type      -> Int,
     llvm_type -> String,
-    offset    -> Int,   // for getelementptr
-    next      -> Struct 
+    offset    -> Int   // for getelementptr
 )
 struct StructInfo(
     name      -> String,
     type_id   -> Int,
-    fields    -> Struct,
+    fields    -> Vector(Struct),
     llvm_name -> String,
     init_body -> Struct
 )
@@ -97,7 +93,7 @@ struct Compiler(
     scope_depth  -> Int,
     has_main     -> Bool,
     current_ret_type -> Int,
-    string_list -> Struct,
+    string_list -> Vector(Struct),
     str_count   -> Int,
     type_counter -> Int, // custom type
     ptr_cache -> HashMap,       // Key: "ptr_ID", Value: SymbolInfo(reg="", type=ptr_id)
@@ -113,7 +109,7 @@ struct Compiler(
     current_dir -> String,
     curr_func -> FuncInfo,
     expected_type -> Int,
-    type_drop_list -> Struct
+    type_drop_list -> Vector(Struct)
 )
 
 
@@ -127,7 +123,7 @@ struct LoopScope(
 func new_compiler(out_path -> String) -> Compiler {
     let f -> File = file_io.open(out_path, "w");
     // initialize empty scope
-    let root_scope -> Scope = Scope(table=map_new(32), parent=null, gc_vars=null);
+    let root_scope -> Scope = Scope(table=map_new(32), parent=null, gc_vars=[]);
 
     return Compiler(
         output_file = f,
@@ -142,7 +138,7 @@ func new_compiler(out_path -> String) -> Compiler {
         scope_depth = 0,
         has_main = false,
         current_ret_type = TYPE_VOID,
-        string_list = null,
+        string_list = [],
         str_count = 0,
         type_counter = 100,
         ptr_cache=map_new(32),
@@ -158,7 +154,7 @@ func new_compiler(out_path -> String) -> Compiler {
         current_dir = ".",
         curr_func = null,
         expected_type = 0,
-        type_drop_list = null
+        type_drop_list = []
     );
 }
 
@@ -351,21 +347,23 @@ func string_escape(s -> String) -> String {
 
 func find_field(s_info -> StructInfo, name -> String) -> FieldInfo {
     if (s_info is null) { return null; }
-    let curr -> FieldInfo = s_info.fields;
-    while (curr is !null) {
+    let fields -> Vector(Struct) = s_info.fields;
+    let len -> Int = 0; if (fields is !null) { len = fields.length(); }
+    let i -> Int = 0;
+    while (i < len) {
+        let curr -> FieldInfo = fields[i];
         if (curr.name == name) { return curr; }
-        curr = curr.next;
+        i += 1;
     }
     return null;
 }
 
 func get_field_by_index(s_info -> StructInfo, index -> Int) -> FieldInfo {
-    let curr -> FieldInfo = s_info.fields;
-    let i -> Int = 0;
-    while (curr is !null) {
-        if (i == index) { return curr; }
-        curr = curr.next;
-        i += 1;
+    if (s_info is null) { return null; }
+    let fields -> Vector(Struct) = s_info.fields;
+    let len -> Int = 0; if (fields is !null) { len = fields.length(); }
+    if (index >= 0 && index < len) {
+        return fields[index];
     }
     return null;
 }
@@ -413,7 +411,7 @@ func get_vector_type_id(c -> Compiler, base_id -> Int) -> Int {
     if (cached is !null) { return cached.type; }
     
     let new_id -> Int = c.type_counter;
-    c.type_drop_list = TypeListNode(type=new_id, next=c.type_drop_list);
+    c.type_drop_list.append(TypeListNode(type=new_id));
     c.type_counter += 1;
 
     map_put(c.vector_cache, key, SymbolInfo(reg="", type=new_id, origin_type=0));
@@ -618,17 +616,19 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
 func get_func_sig_str(c -> Compiler, info -> FuncInfo) -> String {
     let ret_str -> String = get_llvm_type_str(c, info.ret_type);
     let args_str -> String = "";
-    let curr -> TypeListNode = info.arg_types;
-    let first -> Bool = true;
-    while (curr is !null) {
-        if (!first) { args_str = args_str + ", "; }
+    let arg_types -> Vector(Struct) = info.arg_types;
+    let len -> Int = 0; if (arg_types is !null) { len = arg_types.length(); }
+    let i -> Int = 0;
+    
+    while (i < len) {
+        let curr -> TypeListNode = arg_types[i];
+        if (i > 0) { args_str = args_str + ", "; }
         args_str += get_llvm_type_str(c, curr.type);
-        first = false;
-        curr = curr.next;
+        i += 1;
     }
 
     if (info.is_varargs) {
-        if (!first) { args_str = args_str + ", ..."; }
+        if (len > 0) { args_str = args_str + ", ..."; }
         else { args_str = "..."; }
     }
     
@@ -638,22 +638,23 @@ func get_func_sig_str(c -> Compiler, info -> FuncInfo) -> String {
 
 // === SCOPE ===
 func enter_scope(c -> Compiler) -> Void {
-    let new_scope -> Scope = Scope(table=map_new(32), parent=c.symbol_table, gc_vars=null);
+    let new_scope -> Scope = Scope(table=map_new(32), parent=c.symbol_table, gc_vars=[]);
     c.symbol_table = new_scope;
     c.scope_depth += 1;
 }
 func exit_scope(c -> Compiler) -> Void {
     let curr_scope -> Scope = c.symbol_table;
-    let curr_gc -> GCTracker = curr_scope.gc_vars;
-    
-    while (curr_gc is !null) {
+
+    let gc_vec -> Vector(Struct) = curr_scope.gc_vars;
+    let gc_len -> Int = 0; if (gc_vec is !null) { gc_len = gc_vec.length(); }
+    let gc_idx -> Int = 0;
+    while (gc_idx < gc_len) {
+        let curr_gc -> GCTracker = gc_vec[gc_idx];
         let ty_str -> String = get_llvm_type_str(c, curr_gc.type);
         let val_reg -> String = next_reg(c);
-        file_io.write(c.output_file, c.indent + val_reg + " = load " + ty_str + ", " + ty_str + "* " + curr_gc.reg + "\n");
-
+        write(c.output_file, c.indent + val_reg + " = load " + ty_str + ", " + ty_str + "* " + curr_gc.reg + "\n");
         emit_release(c, val_reg, curr_gc.type);
-        
-        curr_gc = curr_gc.next;
+        gc_idx += 1;
     }
 
     if (c.symbol_table.parent is !null) {
@@ -686,6 +687,10 @@ func emit_retain(c -> Compiler, reg -> String, type_id -> Int) -> Void {
     // cast to i8* for the runtime function
     let cast_reg -> String = next_reg(c);
     let src_ty -> String = get_llvm_type_str(c, type_id);
+    if (src_ty == "i8*") {
+        file_io.write(c.output_file, c.indent + "call void @__wl_retain(i8* " + reg + ")\n");
+        return;
+    }
     file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + reg + " to i8*\n");
     file_io.write(c.output_file, c.indent + "call void @__wl_retain(i8* " + cast_reg + ")\n");
 }
@@ -695,6 +700,10 @@ func emit_release(c -> Compiler, reg -> String, type_id -> Int) -> Void {
 
     let cast_reg -> String = next_reg(c);
     let src_ty -> String = get_llvm_type_str(c, type_id);
+    if (src_ty == "i8*") {
+        file_io.write(c.output_file, c.indent + "call void @__wl_release(i8* " + reg + ")\n");
+        return;
+    }
     file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + reg + " to i8*\n");
     file_io.write(c.output_file, c.indent + "call void @__wl_release(i8* " + cast_reg + ")\n");
 }
@@ -702,28 +711,34 @@ func emit_release(c -> Compiler, reg -> String, type_id -> Int) -> Void {
 func cleanup_all_scopes(c -> Compiler) -> Void {
     let curr -> Scope = c.symbol_table;
     while (curr is !null) { 
-        let gc_node -> GCTracker = curr.gc_vars;
-        while (gc_node is !null) {
+        let gc_vec -> Vector(Struct) = curr.gc_vars;
+        let gc_len -> Int = 0; if (gc_vec is !null) { gc_len = gc_vec.length(); }
+        let gc_idx -> Int = 0;
+        while (gc_idx < gc_len) {
+            let gc_node -> GCTracker = gc_vec[gc_idx];
             let ty_str -> String = get_llvm_type_str(c, gc_node.type);
             let val_reg -> String = next_reg(c);
-            file_io.write(c.output_file, c.indent + val_reg + " = load " + ty_str + ", " + ty_str + "* " + gc_node.reg + "\n");
+            write(c.output_file, c.indent + val_reg + " = load " + ty_str + ", " + ty_str + "* " + gc_node.reg + "\n");
             emit_release(c, val_reg, gc_node.type);
-            gc_node = gc_node.next;
+            gc_idx += 1;
         }
         curr = curr.parent;
     }
 }
 
 func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
-    if (node is null) { return; }
+    if (node is null) { return;
+    }
     let base -> BaseNode = node;
-    
     if (base.type == NODE_BLOCK) {
         let block -> BlockNode = node;
-        let curr -> StmtListNode = block.stmts;
-        while (curr is !null) {
-            hoist_allocas(c, curr.stmt);
-            curr = curr.next;
+        let stmts -> Vector(Struct) = block.stmts;
+        let len -> Int = 0;
+        if (stmts is !null) { len = stmts.length(); }
+        let i -> Int = 0;
+        while (i < len) {
+            hoist_allocas(c, stmts[i]);
+            i += 1;
         }
     } else if (base.type == NODE_IF) {
         let if_n -> IfNode = node;
@@ -754,8 +769,7 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
 
     let header_id -> Int = c.str_count;
     c.str_count += 1;
-    let header_const -> StringConstant = StringConstant(id=header_id, value=header_fmt, next=c.string_list);
-    c.string_list = header_const;
+    c.string_list.append(StringConstant(id=header_id, value=header_fmt));
 
     let header_len -> Int = header_fmt.length() + 1;
 
@@ -790,8 +804,7 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
     
         let code_id -> Int = c.str_count;
         c.str_count += 1;
-        let code_const -> StringConstant = StringConstant(id=code_id, value=code_content, next=c.string_list);
-        c.string_list = code_const;
+        c.string_list.append(StringConstant(id=code_id, value=code_content));
     
         let code_len -> Int = code_content.length() + 1;
         
@@ -831,8 +844,7 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
     
         let arrow_id -> Int = c.str_count;
         c.str_count += 1;
-        let arrow_const -> StringConstant = StringConstant(id=arrow_id, value=arrow_str, next=c.string_list);
-        c.string_list = arrow_const;
+        c.string_list.append(StringConstant(id=arrow_id, value=arrow_str));
     
         let arrow_len -> Int = arrow_str.length() + 1;
         
@@ -885,10 +897,14 @@ func compile_arc_hooks(c -> Compiler) -> Void {
     
     // switch routing for deep drop
     file_io.write(c.output_file, "  switch i32 %type_id, label %free_default [\n");
-    let curr_drop -> TypeListNode = c.type_drop_list;
-    while (curr_drop is !null) {
+
+    let drop_list -> Vector(Struct) = c.type_drop_list;
+    let d_len -> Int = 0; if (drop_list is !null) { d_len = drop_list.length(); }
+    let d_idx -> Int = 0;
+    while (d_idx < d_len) {
+        let curr_drop -> TypeListNode = drop_list[d_idx];
         file_io.write(c.output_file, "    i32 " + curr_drop.type + ", label %drop_" + curr_drop.type + "\n");
-        curr_drop = curr_drop.next;
+        d_idx += 1;
     }
     file_io.write(c.output_file, "  ]\n");
 
@@ -898,8 +914,9 @@ func compile_arc_hooks(c -> Compiler) -> Void {
     file_io.write(c.output_file, "  br label %done\n");
 
     // generate drop blocks for complex types
-    curr_drop = c.type_drop_list;
-    while (curr_drop is !null) {
+    d_idx = 0;
+    while (d_idx < d_len) {
+        let curr_drop -> TypeListNode = drop_list[d_idx];
         let t_id -> Int = curr_drop.type;
         file_io.write(c.output_file, "\ndrop_" + t_id + ":\n");
         
@@ -933,9 +950,7 @@ func compile_arc_hooks(c -> Compiler) -> Void {
                 file_io.write(c.output_file, "  %slot_" + t_id + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* %data_ptr_" + t_id + ", i64 %curr_idx_" + t_id + "\n");
                 file_io.write(c.output_file, "  %elem_" + t_id + " = load " + elem_ty_str + ", " + elem_ty_str + "* %slot_" + t_id + "\n");
                 
-                let elem_i8 -> String = "%elem_i8_" + t_id;
-                file_io.write(c.output_file, "  " + elem_i8 + " = bitcast " + elem_ty_str + " %elem_" + t_id + " to i8*\n");
-                file_io.write(c.output_file, "  call void @__wl_release(i8* " + elem_i8 + ")\n");
+                emit_release(c, "%elem_" + t_id, v_info.type);
 
                 file_io.write(c.output_file, "  %next_idx_" + t_id + " = add i64 %curr_idx_" + t_id + ", 1\n");
                 file_io.write(c.output_file, "  store i64 %next_idx_" + t_id + ", i64* %idx_ptr_" + t_id + "\n");
@@ -956,23 +971,26 @@ func compile_arc_hooks(c -> Compiler) -> Void {
             if (s_info is !null) {
                 // Struct: release each ref field
                 file_io.write(c.output_file, "  %struct_cast_" + t_id + " = bitcast i8* %ptr to " + s_info.llvm_name + "*\n");
-                let f_curr -> FieldInfo = s_info.fields;
-                while (f_curr is !null) {
+
+                let fields_vec -> Vector(Struct) = s_info.fields;
+                let f_len -> Int = 0; if (fields_vec is !null) { f_len = fields_vec.length(); }
+                let f_idx -> Int = 0;
+                
+                while (f_idx < f_len) {
+                    let f_curr -> FieldInfo = fields_vec[f_idx];
                     if (is_ref_type(c, f_curr.type)) {
                         file_io.write(c.output_file, "  %f_ptr_" + t_id + "_" + f_curr.offset + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* %struct_cast_" + t_id + ", i32 0, i32 " + f_curr.offset + "\n");
                         file_io.write(c.output_file, "  %f_val_" + t_id + "_" + f_curr.offset + " = load " + f_curr.llvm_type + ", " + f_curr.llvm_type + "* %f_ptr_" + t_id + "_" + f_curr.offset + "\n");
-                        let f_val_i8 -> String = "%f_val_i8_" + t_id + "_" + f_curr.offset;
-                        file_io.write(c.output_file, "  " + f_val_i8 + " = bitcast " + f_curr.llvm_type + " %f_val_" + t_id + "_" + f_curr.offset + " to i8*\n");
-                        file_io.write(c.output_file, "  call void @__wl_release(i8* " + f_val_i8 + ")\n");
+                        emit_release(c, "%f_val_" + t_id + "_" + f_curr.offset, f_curr.type);
                     }
-                    f_curr = f_curr.next;
+                    f_idx += 1;
                 }
                 file_io.write(c.output_file, "  br label %free_default\n");
             } else {
                 file_io.write(c.output_file, "  br label %free_default\n");
             }
         }
-        curr_drop = curr_drop.next;
+        d_idx += 1;
     }
 
     file_io.write(c.output_file, "done:\n");
@@ -983,13 +1001,14 @@ func compile_arc_hooks(c -> Compiler) -> Void {
 func compile_ast(c -> Compiler, node -> Struct) -> Void {
     pre_register_structs(c, node);
     pre_register_funcs(c, node);
-
     let block -> BlockNode = node;
-    let curr -> StmtListNode = block.stmts;
-    
-    while (curr is !null) {
-        compile_node(c, curr.stmt);
-        curr = curr.next;
+    let stmts -> Vector(Struct) = block.stmts;
+    let len -> Int = 0;
+    if (stmts is !null) { len = stmts.length(); }
+    let i -> Int = 0;
+    while (i < len) {
+        compile_node(c, stmts[i]);
+        i += 1;
     }
 }
 
@@ -1046,8 +1065,11 @@ func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> 
 }
 
 func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) -> Void {
-    let curr_sym -> ImportSymbolNode = node.symbols;
-    while (curr_sym is !null) {
+    let symbols -> Vector(Struct) = node.symbols;
+    let s_len -> Int = 0; if (symbols is !null) { s_len = symbols.length(); }
+    let i -> Int = 0;
+    while (i < s_len) {
+        let curr_sym -> ImportSymbolNode = symbols[i];
         let orig_name -> String = curr_sym.name_tok.value;
         let target_name -> String = orig_name;
         
@@ -1057,7 +1079,6 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
         }
 
         let lookup_name -> String = prefix + orig_name;
-
         if (target_name != lookup_name) {
             if (map_get(c.func_table, target_name) is !null ||
                 map_get(c.struct_table, target_name) is !null ||
@@ -1090,7 +1111,7 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
             WhitelangExceptions.throw_import_error(node.pos, "Cannot import '" + orig_name + "': symbol not found in module.");
         }
 
-        curr_sym = curr_sym.next;
+        i += 1;
     }
 }
 
@@ -1114,14 +1135,14 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
         return; 
     }
 
-    let marker -> StringConstant = StringConstant(id=0, value="imported", next=null);
+    let marker -> StringConstant = StringConstant(id=0, value="imported");
 
     if is_pkg {
         let pkg_mod_name -> String = raw_path;
         if (node.alias_tok is !null) {
             pkg_mod_name = node.alias_tok.value;
         }
-        let pkg_val -> StringConstant = StringConstant(id=0, value=raw_path, next=null);
+        let pkg_val -> StringConstant = StringConstant(id=0, value=raw_path);
         map_put(c.loaded_packages, pkg_mod_name, pkg_val);
     } else {
         let file_mod_name -> String = "";
@@ -1187,14 +1208,17 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     }
 }
 // ==============
-
 func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
     let block -> BlockNode = node;
-    let curr -> StmtListNode = block.stmts;
-    while (curr is !null) {
-        let base -> BaseNode = curr.stmt;
+    let stmts -> Vector(Struct) = block.stmts;
+    let len -> Int = 0;
+    if (stmts is !null) { len = stmts.length(); }
+    let i -> Int = 0;
+    
+    while (i < len) {
+        let base -> BaseNode = stmts[i];
         if (base.type == NODE_STRUCT_DEF) {
-            let n -> StructDefNode = curr.stmt;
+            let n -> StructDefNode = stmts[i];
             let s_name -> String = n.name_tok.value;
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
@@ -1205,20 +1229,23 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 llvm_name = "%struct." + s_name,
                 init_body = n.body
             );
-
             map_put(c.struct_table, s_name, info);
-            map_put(c.struct_id_map, "" + new_id, info); 
+            map_put(c.struct_id_map, "" + new_id, info);
         }
-        curr = curr.next;
+        i += 1;
     }
 }
 func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
     let block -> BlockNode = node;
-    let curr -> StmtListNode = block.stmts;
-    while (curr is !null) {
-        let base -> BaseNode = curr.stmt;
+    let stmts -> Vector(Struct) = block.stmts;
+    let len -> Int = 0;
+    if (stmts is !null) { len = stmts.length(); }
+    let i -> Int = 0;
+    
+    while (i < len) {
+        let base -> BaseNode = stmts[i];
         if (base.type == NODE_FUNC_DEF) {
-            let f_node -> FunctionDefNode = curr.stmt;
+            let f_node -> FunctionDefNode = stmts[i];
             let raw_name -> String = f_node.name_tok.value;
             let func_name -> String = raw_name;
             if (raw_name != "main") {
@@ -1230,24 +1257,23 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
             }
             
             let ret_type_id -> Int = resolve_type(c, f_node.ret_type_tok);
-            let arg_types_head -> TypeListNode = null;
-            let arg_types_curr -> TypeListNode = null;
-            let curr_p -> ParamListNode = f_node.params;
+            let arg_types -> Vector(Struct) = [];
             
-            while (curr_p is !null) {
-                let p -> ParamNode = curr_p.param;
+            let params -> Vector(Struct) = f_node.params;
+            let p_len -> Int = 0; if (params is !null) { p_len = params.length(); }
+            let p_idx -> Int = 0;
+            
+            while (p_idx < p_len) {
+                let p -> ParamNode = params[p_idx];
                 let p_id -> Int = resolve_type(c, p.type_tok);
-                let t_node -> TypeListNode = TypeListNode(type=p_id, next=null);
-                
-                if (arg_types_head is null) { arg_types_head = t_node; arg_types_curr = t_node; }
-                else { arg_types_curr.next = t_node; arg_types_curr = t_node; }
-                curr_p = curr_p.next;
+                arg_types.append(TypeListNode(type=p_id));
+                p_idx += 1;
             }
             
-            let f_info -> FuncInfo = FuncInfo(name=func_name, ret_type=ret_type_id, arg_types=arg_types_head, is_varargs=false);
+            let f_info -> FuncInfo = FuncInfo(name=func_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=false);
             map_put(c.func_table, func_name, f_info);
         }
-        curr = curr.next;
+        i += 1;
     }
 }
 
@@ -1262,22 +1288,27 @@ func compile_block(c -> Compiler, node -> BlockNode) -> CompileResult {
         enter_scope(c);
     }
     
-    let curr -> StmtListNode = node.stmts;
+    let stmts -> Vector(Struct) = node.stmts;
+    let len -> Int = 0;
+    if (stmts is !null) { len = stmts.length(); }
+    let i -> Int = 0;
+    
     let last_res -> CompileResult = null;
     let terminated -> Bool = false;
-    while (curr is !null) {
-        let stmt -> BaseNode = curr.stmt;
-
+    while (i < len) {
+        let stmt -> BaseNode = stmts[i];
         if (stmt.type == NODE_RETURN) { terminated = true; }
-        if (stmt.type == NODE_BREAK) { terminated = true; }
-        if (stmt.type == NODE_CONTINUE) { terminated = true; }
+        if (stmt.type == NODE_BREAK) { terminated = true;
+        }
+        if (stmt.type == NODE_CONTINUE) { terminated = true;
+        }
 
-        last_res = compile_node(c, curr.stmt);
+        last_res = compile_node(c, stmts[i]);
         if (stmt.type == NODE_RETURN || stmt.type == NODE_BREAK || stmt.type == NODE_CONTINUE) { 
-            terminated = true; 
+            terminated = true;
             break;
         }
-        curr = curr.next;
+        i += 1;
     }
     
     if (!is_root) {
@@ -1313,8 +1344,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 let s_val -> String = s_node.tok.value;
                 let s_id -> Int = c.str_count;
                 c.str_count += 1;
-                let new_str -> StringConstant = StringConstant(id=s_id, value=s_val, next=c.string_list);
-                c.string_list = new_str;
+                c.string_list.append(StringConstant(id=s_id, value=s_val));
 
                 let len -> Int = s_val.length() + 1;
                 init_val_str = "getelementptr inbounds ([" + len + " x i8], [" + len + " x i8]* @.str." + s_id + ", i32 0, i32 0)";
@@ -1475,12 +1505,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
 
     if (c.scope_depth > 0) {
         if (is_ref_type(c, target_type_id)) {
-            let new_gc_node -> GCTracker = GCTracker(
-                reg = ptr_reg,
-                type = target_type_id,
-                next = curr_scope.gc_vars
-            );
-            curr_scope.gc_vars = new_gc_node;
+            curr_scope.gc_vars.append(GCTracker(reg = ptr_reg, type = target_type_id));
         }
     }
 
@@ -1548,18 +1573,18 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
             }
         }
         if (val_res.type == TYPE_GENERIC_STRUCT && info.type >= 100) {
-             if (map_get(c.struct_id_map, "" + info.type) is !null) {
-                let cast_reg -> String = next_reg(c);
-                let dest_ty -> String = get_llvm_type_str(c, info.type);
-                file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + val_res.reg + " to " + dest_ty + "\n");
-                val_res.reg = cast_reg;
-                val_res.type = info.type;
-             }
+            if (map_get(c.struct_id_map, "" + info.type) is !null || map_get(c.vector_base_map, "" + info.type) is !null) {
+            let cast_reg -> String = next_reg(c);
+            let dest_ty -> String = get_llvm_type_str(c, info.type);
+            file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + val_res.reg + " to " + dest_ty + "\n");
+            val_res.reg = cast_reg;
+            val_res.type = info.type;
+            }
         }
         if (val_res.type == TYPE_GENERIC_FUNCTION && info.type >= 100) {
-             if (map_get(c.func_ret_map, "" + info.type) is !null) {
-                val_res.type = info.type;
-             }
+            if (map_get(c.func_ret_map, "" + info.type) is !null) {
+            val_res.type = info.type;
+            }
         }
         if (info.type != val_res.type) {
             WhitelangExceptions.throw_type_error(node.pos, "Type mismatch in assignment.");
@@ -1777,39 +1802,38 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     c.current_ret_type = ret_type_id;
 
     let params_str -> String = "";
-    let curr -> ParamListNode = node.params;
+    let params -> Vector(Struct) = node.params;
+    let p_len -> Int = 0;
+    if (params is !null) { p_len = params.length(); }
     let arg_idx -> Int = 0;
     
-    while (curr is !null) {
-        let p -> ParamNode = curr.param;
+    while (arg_idx < p_len) {
+        let p -> ParamNode = params[arg_idx];
         let p_type_id -> Int = resolve_type(c, p.type_tok);
         let p_llvm_type -> String = get_llvm_type_str(c, p_type_id);
-        
-        if (arg_idx > 0) { params_str = params_str + ", "; }
+        if (arg_idx > 0) { params_str = params_str + ", ";
+        }
         params_str += p_llvm_type + " %arg" + arg_idx;
         
         arg_idx += 1;
-        curr = curr.next;
     }
 
     file_io.write(c.output_file, "define " + llvm_ret_type + " @" + func_name + "(" + params_str + ") {\n");
     file_io.write(c.output_file, "entry:\n");
 
     let old_sym -> Scope = c.symbol_table;
-    c.symbol_table = Scope(table=map_new(32), parent=null, gc_vars=null);
+    c.symbol_table = Scope(table=map_new(32), parent=null, gc_vars=[]);
     
     c.reg_count = 0; 
     c.scope_depth = 1;
     c.curr_func = f_info;
-    curr = node.params;
     arg_idx = 0;
-    while (curr is !null) {
-        let p -> ParamNode = curr.param;
+    while (arg_idx < p_len) {
+        let p -> ParamNode = params[arg_idx];
         let p_name -> String = p.name_tok.value;
         
         let target_type_id -> Int = resolve_type(c, p.type_tok);
         let llvm_ty -> String = get_llvm_type_str(c, target_type_id);
-        
         let addr_reg -> String = next_reg(c); 
         file_io.write(c.output_file, c.indent + addr_reg + " = alloca " + llvm_ty + "\n");
         file_io.write(c.output_file, c.indent + "store " + llvm_ty + " %arg" + arg_idx + ", " + llvm_ty + "* " + addr_reg + "\n");
@@ -1817,7 +1841,6 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         map_put(curr_scope.table, p_name, SymbolInfo(reg=addr_reg, type=target_type_id, origin_type=target_type_id));
         
         arg_idx += 1;
-        curr = curr.next;
     }
 
     hoist_allocas(c, node.body);
@@ -1825,12 +1848,14 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     compile_node(c, node.body);
 
     let block -> BlockNode = node.body;
-    let stmt_curr -> StmtListNode = block.stmts;
+    let stmts -> Vector(Struct) = block.stmts;
     let last_stmt -> Struct = null;
     
-    while (stmt_curr is !null) {
-        last_stmt = stmt_curr.stmt;
-        stmt_curr = stmt_curr.next;
+    if (stmts is !null) {
+        let len -> Int = stmts.length();
+        if (len > 0) {
+            last_stmt = stmts[len - 1];
+        }
     }
 
     let has_term -> Bool = false;
@@ -1869,7 +1894,10 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
             WhitelangExceptions.throw_type_error(node.pos, "Void function cannot return a value. ");
         }
 
+        c.expected_type = c.current_ret_type;
         let res -> CompileResult = compile_node(c, node.value);
+        c.expected_type = 0;
+
         let ret_val_reg -> String = res.reg;
         let target_ty -> String = get_llvm_type_str(c, c.current_ret_type);
 
@@ -1883,7 +1911,7 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
         }
 
         if (res.type == TYPE_GENERIC_STRUCT && c.current_ret_type >= 100) {
-            if (map_get(c.struct_id_map, "" + c.current_ret_type) is !null) {
+            if (map_get(c.struct_id_map, "" + c.current_ret_type) is !null || map_get(c.vector_base_map, "" + c.current_ret_type) is !null) {
                 let cast_reg -> String = next_reg(c);
                 let dest_ty -> String = get_llvm_type_str(c, c.current_ret_type);
                 file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + res.reg + " to " + dest_ty + "\n");
@@ -1978,30 +2006,26 @@ func compile_struct_def(c -> Compiler, node -> StructDefNode) -> CompileResult {
     }
 
     let llvm_body -> String = "";
-    let field_head -> FieldInfo = null;
-    let field_curr -> FieldInfo = null;
-    let curr_field_node -> ParamListNode = node.fields; 
+    let fields_vec -> Vector(Struct) = [];
+    
+    let fields -> Vector(Struct) = node.fields;
+    let f_len -> Int = 0; if (fields is !null) { f_len = fields.length(); }
     let idx -> Int = 0;
     
-    while (curr_field_node is !null) {
-        let p -> ParamNode = curr_field_node.param;
+    while (idx < f_len) {
+        let p -> ParamNode = fields[idx];
         let f_name -> String = p.name_tok.value;
         
         let f_type_id -> Int = resolve_type(c, p.type_tok);
         let f_llvm_type -> String = get_llvm_type_str(c, f_type_id);
-
         if (idx > 0) { llvm_body = llvm_body + ", "; }
         llvm_body += f_llvm_type;
         
-        let new_field -> FieldInfo = FieldInfo(name=f_name, type=f_type_id, llvm_type=f_llvm_type, offset=idx, next=null);
-        if (field_head is null) { field_head = new_field; field_curr = new_field; }
-        else { field_curr.next = new_field; field_curr = new_field; }
-        
+        fields_vec.append(FieldInfo(name=f_name, type=f_type_id, llvm_type=f_llvm_type, offset=idx));
         idx += 1;
-        curr_field_node = curr_field_node.next;
     }
 
-    info.fields = field_head;
+    info.fields = fields_vec;
 
     // %struct.Test = type { i32, i32 }
     let def_str -> String = info.llvm_name + " = type { " + llvm_body + " }\n\n";
@@ -2042,18 +2066,22 @@ func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode
     let obj_ptr -> String = next_reg(c);
     file_io.write(c.output_file, c.indent + obj_ptr + " = bitcast i8* " + user_ptr_i8 + " to " + s_info.llvm_name + "*\n");
 
-    let f_curr -> FieldInfo = s_info.fields;
-    while (f_curr is !null) {
+    let fields_vec -> Vector(Struct) = s_info.fields;
+    let f_len -> Int = 0;
+    if (fields_vec is !null) { f_len = fields_vec.length(); }
+    let f_idx -> Int = 0;
+    
+    while (f_idx < f_len) {
+        let f_curr -> FieldInfo = fields_vec[f_idx];
         let f_ptr -> String = next_reg(c);
         file_io.write(c.output_file, c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_ptr + ", i32 0, i32 " + f_curr.offset + "\n");
-        
         let zero_val -> String = "0";
         if (f_curr.type == TYPE_FLOAT) { zero_val = "0.0"; }
         else if (f_curr.type == TYPE_STRING || f_curr.type >= 100 || f_curr.type == TYPE_GENERIC_STRUCT || f_curr.type == TYPE_GENERIC_FUNCTION) { zero_val = "null"; }
         
         file_io.write(c.output_file, c.indent + "store " + f_curr.llvm_type + " " + zero_val + ", " + f_curr.llvm_type + "* " + f_ptr + "\n");
-
-        f_curr = f_curr.next;
+        
+        f_idx += 1;
     }
 
     if (s_info.init_body is !null) {
@@ -2068,13 +2096,21 @@ func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode
         exit_scope(c);
     }
 
-    let arg_curr -> ArgNode = n_call.args;
+    let args -> Vector(Struct) = n_call.args;
+    let a_len -> Int = 0;
+    if (args is !null) { a_len = args.length(); }
     let arg_idx -> Int = 0;
-    while (arg_curr is !null) {
-        let val_res -> CompileResult = compile_node(c, arg_curr.val);
+    
+    while (arg_idx < a_len) {
+        let arg_curr -> ArgNode = args[arg_idx];
+
         let target_f -> FieldInfo = null;
         if (arg_curr.name is !null) { target_f = find_field(s_info, arg_curr.name); } 
         else { target_f = get_field_by_index(s_info, arg_idx); }
+
+        if (target_f is !null) { c.expected_type = target_f.type; }
+        let val_res -> CompileResult = compile_node(c, arg_curr.val);
+        c.expected_type = 0;
 
         if (target_f is !null) {
             if (val_res.type == TYPE_NULL) {/*...*/}
@@ -2092,7 +2128,27 @@ func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode
                 file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to i8*\n");
                 val_res.reg = cast_reg;
                 val_res.type = TYPE_GENERIC_STRUCT;
-
+            }
+            if (val_res.type == TYPE_GENERIC_STRUCT && target_f.type >= 100) {
+                if (map_get(c.struct_id_map, "" + target_f.type) is !null || map_get(c.vector_base_map, "" + target_f.type) is !null) {
+                    let cast_reg -> String = next_reg(c);
+                    let dest_ty -> String = get_llvm_type_str(c, target_f.type);
+                    file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + val_res.reg + " to " + dest_ty + "\n");
+                    val_res.reg = cast_reg;
+                    val_res.type = target_f.type;
+                }
+            }
+            if (is_pointer_type(c, target_f.type) && is_pointer_type(c, val_res.type) && target_f.type != val_res.type) {
+                if (is_void_ptr(c, target_f.type) || is_void_ptr(c, val_res.type)) {
+                    let cast_reg -> String = next_reg(c);
+                    let dest_ty -> String = get_llvm_type_str(c, target_f.type);
+                    let src_ty -> String = get_llvm_type_str(c, val_res.type);
+                    if (dest_ty != src_ty) {
+                        file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to " + dest_ty + "\n");
+                        val_res.reg = cast_reg;
+                    }
+                    val_res.type = target_f.type;
+                }
             }
             
             let f_ptr -> String = next_reg(c);
@@ -2102,7 +2158,6 @@ func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode
             }
             file_io.write(c.output_file, c.indent + "store " + target_f.llvm_type + " " + val_res.reg + ", " + target_f.llvm_type + "* " + f_ptr + "\n");
         }
-        arg_curr = arg_curr.next;
         arg_idx += 1;
     }
     return CompileResult(reg=obj_ptr, type=s_info.type_id);
@@ -2321,26 +2376,26 @@ func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult
     let func_name -> String = node.name_tok.value;
     let ret_type_id -> Int = resolve_type(c, node.ret_type_tok);
     
-    let arg_head -> TypeListNode = null;
-    let arg_curr -> TypeListNode = null;
-    let curr_p -> ParamListNode = node.params;
+    let arg_types -> Vector(Struct) = [];
+    
+    let params -> Vector(Struct) = node.params;
+    let p_len -> Int = 0; if (params is !null) { p_len = params.length(); }
+    let p_idx -> Int = 0;
     
     let params_str -> String = "";
     let first -> Bool = true;
     
-    while (curr_p is !null) {
-        let p -> ParamNode = curr_p.param;
+    while (p_idx < p_len) {
+        let p -> ParamNode = params[p_idx];
         let p_id -> Int = resolve_type(c, p.type_tok);
         
-        let t_node -> TypeListNode = TypeListNode(type=p_id, next=null);
-        if (arg_head is null) { arg_head = t_node; arg_curr = t_node; }
-        else { arg_curr.next = t_node; arg_curr = t_node; }
+        arg_types.append(TypeListNode(type=p_id));
         
         if (!first) { params_str = params_str + ", "; }
         params_str += get_llvm_type_str(c, p_id);
         first = false;
         
-        curr_p = curr_p.next;
+        p_idx += 1;
     }
 
     if (node.is_varargs) {
@@ -2348,22 +2403,24 @@ func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult
         params_str = params_str + "...";
     }
 
-    map_put(c.func_table, func_name, FuncInfo(name=func_name, ret_type=ret_type_id, arg_types=arg_head, is_varargs=node.is_varargs));
+    map_put(c.func_table, func_name, FuncInfo(name=func_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=node.is_varargs));
     if (map_get(c.declared_externs, func_name) is null) {
         let ret_llvm -> String = get_llvm_type_str(c, ret_type_id);
         file_io.write(c.output_file, "declare " + ret_llvm + " @" + func_name + "(" + params_str + ")\n");
 
-        map_put(c.declared_externs, func_name, StringConstant(id=0, value="", next=null)); 
+        map_put(c.declared_externs, func_name, StringConstant(id=0, value="")); 
     }
     return void_result();
 }
 
 func compile_extern_block(c -> Compiler, node -> ExternBlockNode) -> CompileResult {
-    let curr -> StmtListNode = node.funcs;
-    while (curr is !null) {
-        let f_node -> ExternFuncNode = curr.stmt;
+    let funcs -> Vector(Struct) = node.funcs;
+    let len -> Int = 0; if (funcs is !null) { len = funcs.length(); }
+    let i -> Int = 0;
+    while (i < len) {
+        let f_node -> ExternFuncNode = funcs[i];
         compile_extern_func(c, f_node);
-        curr = curr.next;
+        i += 1;
     }
     return void_result();
 }
@@ -2392,13 +2449,14 @@ func emit_vector_bounds_check(c -> Compiler, vec_reg -> String, idx_reg -> Strin
     file_io.write(c.output_file, "\n" + ok_label + ":\n");
 }
 func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallNode) -> CompileResult {
-    let args -> ArgNode = call_node.args;
-
-    if (args is null) { WhitelangExceptions.throw_type_error(call_node.pos, "append expects 1 argument."); }
-    if (args.next is !null) { WhitelangExceptions.throw_type_error(call_node.pos, "append expects exactly 1 argument."); }
+    let args -> Vector(Struct) = call_node.args;
+    let a_len -> Int = 0;
+    if (args is !null) { a_len = args.length(); }
+    if (a_len != 1) { WhitelangExceptions.throw_type_error(call_node.pos, "append expects exactly 1 argument."); }
     
+    let arg_node -> ArgNode = args[0];
     let vec_res -> CompileResult = compile_node(c, vec_node);
-    let arg_res -> CompileResult = compile_node(c, args.val);
+    let arg_res -> CompileResult = compile_node(c, arg_node.val);
 
     let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + vec_res.type);
     if (v_info is null) { WhitelangExceptions.throw_type_error(call_node.pos, "append is only for Vectors."); }
@@ -2497,9 +2555,10 @@ func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallN
     return void_result();
 }
 func compile_vector_drop(c -> Compiler, vec_node -> Struct, call_node -> CallNode) -> CompileResult {
-    let args -> ArgNode = call_node.args;
-    
-    if (args is !null) { WhitelangExceptions.throw_type_error(call_node.pos, "drop expects 0 arguments."); }
+    let args -> Vector(Struct) = call_node.args;
+    let a_len -> Int = 0;
+    if (args is !null) { a_len = args.length(); }
+    if (a_len > 0) { WhitelangExceptions.throw_type_error(call_node.pos, "drop expects 0 arguments."); }
     
     let vec_res -> CompileResult = compile_node(c, vec_node);
     let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + vec_res.type);
@@ -2552,8 +2611,12 @@ func compile_vector_drop(c -> Compiler, vec_node -> Struct, call_node -> CallNod
 func compile_vector_lit(c -> Compiler, node -> VectorLitNode) -> CompileResult {
     let count -> Int = node.count;
     let elem_type_id -> Int = TYPE_INT; 
-    if (node.elements is !null) {
-        let first_arg -> ArgNode = node.elements;
+    let elements -> Vector(Struct) = node.elements;
+    let e_len -> Int = 0;
+    if (elements is !null) { e_len = elements.length(); }
+    
+    if (e_len > 0) {
+        let first_arg -> ArgNode = elements[0];
         let first_res -> CompileResult = compile_node(c, first_arg.val);
         elem_type_id = first_res.type;
     } else {
@@ -2596,7 +2659,7 @@ func compile_vector_lit(c -> Compiler, node -> VectorLitNode) -> CompileResult {
     file_io.write(c.output_file, c.indent + user_ptr_i8 + " = getelementptr inbounds i8, i8* " + raw_struct + ", i32 8\n");
 
     let vec_ptr -> String = next_reg(c);
-    file_io.write(c.output_file, c.indent + vec_ptr + " = bitcast i8* " + raw_struct + " to " + struct_name + "*\n");
+    file_io.write(c.output_file, c.indent + vec_ptr + " = bitcast i8* " + user_ptr_i8 + " to " + struct_name + "*\n");
     
     // malloc data array
     let arr_size_ptr -> String = next_reg(c);
@@ -2627,9 +2690,9 @@ func compile_vector_lit(c -> Compiler, node -> VectorLitNode) -> CompileResult {
     file_io.write(c.output_file, c.indent + data_field_ptr + " = getelementptr inbounds " + struct_name + ", " + struct_name + "* " + vec_ptr + ", i32 0, i32 2\n");
     file_io.write(c.output_file, c.indent + "store " + elem_ty_str + "* " + data_ptr + ", " + elem_ty_str + "** " + data_field_ptr + "\n");
     
-    let curr -> ArgNode = node.elements;
     let idx -> Int = 0;
-    while (curr is !null) {
+    while (idx < e_len) {
+        let curr -> ArgNode = elements[idx];
         let val_res -> CompileResult = compile_node(c, curr.val);
 
         if (val_res.type != elem_type_id) {
@@ -2650,14 +2713,16 @@ func compile_vector_lit(c -> Compiler, node -> VectorLitNode) -> CompileResult {
         file_io.write(c.output_file, c.indent + "store " + elem_ty_str + " " + val_res.reg + ", " + elem_ty_str + "* " + slot_ptr + "\n");
         
         idx += 1;
-        curr = curr.next;
     }
     
     return CompileResult(reg=vec_ptr, type=vec_type_id);
 }
 
 func compile_length_method(c -> Compiler, obj_node -> Struct, call_node -> CallNode) -> CompileResult {
-    if (call_node.args is !null) {
+    let args -> Vector(Struct) = call_node.args;
+    let a_len -> Int = 0;
+    if (args is !null) { a_len = args.length(); }
+    if (a_len > 0) {
         WhitelangExceptions.throw_type_error(call_node.pos, "Method 'length' does not accept arguments.");
     }
 
@@ -3280,8 +3345,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         let id -> Int = c.str_count;
         c.str_count += 1;
 
-        let new_str -> StringConstant = StringConstant(id=id, value=val, next=c.string_list);
-        c.string_list = new_str;
+        c.string_list.append(StringConstant(id=id, value=val));
         let len -> Int = val.length() + 1; // +1 for \0
 
         let total_size -> Int = len + 8;
@@ -3564,18 +3628,22 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
         if is_direct {
             if (func_name == "builtin.print" || func_name == "print") {
-                let curr_arg -> ArgNode = n_call.args;
-                
-                if (curr_arg is null) {
+                let args -> Vector(Struct) = n_call.args;
+                let a_len -> Int = 0;
+                if (args is !null) { a_len = args.length(); }
+
+                if (a_len == 0) {
                     let fmt_ptr -> String = next_reg(c);
                     file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
                     return void_result();
                 }
                 
-                while (curr_arg is !null) {
+                let a_idx -> Int = 0;
+                while (a_idx < a_len) {
+                    let curr_arg -> ArgNode = args[a_idx];
                     let arg_res -> CompileResult = compile_node(c, curr_arg.val);
                     compile_print(c, arg_res.reg, arg_res.type, n_call.pos, arg_res.origin_type);
-                    curr_arg = curr_arg.next;
+                    a_idx += 1;
                 }
 
                 file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
@@ -3595,14 +3663,23 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             }
 
             let args_str -> String = "";
-            let arg_node_curr -> ArgNode = n_call.args;
-            let type_node_curr -> TypeListNode = func_info.arg_types;
-            let is_first -> Bool = true;
+            let args -> Vector(Struct) = n_call.args;
+            let a_len -> Int = 0;
+            if (args is !null) { a_len = args.length(); }
+            let arg_idx -> Int = 0;
 
-            while (arg_node_curr is !null) {
-                if (type_node_curr is null) { 
+            let arg_types -> Vector(Struct) = func_info.arg_types;
+            let type_len -> Int = 0; 
+            if (arg_types is !null) { type_len = arg_types.length(); }
+            
+            let is_first -> Bool = true;
+            
+            while (arg_idx < a_len) {
+                let arg_node_curr -> ArgNode = args[arg_idx];
+
+                if (arg_idx >= type_len) { 
                     if (!func_info.is_varargs) {
-                        WhitelangExceptions.throw_type_error(n_call.pos, "Too many arguments."); 
+                        WhitelangExceptions.throw_type_error(n_call.pos, "Too many arguments.");
                     }
                     let arg_val -> CompileResult = compile_node(c, arg_node_curr.val);
 
@@ -3617,19 +3694,22 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                         arg_val = CompileResult(reg=zext_reg, type=TYPE_INT);
                     }
                     // Float -> double(Float)
-                    
-                    if (is_first == false) { args_str = args_str + ", "; }
+                    if (!is_first) { args_str = args_str + ", "; }
                     let ty_str -> String = get_llvm_type_str(c, arg_val.type);
                     args_str += ty_str + " " + arg_val.reg;
 
                     is_first = false;
                     
-                    arg_node_curr = arg_node_curr.next;
+                    arg_idx += 1;
                     continue;
                 }
-                
-                let arg_val -> CompileResult = compile_node(c, arg_node_curr.val);
+
+                let type_node_curr -> TypeListNode = arg_types[arg_idx];
                 let expected_type -> Int = type_node_curr.type;
+
+                c.expected_type = expected_type;
+                let arg_val -> CompileResult = compile_node(c, arg_node_curr.val);
+                c.expected_type = 0;
                 
                 if (expected_type == TYPE_FLOAT && arg_val.type == TYPE_INT) {
                     arg_val = promote_to_float(c, arg_val);
@@ -3647,7 +3727,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 }
 
                 if (arg_val.type == TYPE_GENERIC_STRUCT && expected_type >= 100) {
-                    if (map_get(c.struct_id_map, "" + expected_type) is !null) {
+                    if (map_get(c.struct_id_map, "" + expected_type) is !null || map_get(c.vector_base_map, "" + expected_type) is !null) {
                         let cast_reg -> String = next_reg(c);
                         let dest_ty -> String = get_llvm_type_str(c, expected_type);
                         file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + arg_val.reg + " to " + dest_ty + "\n");
@@ -3696,11 +3776,10 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 args_str += ty_str + " " + arg_val.reg;
                 is_first = false;
                 
-                arg_node_curr = arg_node_curr.next;
-                type_node_curr = type_node_curr.next;
+                arg_idx += 1;
             }
             
-            if (type_node_curr is !null) { WhitelangExceptions.throw_type_error(n_call.pos, "Too few arguments."); }
+            if (arg_idx < type_len) { WhitelangExceptions.throw_type_error(n_call.pos, "Too few arguments."); }
 
             let ret_type_str -> String = get_llvm_type_str(c, func_info.ret_type);
             let call_res_reg -> String = "";
@@ -3708,13 +3787,14 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             let call_prefix -> String = ret_type_str + " ";
             if (func_info.is_varargs) {
                 let sig_args -> String = "";
-                let p_curr -> TypeListNode = func_info.arg_types;
+                let p_idx -> Int = 0;
                 let first_p -> Bool = true;
-                while (p_curr is !null) {
+                while (p_idx < type_len) {
+                    let p_curr -> TypeListNode = arg_types[p_idx];
                     if (!first_p) { sig_args = sig_args + ", "; }
                     sig_args = sig_args + get_llvm_type_str(c, p_curr.type);
                     first_p = false;
-                    p_curr = p_curr.next;
+                    p_idx += 1;
                 }
                 if (!first_p) { sig_args = sig_args + ", ..."; }
                 else { sig_args = "..."; }
@@ -3779,10 +3859,14 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             if is_valid_call {
                 let args_sig -> String = "";
                 let args_val_str -> String = "";
-                let curr_arg -> ArgNode = n_call.args;
+                let args -> Vector(Struct) = n_call.args;
+                let a_len -> Int = 0;
+                if (args is !null) { a_len = args.length(); }
+                let a_idx -> Int = 0;
                 let first -> Bool = true;
-
-                while (curr_arg is !null) {
+                
+                while (a_idx < a_len) {
+                    let curr_arg -> ArgNode = args[a_idx];
                     let a_res -> CompileResult = compile_node(c, curr_arg.val);
                     let a_ty -> String = get_llvm_type_str(c, a_res.type);
 
@@ -3793,7 +3877,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                     args_sig += a_ty;
                     args_val_str += a_ty + " " + a_res.reg;
                     first = false;
-                    curr_arg = curr_arg.next;
+                    a_idx += 1;
                 }
 
                 let ret_ty_str -> String = get_llvm_type_str(c, ret_type_id);
@@ -4025,15 +4109,20 @@ func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> S
     let header -> String = s_info.name + "(";
     let header_id -> Int = c.str_count;
     c.str_count += 1;
-    c.string_list = StringConstant(id=header_id, value=header, next=c.string_list);
+    c.string_list.append(StringConstant(id=header_id, value=header));
     file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([" + (header.length() + 1) + " x i8], [" + (header.length() + 1) + " x i8]* @.str." + header_id + ", i32 0, i32 0))\n");
 
-    let f_curr -> FieldInfo = s_info.fields;
-    while (f_curr is !null) {
+    let fields_vec -> Vector(Struct) = s_info.fields;
+    let f_len -> Int = 0;
+    if (fields_vec is !null) { f_len = fields_vec.length(); }
+    let f_idx -> Int = 0;
+    
+    while (f_idx < f_len) {
+        let f_curr -> FieldInfo = fields_vec[f_idx];
         let f_name_eq -> String = f_curr.name + "=";
         let fn_id -> Int = c.str_count;
         c.str_count += 1;
-        c.string_list = StringConstant(id=fn_id, value=f_name_eq, next=c.string_list);
+        c.string_list.append(StringConstant(id=fn_id, value=f_name_eq));
         file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([" + (f_name_eq.length() + 1) + " x i8], [" + (f_name_eq.length() + 1) + " x i8]* @.str." + fn_id + ", i32 0, i32 0))\n");
 
         let f_ptr -> String = next_reg(c);
@@ -4042,8 +4131,8 @@ func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> S
         file_io.write(c.output_file, c.indent + f_val_reg + " = load " + f_curr.llvm_type + ", " + f_curr.llvm_type + "* " + f_ptr + "\n");
         compile_print(c, f_val_reg, f_curr.type, pos, f_curr.type); 
 
-        f_curr = f_curr.next;
-        if (f_curr is !null) {
+        f_idx += 1;
+        if (f_idx < f_len) {
             file_io.write(c.output_file, c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
         }
     }
@@ -4124,10 +4213,14 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
 
     let obj_res -> CompileResult = compile_node(c, obj_node);
     let args_str -> String = "i8* " + obj_res.reg;
-
-    let curr_arg -> ArgNode = call_node.args;
-    while (curr_arg is !null) {
+    let args -> Vector(Struct) = call_node.args;
+    let a_len -> Int = 0;
+    if (args is !null) { a_len = args.length(); }
+    let a_idx -> Int = 0;
+    
+    while (a_idx < a_len) {
         args_str = args_str + ", ";
+        let curr_arg -> ArgNode = args[a_idx];
         let arg_res -> CompileResult = compile_node(c, curr_arg.val);
         if (arg_res.type == TYPE_BYTE) { arg_res = promote_to_int(c, arg_res); }
         if (arg_res.type == TYPE_BOOL) { 
@@ -4137,7 +4230,7 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
         }
         
         args_str = args_str + get_llvm_type_str(c, arg_res.type) + " " + arg_res.reg;
-        curr_arg = curr_arg.next;
+        a_idx += 1;
     }
 
     let f_info -> FuncInfo = map_get(c.func_table, real_func_name);
@@ -4156,36 +4249,36 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
 
 func compile_start(c -> Compiler) -> Void {
     file_io.write(c.output_file, "declare i32 @printf(i8*, ...)\n");
-    map_put(c.declared_externs, "printf", StringConstant(id=0, value="", next=null));
+    map_put(c.declared_externs, "printf", StringConstant(id=0, value=""));
 
     file_io.write(c.output_file, "declare i32 @snprintf(i8*, i64, i8*, ...)\n");
-    map_put(c.declared_externs, "snprintf", StringConstant(id=0, value="", next=null)); 
+    map_put(c.declared_externs, "snprintf", StringConstant(id=0, value="")); 
 
     file_io.write(c.output_file, "declare double @llvm.pow.f64(double, double)\n\n");
 
     file_io.write(c.output_file, "declare i8* @malloc(i64)\n");
-    map_put(c.declared_externs, "malloc", StringConstant(id=0, value="", next=null));
+    map_put(c.declared_externs, "malloc", StringConstant(id=0, value=""));
 
     file_io.write(c.output_file, "declare i32 @strlen(i8*)\n");
-    map_put(c.declared_externs, "strlen", StringConstant(id=0, value="", next=null)); 
+    map_put(c.declared_externs, "strlen", StringConstant(id=0, value="")); 
 
     file_io.write(c.output_file, "declare i8* @strcpy(i8*, i8*)\n");
-    map_put(c.declared_externs, "strcpy", StringConstant(id=0, value="", next=null)); 
+    map_put(c.declared_externs, "strcpy", StringConstant(id=0, value="")); 
 
     file_io.write(c.output_file, "declare i8* @strcat(i8*, i8*)\n\n");
-    map_put(c.declared_externs, "strcat", StringConstant(id=0, value="", next=null)); 
+    map_put(c.declared_externs, "strcat", StringConstant(id=0, value="")); 
 
     file_io.write(c.output_file, "declare i32 @strcmp(i8*, i8*)\n\n");
-    map_put(c.declared_externs, "strcmp", StringConstant(id=0, value="", next=null)); 
+    map_put(c.declared_externs, "strcmp", StringConstant(id=0, value="")); 
 
     file_io.write(c.output_file, "declare void @free(i8*)\n");
-    map_put(c.declared_externs, "free", StringConstant(id=0, value="", next=null));
+    map_put(c.declared_externs, "free", StringConstant(id=0, value=""));
 
     file_io.write(c.output_file, "declare void @exit(i32)\n");
-    map_put(c.declared_externs, "exit", StringConstant(id=0, value="", next=null));
+    map_put(c.declared_externs, "exit", StringConstant(id=0, value=""));
 
     file_io.write(c.output_file, "declare i8* @realloc(i8*, i64)\n");
-    map_put(c.declared_externs, "realloc", StringConstant(id=0, value="", next=null));
+    map_put(c.declared_externs, "realloc", StringConstant(id=0, value=""));
 
 
     file_io.write(c.output_file, "@.fmt_int = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\"\n");
@@ -4225,19 +4318,18 @@ func compile_end(c -> Compiler) -> Void {
     }
     compile_arc_hooks(c);
 
-    let curr -> StringConstant = c.string_list;
-
-    while (curr is !null) {
+    let str_vec -> Vector(Struct) = c.string_list;
+    let s_len -> Int = 0; if (str_vec is !null) { s_len = str_vec.length(); }
+    let s_idx -> Int = 0;
+    while (s_idx < s_len) {
+        let curr -> StringConstant = str_vec[s_idx];
         let val -> String = curr.value;
         let escaped_val -> String = string_escape(val);
-        
         let id -> Int = curr.id;
-        let len -> Int = val.length() + 1; 
-        
+        let len -> Int = val.length() + 1;
         let def -> String = "@.str." + id + " = private unnamed_addr constant [" + len + " x i8] c\"" + escaped_val + "\\00\"\n";
-        file_io.write(c.output_file, def);
-        
-        curr = curr.next;
+        write(c.output_file, def);
+        s_idx += 1;
     }
     file_io.close(c.output_file);
 }

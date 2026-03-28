@@ -17,12 +17,10 @@ struct TypedIdent(
 )
 
 func parse(p -> Parser) -> Struct {
-    let head -> StmtListNode = null;
-    let curr -> StmtListNode = null;
+    let stmts -> Vector(Struct) = [];
     
     while (p.current_tok.type != TOK_EOF) {
         let stmt -> Struct = null;
-        
         if (p.current_tok.type == TOK_FUNC) {
             stmt = func_def(p);
         } else if (p.current_tok.type == TOK_STRUCT) {
@@ -44,12 +42,10 @@ func parse(p -> Parser) -> Struct {
             WhitelangExceptions.throw_invalid_syntax(err_pos, "Top level code must be function definitions or global variables. Found: " + get_token_name(p.current_tok.type));
         }
         
-        let node -> StmtListNode = StmtListNode(stmt=stmt, next=null);
-        if (head is null) { head = node; curr = node; } 
-        else { curr.next = node; curr = node; }
+        stmts.append(stmt);
     }
     
-    return BlockNode(type=NODE_BLOCK, stmts=head);
+    return BlockNode(type=NODE_BLOCK, stmts=stmts);
 }
 
 func parser_advance(p -> Parser) -> Void {
@@ -291,17 +287,14 @@ func atom(p -> Parser) -> Struct {
     if (tok.type == TOK_LBRACKET) {
         parser_advance(p); // skip [
         let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-        let head -> ArgNode = null;
-        let curr -> ArgNode = null;
+        
+        let elements -> Vector(Struct) = [];
         let count -> Int = 0;
         
         if (p.current_tok.type != TOK_RBRACKET) {
             while (true) {
                 let val -> Struct = expression(p);
-                let new_node -> ArgNode = ArgNode(val=val, name=null, next=null);
-                
-                if (head is null) { head = new_node; curr = new_node; }
-                else { curr.next = new_node; curr = new_node; }
+                elements.append(ArgNode(val=val, name=null));
                 count += 1;
                 
                 if (p.current_tok.type == TOK_COMMA) {
@@ -318,7 +311,7 @@ func atom(p -> Parser) -> Struct {
         }
         parser_advance(p); // skip ]
         
-        return VectorLitNode(type=NODE_VECTOR_LIT, elements=head, count=count, pos=pos);
+        return VectorLitNode(type=NODE_VECTOR_LIT, elements=elements, count=count, pos=pos);
     }
 
     let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -326,12 +319,11 @@ func atom(p -> Parser) -> Struct {
     return null;
 }
 
-func parse_args(p -> Parser) -> Struct {
+func parse_args(p -> Parser) -> Vector(Struct) {
     if (p.current_tok.type == TOK_RPAREN) { return null; }
 
-    let head -> ArgNode = null;
-    let curr -> ArgNode = null;
-
+    let args -> Vector(Struct) = [];
+    
     while (p.current_tok.type != TOK_RPAREN && p.current_tok.type != TOK_EOF) {
         let arg_name -> String = null;
         if (p.current_tok.type == TOK_IDENTIFIER && peek_type(p) == TOK_ASSIGN) {
@@ -341,15 +333,12 @@ func parse_args(p -> Parser) -> Struct {
         }
         
         let val -> Struct = expression(p);
-        let new_node -> ArgNode = ArgNode(val=val, name=arg_name, next=null);
-
-        if (head is null) { head = new_node; curr = new_node; }
-        else { curr.next = new_node; curr = new_node; }
+        args.append(ArgNode(val=val, name=arg_name));
 
         if (p.current_tok.type == TOK_COMMA) { parser_advance(p); }
         else { break; }
     }
-    return head;
+    return args;
 }
 
 func postfix_expr(p -> Parser) -> Struct {
@@ -680,14 +669,11 @@ func parse_block(p -> Parser) -> Struct {
     }
     parser_advance(p); // skip {
 
-    let head -> StmtListNode = null;
-    let curr -> StmtListNode = null;
-
+    let stmts -> Vector(Struct) = [];
     while (p.current_tok.type != TOK_RBRACE && p.current_tok.type != TOK_EOF) {
         let stmt -> Struct = statement(p);
         let base -> BaseNode = stmt;
         let is_compound -> Bool = false;
-
         if (base.type == NODE_IF || base.type == NODE_BLOCK || base.type == NODE_WHILE || base.type == NODE_FOR) {
             is_compound = true;
         }
@@ -700,9 +686,7 @@ func parse_block(p -> Parser) -> Struct {
                 WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ';' after statement in block. ");
             }
         }
-        let node -> StmtListNode = StmtListNode(stmt=stmt, next=null);
-        if (head is null) { head = node; curr = node; } 
-        else { curr.next = node; curr = node; }
+        stmts.append(stmt);
     }
     if (p.current_tok.type != TOK_RBRACE) {
         let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -710,7 +694,7 @@ func parse_block(p -> Parser) -> Struct {
     }
     parser_advance(p); // skip }
 
-    return BlockNode(type=NODE_BLOCK, stmts=head);
+    return BlockNode(type=NODE_BLOCK, stmts=stmts);
 }
 
 func if_stmt(p -> Parser) -> Struct {
@@ -830,19 +814,17 @@ func statement(p -> Parser) -> Struct {
 }
 
 
-func parse_params(p -> Parser) -> Struct {
+func parse_params(p -> Parser) -> Vector(Struct) {
     if (p.current_tok.type == TOK_RPAREN) {
         return null;
     }
-    let head -> ParamListNode = null;
-    let curr -> ParamListNode = null;
+    let params -> Vector(Struct) = [];
+    
     let tid -> TypedIdent = parse_typed_identifier_param(p);
     let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tid.name_tok.line, col=tid.name_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-
     let p_node -> ParamNode = ParamNode(type=NODE_PARAM, name_tok=tid.name_tok, type_tok=tid.type_node, pos=pos);
     
-    head = ParamListNode(param=p_node, next=null);
-    curr = head;
+    params.append(p_node);
     
     while (p.current_tok.type == TOK_COMMA) {
         parser_advance(p); // skip ','
@@ -851,12 +833,10 @@ func parse_params(p -> Parser) -> Struct {
         let next_pos -> Position = WhitelangExceptions.Position(idx=0, ln=next_tid.name_tok.line, col=next_tid.name_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
         
         let next_p -> ParamNode = ParamNode(type=NODE_PARAM, name_tok=next_tid.name_tok, type_tok=next_tid.type_node, pos=next_pos);
-        let list_node -> ParamListNode = ParamListNode(param=next_p, next=null);
-        curr.next = list_node;
-        curr = list_node;
+        params.append(next_p);
     }
     
-    return head;
+    return params;
 }
 
 func func_def(p -> Parser) -> Struct {
@@ -962,18 +942,19 @@ func parse_extern_func(p -> Parser) -> Struct {
     }
     parser_advance(p); // skip '('
 
-    let head -> ParamListNode = null;
-    let curr -> ParamListNode = null;
+    let params -> Vector(Struct) = [];
     let is_varargs -> Bool = false;
     
     if (p.current_tok.type != TOK_RPAREN) {
         while (true) {
             if (p.current_tok.type == TOK_ELLIPSIS) {
                 is_varargs = true;
+ 
                 parser_advance(p); // skip ...
                 if (p.current_tok.type == TOK_COMMA) {
                     let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
                     WhitelangExceptions.throw_invalid_syntax(err_pos, "Varargs '...' must be the last parameter.");
+      
                 }
                 break;
             } else {
@@ -981,15 +962,7 @@ func parse_extern_func(p -> Parser) -> Struct {
                 let param_pos -> Position = WhitelangExceptions.Position(idx=0, ln=tid.name_tok.line, col=tid.name_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
                 let new_param -> ParamNode = ParamNode(type=NODE_PARAM, name_tok=tid.name_tok, type_tok=tid.type_node, pos=param_pos);
 
-                let new_node -> ParamListNode = ParamListNode(param=new_param, next=null);
-                
-                if (head is null) { 
-                    head = new_node; 
-                    curr = new_node; 
-                } else { 
-                    curr.next = new_node; 
-                    curr = new_node; 
-                }
+                params.append(new_param);
 
                 if (p.current_tok.type == TOK_COMMA) {
                     parser_advance(p);
@@ -1015,7 +988,7 @@ func parse_extern_func(p -> Parser) -> Struct {
         WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected return type ('-> Type').");
     }
     
-    return ExternFuncNode(type=NODE_EXTERN_FUNC, name_tok=name_tok, params=head, ret_type_tok=ret_type, is_varargs=is_varargs, pos=start_pos);
+    return ExternFuncNode(type=NODE_EXTERN_FUNC, name_tok=name_tok, params=params, ret_type_tok=ret_type, is_varargs=is_varargs, pos=start_pos);
 }
 
 func parse_extern(p -> Parser) -> Struct {
@@ -1036,22 +1009,18 @@ func parse_extern(p -> Parser) -> Struct {
         }
         parser_advance(p); // skip '{'
         
-        let head -> StmtListNode = null;
-        let curr -> StmtListNode = null;
+        let funcs -> Vector(Struct) = [];
         
         while (p.current_tok.type != TOK_RBRACE && p.current_tok.type != TOK_EOF) {
             if (p.current_tok.type == TOK_FUNC) {
                 let func_node -> Struct = parse_extern_func(p);
-
                 if (p.current_tok.type != TOK_SEMICOLON) {
                     let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
                     WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ';' after extern function declaration.");
                 }
                 parser_advance(p); // skip ';'
                 
-                let new_stmt -> StmtListNode = StmtListNode(stmt=func_node, next=null);
-                if (head is null) { head = new_stmt; curr = new_stmt; }
-                else { curr.next = new_stmt; curr = new_stmt; }
+                funcs.append(func_node);
             } else {
                 let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
                 WhitelangExceptions.throw_invalid_syntax(err_pos, "Only function declarations are allowed in extern blocks.");
@@ -1064,7 +1033,7 @@ func parse_extern(p -> Parser) -> Struct {
         }
         parser_advance(p); // skip '}'
         
-        return ExternBlockNode(type=NODE_EXTERN_BLOCK, funcs=head, pos=start_pos);
+        return ExternBlockNode(type=NODE_EXTERN_BLOCK, funcs=funcs, pos=start_pos);
     }
 
     // extern func foo() -> Void from "C";
@@ -1101,8 +1070,9 @@ func parse_extern(p -> Parser) -> Struct {
         }
         parser_advance(p); // skip ';'
         
-        let head -> StmtListNode = StmtListNode(stmt=func_node, next=null);
-        return ExternBlockNode(type=NODE_EXTERN_BLOCK, funcs=head, pos=start_pos);
+        let funcs -> Vector(Struct) = [];
+        funcs.append(func_node);
+        return ExternBlockNode(type=NODE_EXTERN_BLOCK, funcs=funcs, pos=start_pos);
     }
     
     let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -1114,13 +1084,11 @@ func parse_import(p -> Parser) -> Struct {
     let start_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
     parser_advance(p); // skip 'import'
 
-    let symbols_head -> ImportSymbolNode = null;
+    
+    let symbols -> Vector(Struct) = [];
     let path_tok -> Token = null;
-
     // import A, B from "..."
     if (p.current_tok.type == TOK_IDENTIFIER) {
-        let curr_sym -> ImportSymbolNode = null;
-        
         let parsing -> Bool = true;
         while (parsing) {
             if (p.current_tok.type != TOK_IDENTIFIER) {
@@ -1142,15 +1110,8 @@ func parse_import(p -> Parser) -> Struct {
                 parser_advance(p); // skip alias name
             }
 
-            let node -> ImportSymbolNode = ImportSymbolNode(name_tok=name_tok, alias_tok=alias_tok, next=null);
-            
-            if (symbols_head is null) {
-                symbols_head = node;
-                curr_sym = node;
-            } else {
-                curr_sym.next = node;
-                curr_sym = node;
-            }
+            let node -> ImportSymbolNode = ImportSymbolNode(name_tok=name_tok, alias_tok=alias_tok);
+            symbols.append(node);
 
             if (p.current_tok.type == TOK_COMMA) {
                 parser_advance(p); // skip ','
@@ -1188,5 +1149,5 @@ func parse_import(p -> Parser) -> Struct {
         parser_advance(p);
     }
 
-    return ImportNode(type=NODE_IMPORT, path_tok=path_tok, symbols=symbols_head, alias_tok=alias_tok, pos=start_pos);
+    return ImportNode(type=NODE_IMPORT, path_tok=path_tok, symbols=symbols, alias_tok=alias_tok, pos=start_pos);
 }
