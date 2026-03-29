@@ -15,6 +15,7 @@ extern "C" {
     func fseek(stream -> ptr Void, offset -> Long, origin -> Int) -> Int;
     func ftell(stream -> ptr Void) -> Long;
     func rewind(stream -> ptr Void) -> Void;
+    func remove(filename -> String) -> Int;
 
     // White Lang C Helper
     func __wl_str_set(s -> String, idx -> Int, val -> Int) -> Void;
@@ -45,7 +46,7 @@ struct File(handle -> ptr Void, path -> String)
 func open(path -> String, mode -> String) -> File {
     let ptr raw_handle -> Void = fopen(path, mode);
 
-    if (raw_handle is null) {
+    if (raw_handle is nullptr) {
         return null;
     }
 
@@ -53,7 +54,7 @@ func open(path -> String, mode -> String) -> File {
 }
 
 func close(self -> File) -> Void {
-    if (self.handle is !null) {
+    if (self.handle is !nullptr) {
         fclose(self.handle);
         self.handle = nullptr; 
     }
@@ -61,7 +62,7 @@ func close(self -> File) -> Void {
 
 
 func read_all(self -> File) -> String {
-    if (self.handle is null) {
+    if (self.handle is nullptr) {
         return wl_alloc_string(0);
     }
 
@@ -77,8 +78,14 @@ func read_all(self -> File) -> String {
 
 
 func write(self -> File, content -> String) -> Void {
-    if (self.handle is null) { return; }
+    if (self.handle is nullptr) { return; }
     let len -> Long = content.length(); 
 
     fwrite(content, 1, len, self.handle);
+}
+
+
+func remove_file(path -> String) -> Bool {
+    let res -> Int = remove(path);
+    return res == false;
 }

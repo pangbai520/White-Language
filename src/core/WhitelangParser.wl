@@ -674,7 +674,7 @@ func parse_block(p -> Parser) -> Struct {
         let stmt -> Struct = statement(p);
         let base -> BaseNode = stmt;
         let is_compound -> Bool = false;
-        if (base.type == NODE_IF || base.type == NODE_BLOCK || base.type == NODE_WHILE || base.type == NODE_FOR) {
+        if (base.type == NODE_IF || base.type == NODE_BLOCK || base.type == NODE_WHILE || base.type == NODE_FOR || base.type == NODE_FUNC_DEF) {
             is_compound = true;
         }
 
@@ -807,6 +807,7 @@ func statement(p -> Parser) -> Struct {
     if (p.current_tok.type == TOK_BREAK) { return break_stmt(p); }
     if (p.current_tok.type == TOK_CONTINUE) { return continue_stmt(p); }
     if (p.current_tok.type == TOK_FOR) { return for_stmt(p); }
+    if (p.current_tok.type == TOK_FUNC) { return func_def(p); }
 
     if (p.current_tok.type == TOK_RETURN) { return return_stmt(p); }
 

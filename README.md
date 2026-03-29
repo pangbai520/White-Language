@@ -4,7 +4,7 @@
 ![Version](https://img.shields.io/github/v/tag/pangbai520/White-Language?label=version&color=green&sort=semver)
 ![Status](https://img.shields.io/badge/status-Bootstrapped-success.svg)
 
-White Language (suffix: `.wl`) is a statically-typed, self-hosted system programming language designed for predictability, clean syntax, and seamless C interoperability. 
+White Language (suffix: `.wl`) is a statically-typed, self-hosted system programming language designed for predictability, clean syntax, and seamless C interoperability.
 
 Built from the ground up and fully bootstrapped (the White Language Compiler `wlc` is written entirely in White Language), it aims to hit the sweet spot between low-level memory control and high-level ergonomics.
 
@@ -19,32 +19,29 @@ Built from the ground up and fully bootstrapped (the White Language Compiler `wl
 
 ## A Taste of White Language
 
-Here is a real example showing ARC, structural data, and built-in functions:
+Here is a real example showing ARC, closures, and lexical capture:
 
 ```rust
 import "builtin"
 
-// Define a struct
-struct Node(
-   value -> Int,
-   next  -> Node
-)
+func make_counter(start -> Int) -> Function(Int) {
+    let count -> Int = start;
+
+    func increment() -> Int {
+        count += 1;
+        return count;
+    }
+    
+    return increment;
+}
 
 func main() -> Int {
-   // Memory is automatically managed by ARC
-   let head -> Node = Node(value=10, next=null);
-   let second -> Node = Node(value=20, next=null);
-   
-   head.next = second;
-   
-   // Type-safe null checking
-   if (head.next is !null) {
-      // Built-in string concatenation and printing
-      builtin.print("Second node value is: " + head.next.value);
-   }
-   
-   return 0; 
-   // All memory is deterministically freed upon exiting the scope
+    let counter -> Function(Int) = make_counter(10);
+    
+    builtin.print(counter()); // Output: 11
+    builtin.print(counter()); // Output: 12
+    
+    return 0;
 }
 ```
 
@@ -102,7 +99,7 @@ Test the newly built compiler:
 ./wlc_new
 ```
 
-You should see the `White Language Compiler (v0.1.4)` output.
+You should see the `White Language Compiler (v0.1.5)` output.
 
 ## License
 

@@ -29,10 +29,6 @@ char* to_wl_str(const char* c_str) {
     return wl_str;
 }
 
-int remove_file(char* path) {
-    return remove(path);
-}
-
 char* get_arg(char** argv, int idx) {
     return to_wl_str(argv[idx]);
 }

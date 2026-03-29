@@ -13,7 +13,6 @@ import "core/WhitelangCompiler.wl"
 extern func get_arg(ptr argv -> String, idx -> Int) -> String from "C";
 extern func system_call(cmd -> String) -> Int from "C";
 extern func is_windows() -> Int from "C";
-extern func remove_file(path -> String) -> Int from "C";
 extern func wl_getenv(name -> String) -> String from "C";
 
 const EMIT_EXE  -> Int = 0;
@@ -38,7 +37,7 @@ struct CompilerConfig(
 )
 
 func print_usage() -> Void {
-    builtin.print("White Language Compiler (v0.1.4)");
+    builtin.print("White Language Compiler (v0.1.5)");
     builtin.print("Usage: wlc <source.wl> [options]");
     builtin.print("");
     builtin.print("Options:");
@@ -281,7 +280,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
 
     if (!cfg.keep_temps && cfg.output_file != ll_file) {
         if (cfg.verbose) { builtin.print("Cleaning up: " + ll_file); }
-        remove_file(ll_file);
+        file_io.remove_file(ll_file);
     }
 
     if (ret != 0) {

@@ -80,6 +80,12 @@ struct StructInfo(
     init_body -> Struct
 )
 
+struct CaptureScope(
+    local_vars -> HashMap,
+    captured_vars -> HashMap,
+    captured_list -> Vector(String)
+)
+
 struct Compiler(
     output_file -> File,
     reg_count   -> Int, 
@@ -109,7 +115,8 @@ struct Compiler(
     current_dir -> String,
     curr_func -> FuncInfo,
     expected_type -> Int,
-    type_drop_list -> Vector(Struct)
+    type_drop_list -> Vector(Struct),
+    global_buffer -> String
 )
 
 
@@ -125,7 +132,7 @@ func new_compiler(out_path -> String) -> Compiler {
     // initialize empty scope
     let root_scope -> Scope = Scope(table=map_new(32), parent=null, gc_vars=[]);
 
-    return Compiler(
+    let comp -> Compiler = Compiler(
         output_file = f,
         reg_count = 1,
         symbol_table = root_scope,
@@ -154,8 +161,12 @@ func new_compiler(out_path -> String) -> Compiler {
         current_dir = ".",
         curr_func = null,
         expected_type = 0,
-        type_drop_list = []
+        type_drop_list = [],
+        global_buffer = ""
     );
+
+    comp.type_drop_list.append(TypeListNode(type=TYPE_GENERIC_FUNCTION));
+    return comp;
 }
 
 func next_reg(c -> Compiler) -> String {
@@ -670,12 +681,11 @@ func exit_scope(c -> Compiler) -> Void {
 func is_ref_type(c -> Compiler, type_id -> Int) -> Bool {
     if (type_id == TYPE_STRING) { return true; }
     if (type_id == TYPE_GENERIC_STRUCT) { return true; }
+    if (type_id == TYPE_GENERIC_FUNCTION) { return true; }
     if (type_id >= 100) {
-        let s_info -> StructInfo = map_get(c.struct_id_map, "" + type_id);
-        if (s_info is !null) { return true; }
-
-        let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + type_id);
-        if (v_info is !null) { return true; }
+        if (map_get(c.struct_id_map, "" + type_id) is !null) { return true; }
+        if (map_get(c.vector_base_map, "" + type_id) is !null) { return true; }
+        if (map_get(c.func_ret_map, "" + type_id) is !null) { return true; }
     }
     
     return false;
@@ -921,7 +931,14 @@ func compile_arc_hooks(c -> Compiler) -> Void {
         file_io.write(c.output_file, "\ndrop_" + t_id + ":\n");
         
         let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + t_id);
-        if (v_info is !null) {
+        
+        if (t_id == TYPE_GENERIC_FUNCTION) {
+            file_io.write(c.output_file, "  %env_ptr_addr_" + t_id + " = getelementptr inbounds i8, i8* %ptr, i32 8\n");
+            file_io.write(c.output_file, "  %env_ptr_cast_" + t_id + " = bitcast i8* %env_ptr_addr_" + t_id + " to i8**\n");
+            file_io.write(c.output_file, "  %env_val_" + t_id + " = load i8*, i8** %env_ptr_cast_" + t_id + "\n");
+            file_io.write(c.output_file, "  call void @__wl_release(i8* %env_val_" + t_id + ")\n");
+            file_io.write(c.output_file, "  br label %free_default\n");
+        } else if (v_info is !null) {
             // Vector: free(vector.data)
             let elem_ty_str -> String = get_llvm_type_str(c, v_info.type);
             let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
@@ -1208,6 +1225,169 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     }
 }
 // ==============
+
+
+// === CLOSURE ===
+func record_capture(scope -> CaptureScope, v_name -> String) -> Void {
+    if (map_get(scope.local_vars, v_name) is null) {
+        if (map_get(scope.captured_vars, v_name) is null) {
+            map_put(scope.captured_vars, v_name, TypeListNode(type=1));
+            scope.captured_list.append(v_name);
+        }
+    }
+}
+
+func analyze_captures(node -> Struct, scope -> CaptureScope) -> Void {
+    if (node is null) { return; }
+    let base -> BaseNode = node;
+    let type -> Int = base.type;
+
+    if (type == NODE_BLOCK) {
+        let b -> BlockNode = node;
+        let stmts -> Vector(Struct) = b.stmts;
+        let i -> Int = 0;
+        let len -> Int = 0; if (stmts is !null) { len = stmts.length(); }
+        while (i < len) {
+            analyze_captures(stmts[i], scope);
+            i += 1;
+        }
+    }
+    else if (type == NODE_VAR_DECL) {
+        let decl -> VarDeclareNode = node;
+        map_put(scope.local_vars, decl.name_tok.value, TypeListNode(type=1));
+        if (decl.value is !null) {
+            analyze_captures(decl.value, scope);
+        }
+    }
+    else if (type == NODE_VAR_ACCESS) {
+        let acc -> VarAccessNode = node;
+        record_capture(scope, acc.name_tok.value);
+    }
+    else if (type == NODE_VAR_ASSIGN) {
+        let assign -> VarAssignNode = node;
+        record_capture(scope, assign.name_tok.value);
+        if (assign.value is !null) {
+            analyze_captures(assign.value, scope);
+        }
+    }
+    else if (type == NODE_BINOP) {
+        let binop -> BinOpNode = node;
+        analyze_captures(binop.left, scope);
+        analyze_captures(binop.right, scope);
+    }
+    else if (type == NODE_UNARYOP) {
+        let uop -> UnaryOpNode = node;
+        analyze_captures(uop.node, scope);
+    }
+    else if (type == NODE_POSTFIX) {
+        let pop -> PostfixOpNode = node;
+        analyze_captures(pop.node, scope);
+    }
+    else if (type == NODE_IF) {
+        let if_n -> IfNode = node;
+        analyze_captures(if_n.condition, scope);
+        analyze_captures(if_n.body, scope);
+        analyze_captures(if_n.else_body, scope);
+    }
+    else if (type == NODE_WHILE) {
+        let w_n -> WhileNode = node;
+        analyze_captures(w_n.condition, scope);
+        analyze_captures(w_n.body, scope);
+    }
+    else if (type == NODE_FOR) {
+        let f_n -> ForNode = node;
+        analyze_captures(f_n.init, scope);
+        analyze_captures(f_n.cond, scope);
+        analyze_captures(f_n.step, scope);
+        analyze_captures(f_n.body, scope);
+    }
+    else if (type == NODE_CALL) {
+        let call -> CallNode = node;
+        analyze_captures(call.callee, scope);
+        let args -> Vector(Struct) = call.args;
+        let i -> Int = 0;
+        let len -> Int = 0; if (args is !null) { len = args.length(); }
+        while (i < len) {
+            let arg -> ArgNode = args[i];
+            analyze_captures(arg.val, scope);
+            i += 1;
+        }
+    }
+    else if (type == NODE_RETURN) {
+        let ret -> ReturnNode = node;
+        analyze_captures(ret.value, scope);
+    }
+    else if (type == NODE_FIELD_ACCESS) {
+        let fa -> FieldAccessNode = node;
+        analyze_captures(fa.obj, scope);
+    }
+    else if (type == NODE_FIELD_ASSIGN) {
+        let fass -> FieldAssignNode = node;
+        analyze_captures(fass.obj, scope);
+        analyze_captures(fass.value, scope);
+    }
+    else if (type == NODE_INDEX_ACCESS) {
+        let ia -> IndexAccessNode = node;
+        analyze_captures(ia.target, scope);
+        analyze_captures(ia.index_node, scope);
+    }
+    else if (type == NODE_INDEX_ASSIGN) {
+        let iass -> IndexAssignNode = node;
+        analyze_captures(iass.target, scope);
+        analyze_captures(iass.index_node, scope);
+        analyze_captures(iass.value, scope);
+    }
+    else if (type == NODE_VECTOR_LIT) {
+        let vec -> VectorLitNode = node;
+        let elems -> Vector(Struct) = vec.elements;
+        let i -> Int = 0;
+        let len -> Int = 0; if (elems is !null) { len = elems.length(); }
+        while (i < len) {
+            let arg -> ArgNode = elems[i];
+            analyze_captures(arg.val, scope);
+            i += 1;
+        }
+    }
+    else if (type == NODE_REF) {
+        let ref_n -> RefNode = node;
+        analyze_captures(ref_n.node, scope);
+    }
+    else if (type == NODE_DEREF) {
+        let deref_n -> DerefNode = node;
+        analyze_captures(deref_n.node, scope);
+    }
+    else if (type == NODE_PTR_ASSIGN) {
+        let pass -> PtrAssignNode = node;
+        analyze_captures(pass.pointer, scope);
+        analyze_captures(pass.value, scope);
+    }
+    else if (type == NODE_FUNC_DEF) {
+        let func_def -> FunctionDefNode = node;
+        map_put(scope.local_vars, func_def.name_tok.value, TypeListNode(type=1));
+
+        let child_scope -> CaptureScope = CaptureScope(local_vars=map_new(32), captured_vars=map_new(32), captured_list=[]);
+
+        let params -> Vector(Struct) = func_def.params;
+        let i -> Int = 0;
+        let len -> Int = 0; if (params is !null) { len = params.length(); }
+        while (i < len) {
+            let p_node -> ParamNode = params[i];
+            map_put(child_scope.local_vars, p_node.name_tok.value, TypeListNode(type=1));
+            i += 1;
+        }
+
+        analyze_captures(func_def.body, child_scope);
+        let k_i -> Int = 0;
+        let k_len -> Int = child_scope.captured_list.length();
+        while (k_i < k_len) {
+            let k_str -> String = child_scope.captured_list[k_i];
+            record_capture(scope, k_str);
+            k_i += 1;
+        }
+    }
+}
+// ======
+
 func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
     let block -> BlockNode = node;
     let stmts -> Vector(Struct) = block.stmts;
@@ -1885,6 +2065,236 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     c.curr_func = null;
     
     return void_result();
+}
+
+func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> CompileResult {
+    let scope -> CaptureScope = CaptureScope(local_vars=map_new(32), captured_vars=map_new(32), captured_list=[]);
+    let params -> Vector(Struct) = func_def.params;
+    let p_len -> Int = 0; if (params is !null) { p_len = params.length(); }
+    let p_i -> Int = 0;
+    while (p_i < p_len) {
+        let p_node -> ParamNode = params[p_i];
+        map_put(scope.local_vars, p_node.name_tok.value, TypeListNode(type=1));
+        p_i += 1;
+    }
+    
+    analyze_captures(func_def.body, scope);
+    
+    let captures -> Vector(String) = [];
+    let capture_types -> Vector(Struct) = [];
+    
+    let c_i -> Int = 0;
+    let cap_len -> Int = scope.captured_list.length();
+    while (c_i < cap_len) {
+        let v_name -> String = scope.captured_list[c_i];
+        let is_global -> Bool = false;
+        if (map_get(c.global_symbol_table, v_name) is !null) { is_global = true; }
+        if (map_get(c.func_table, v_name) is !null) { is_global = true; }
+        if (map_get(c.struct_table, v_name) is !null) { is_global = true; }
+        if (map_get(c.loaded_packages, v_name) is !null) { is_global = true; }
+        if (map_get(c.loaded_files, v_name) is !null) { is_global = true; }
+
+        if (!is_global) {
+            let info -> SymbolInfo = find_symbol(c, v_name);
+            if (info is null) {
+                WhitelangExceptions.throw_name_error(func_def.pos, "Cannot capture undefined variable '" + v_name + "'.");
+            }
+            captures.append(v_name); 
+            capture_types.append(TypeListNode(type=info.type));
+        }
+        c_i += 1;
+    }
+
+    let env_id -> Int = c.type_counter;
+    c.type_counter += 1;
+
+    let t_len -> Int = captures.length();
+    let env_struct_name -> String = "env." + env_id;
+    let env_body -> String = "";
+    let env_fields -> Vector(Struct) = [];
+    let t_i -> Int = 0;
+    while (t_i < t_len) {
+        let t_node -> TypeListNode = capture_types[t_i];
+        let f_llvm -> String = get_llvm_type_str(c, t_node.type);
+        if (t_i > 0) { env_body += ", "; }
+        env_body += f_llvm;
+        env_fields.append(FieldInfo(name=captures[t_i], type=t_node.type, llvm_type=f_llvm, offset=t_i));
+        t_i += 1;
+    }
+    let llvm_env_name -> String = "{ " + env_body + " }";
+
+    let env_info -> StructInfo = StructInfo(name=env_struct_name, type_id=env_id, fields=env_fields, llvm_name=llvm_env_name, init_body=null);
+    map_put(c.struct_id_map, "" + env_id, env_info);
+    c.type_drop_list.append(TypeListNode(type=env_id));
+
+    let size_ptr -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + size_ptr + " = getelementptr " + llvm_env_name + ", " + llvm_env_name + "* null, i32 1\n");
+    let size_i64 -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + size_i64 + " = ptrtoint " + llvm_env_name + "* " + size_ptr + " to i64\n");
+    let total_size -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + total_size + " = add i64 " + size_i64 + ", 8\n");
+    
+    let raw_env -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + raw_env + " = call i8* @malloc(i64 " + total_size + ")\n");
+
+    let rc_ptr -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + rc_ptr + " = bitcast i8* " + raw_env + " to i32*\n");
+    file_io.write(c.output_file, c.indent + "store i32 0, i32* " + rc_ptr + "\n");
+    
+    let type_ptr_i8 -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + type_ptr_i8 + " = getelementptr inbounds i8, i8* " + raw_env + ", i32 4\n");
+    let type_ptr -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + type_ptr + " = bitcast i8* " + type_ptr_i8 + " to i32*\n");
+    file_io.write(c.output_file, c.indent + "store i32 " + env_id + ", i32* " + type_ptr + "\n");
+
+    let env_payload_i8 -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + env_payload_i8 + " = getelementptr inbounds i8, i8* " + raw_env + ", i32 8\n");
+    let env_payload -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + env_payload + " = bitcast i8* " + env_payload_i8 + " to " + llvm_env_name + "*\n");
+
+    t_i = 0;
+    while (t_i < t_len) {
+        let v_name -> String = captures[t_i];
+        let t_node -> TypeListNode = capture_types[t_i];
+        let v_type -> Int = t_node.type;
+        let llvm_ty -> String = get_llvm_type_str(c, v_type);
+        let info -> SymbolInfo = find_symbol(c, v_name);
+        
+        let val_reg -> String = next_reg(c);
+        file_io.write(c.output_file, c.indent + val_reg + " = load " + llvm_ty + ", " + llvm_ty + "* " + info.reg + "\n");
+        if (is_ref_type(c, v_type)) { emit_retain(c, val_reg, v_type); }
+        
+        let slot_ptr -> String = next_reg(c);
+        file_io.write(c.output_file, c.indent + slot_ptr + " = getelementptr inbounds " + llvm_env_name + ", " + llvm_env_name + "* " + env_payload + ", i32 0, i32 " + t_i + "\n");
+        file_io.write(c.output_file, c.indent + "store " + llvm_ty + " " + val_reg + ", " + llvm_ty + "* " + slot_ptr + "\n");
+        t_i += 1;
+    }
+
+    let old_file -> File = c.output_file;
+    let tmp_name -> String = ".lambda_" + env_id + ".ll";
+    c.output_file = file_io.open(tmp_name, "w");
+    
+    let lambda_name -> String = "lambda." + func_def.name_tok.value + "." + env_id;
+    let ret_type_id -> Int = resolve_type(c, func_def.ret_type_tok);
+    let ret_ty_str -> String = get_llvm_type_str(c, ret_type_id);
+    let specific_type_id -> Int = get_func_type_id(c, ret_type_id);
+    
+    let sig_def -> String = "i8* %raw_env";
+    let sig_ty -> String = "i8*";
+    p_i = 0;
+    while (p_i < p_len) {
+        let p_node -> ParamNode = params[p_i];
+        let p_ty -> String = get_llvm_type_str(c, resolve_type(c, p_node.type_tok));
+        sig_def = sig_def + ", " + p_ty + " %arg" + p_i;
+        sig_ty = sig_ty + ", " + p_ty;
+        p_i += 1;
+    }
+    
+    file_io.write(c.output_file, "define " + ret_ty_str + " @" + lambda_name + "(" + sig_def + ") {\nentry:\n");
+    let old_sym -> Scope = c.symbol_table;
+    let old_depth -> Int = c.scope_depth;
+    let old_reg -> Int = c.reg_count;
+    let old_ret -> Int = c.current_ret_type;
+    
+    c.symbol_table = Scope(table=map_new(32), parent=null, gc_vars=[]);
+    c.scope_depth = 1;
+    c.reg_count = 1;
+    c.current_ret_type = ret_type_id;
+
+    let lambda_env_ptr -> String = "%lambda_env_ptr";
+    file_io.write(c.output_file, "  " + lambda_env_ptr + " = bitcast i8* %raw_env to " + llvm_env_name + "*\n");
+
+    t_i = 0;
+    while (t_i < t_len) {
+        let v_name -> String = captures[t_i];
+        let t_node -> TypeListNode = capture_types[t_i];
+        let v_type -> Int = t_node.type;
+        let llvm_ty -> String = get_llvm_type_str(c, v_type);
+
+        let slot_ptr -> String = "%env.slot." + t_i;
+        file_io.write(c.output_file, "  " + slot_ptr + " = getelementptr inbounds " + llvm_env_name + ", " + llvm_env_name + "* " + lambda_env_ptr + ", i32 0, i32 " + t_i + "\n");
+
+        map_put(c.symbol_table.table, v_name, SymbolInfo(reg=slot_ptr, type=v_type, origin_type=v_type, is_const=false));
+        t_i += 1;
+    }
+    
+    p_i = 0;
+    while (p_i < p_len) {
+        let p_node -> ParamNode = params[p_i];
+        let p_ty_id -> Int = resolve_type(c, p_node.type_tok);
+        let p_ty -> String = get_llvm_type_str(c, p_ty_id);
+        let addr_reg -> String = next_reg(c);
+        file_io.write(c.output_file, "  " + addr_reg + " = alloca " + p_ty + "\n");
+        file_io.write(c.output_file, "  store " + p_ty + " %arg" + p_i + ", " + p_ty + "* " + addr_reg + "\n");
+        map_put(c.symbol_table.table, p_node.name_tok.value, SymbolInfo(reg=addr_reg, type=p_ty_id, origin_type=p_ty_id, is_const=false));
+        p_i += 1;
+    }
+    
+    hoist_allocas(c, func_def.body);
+    compile_node(c, func_def.body);
+    
+    if (ret_type_id == TYPE_VOID) {
+        file_io.write(c.output_file, "  ret void\n");
+    } else {
+        let zero_val -> String = "0";
+        if (ret_type_id == TYPE_FLOAT) { zero_val = "0.0"; }
+        else if (ret_type_id == TYPE_STRING || ret_type_id >= 100 || ret_type_id == TYPE_GENERIC_STRUCT || ret_type_id == TYPE_GENERIC_FUNCTION) { zero_val = "null"; }
+        file_io.write(c.output_file, "  ret " + ret_ty_str + " " + zero_val + "\n");
+    }
+    file_io.write(c.output_file, "}\n\n");
+    
+    c.symbol_table = old_sym;
+    c.scope_depth = old_depth;
+    c.reg_count = old_reg;
+    c.current_ret_type = old_ret;
+    
+    file_io.close(c.output_file);
+    c.output_file = old_file;
+    let tmp_read -> File = file_io.open(tmp_name, "rb");
+    let lambda_ir -> String = file_io.read_all(tmp_read);
+    file_io.close(tmp_read);
+    file_io.remove_file(tmp_name);
+    c.global_buffer = c.global_buffer + lambda_ir;
+
+    let clo_reg -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + clo_reg + " = call i8* @malloc(i64 24)\n");
+
+    let clo_rc_ptr -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + clo_rc_ptr + " = bitcast i8* " + clo_reg + " to i32*\n");
+    file_io.write(c.output_file, c.indent + "store i32 0, i32* " + clo_rc_ptr + "\n");
+    
+    let clo_type_ptr_i8 -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + clo_type_ptr_i8 + " = getelementptr inbounds i8, i8* " + clo_reg + ", i32 4\n");
+    let clo_type_ptr -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + clo_type_ptr + " = bitcast i8* " + clo_type_ptr_i8 + " to i32*\n");
+    file_io.write(c.output_file, c.indent + "store i32 8, i32* " + clo_type_ptr + "\n"); 
+
+    let clo_func_ptr_i8 -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + clo_func_ptr_i8 + " = getelementptr inbounds i8, i8* " + clo_reg + ", i32 8\n");
+    let clo_func_ptr -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + clo_func_ptr + " = bitcast i8* " + clo_func_ptr_i8 + " to i8**\n");
+    let lambda_casted -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + lambda_casted + " = bitcast " + ret_ty_str + " (" + sig_ty + ")* @" + lambda_name + " to i8*\n");
+    file_io.write(c.output_file, c.indent + "store i8* " + lambda_casted + ", i8** " + clo_func_ptr + "\n");
+    
+    let clo_env_ptr_i8 -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + clo_env_ptr_i8 + " = getelementptr inbounds i8, i8* " + clo_reg + ", i32 16\n");
+    let clo_env_ptr -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + clo_env_ptr + " = bitcast i8* " + clo_env_ptr_i8 + " to i8**\n");
+    file_io.write(c.output_file, c.indent + "store i8* " + env_payload_i8 + ", i8** " + clo_env_ptr + "\n");
+
+    let clo_payload -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + clo_payload + " = getelementptr inbounds i8, i8* " + clo_reg + ", i32 8\n");
+
+    let local_alloc -> String = next_reg(c);
+    file_io.write(c.output_file, c.indent + local_alloc + " = alloca i8*\n");
+    file_io.write(c.output_file, c.indent + "store i8* " + clo_payload + ", i8** " + local_alloc + "\n");
+
+    emit_retain(c, clo_payload, specific_type_id);
+    map_put(c.symbol_table.table, func_def.name_tok.value, SymbolInfo(reg=local_alloc, type=specific_type_id, origin_type=ret_type_id, is_const=true));
+    c.symbol_table.gc_vars.append(GCTracker(reg=local_alloc, type=specific_type_id));
+
+    return CompileResult(reg=clo_payload, type=specific_type_id, origin_type=ret_type_id);
 }
 
 func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
@@ -3379,7 +3789,6 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_WHILE)    { return compile_while(c, node); }
     if (base.type == NODE_FOR)      { return compile_for(c, node); }
     if (base.type == NODE_BINOP)    { return compile_binop(c, node); }
-    if (base.type == NODE_FUNC_DEF) { return compile_func_def(c, node); }
     if (base.type == NODE_RETURN)   { return compile_return(c, node); }
     if (base.type == NODE_STRUCT_DEF) { return compile_struct_def(c, node); }
     if (base.type == NODE_FIELD_ACCESS) { return compile_field_access(c, node); }
@@ -3388,6 +3797,18 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_VECTOR_LIT) { return compile_vector_lit(c, node); }
     if (base.type == NODE_INDEX_ACCESS) { return compile_index_access(c, node); }
     if (base.type == NODE_INDEX_ASSIGN) { return compile_index_assign(c, node); }
+
+    // function and closure
+    if (base.type == NODE_FUNC_DEF) {
+            let func_def -> FunctionDefNode = node;
+            
+            if (c.scope_depth == 0) {
+                compile_func_def(c, func_def);
+                return null;
+            } else {
+                return compile_local_closure(c, func_def);
+            }
+        }
 
     // ptr
     if (base.type == NODE_PTR_ASSIGN) {return compile_ptr_assign(c, node);}
@@ -3414,8 +3835,32 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 
                 let cast_reg -> String = next_reg(c);
                 file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + sig + " " + func_ptr + " to i8*\n");
-                
-                return CompileResult(reg=cast_reg, type=specific_type_id);
+
+                let clo_reg -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_reg + " = call i8* @malloc(i64 24)\n");
+                let clo_rc_ptr -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_rc_ptr + " = bitcast i8* " + clo_reg + " to i32*\n");
+                file_io.write(c.output_file, c.indent + "store i32 0, i32* " + clo_rc_ptr + "\n");
+                let clo_type_ptr_i8 -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_type_ptr_i8 + " = getelementptr inbounds i8, i8* " + clo_reg + ", i32 4\n");
+                let clo_type_ptr -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_type_ptr + " = bitcast i8* " + clo_type_ptr_i8 + " to i32*\n");
+                file_io.write(c.output_file, c.indent + "store i32 8, i32* " + clo_type_ptr + "\n");
+                let clo_func_ptr_i8 -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_func_ptr_i8 + " = getelementptr inbounds i8, i8* " + clo_reg + ", i32 8\n");
+                let clo_func_ptr -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_func_ptr + " = bitcast i8* " + clo_func_ptr_i8 + " to i8**\n");
+                file_io.write(c.output_file, c.indent + "store i8* " + cast_reg + ", i8** " + clo_func_ptr + "\n");
+                let clo_env_ptr_i8 -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_env_ptr_i8 + " = getelementptr inbounds i8, i8* " + clo_reg + ", i32 16\n");
+                let clo_env_ptr -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_env_ptr + " = bitcast i8* " + clo_env_ptr_i8 + " to i8**\n");
+                file_io.write(c.output_file, c.indent + "store i8* null, i8** " + clo_env_ptr + "\n");
+
+                let clo_payload -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_payload + " = getelementptr inbounds i8, i8* " + clo_reg + ", i32 8\n");
+
+                return CompileResult(reg=clo_payload, type=specific_type_id);
             }
             
             WhitelangExceptions.throw_name_error(r_node.pos, "Unknown variable or function '" + name + "'.");
@@ -3476,6 +3921,22 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
         let l_reg -> String = lhs_res.reg;
         let r_reg -> String = rhs_res.reg;
+
+        if (lhs_res.type == TYPE_NULL && is_pointer_type(c, rhs_res.type)) {
+            WhitelangExceptions.throw_type_error(b_node.pos, "Cannot use 'null' with explicit pointer types. Use 'nullptr'.");
+        }
+        if (rhs_res.type == TYPE_NULL && is_pointer_type(c, lhs_res.type)) {
+            WhitelangExceptions.throw_type_error(b_node.pos, "Cannot use 'null' with explicit pointer types. Use 'nullptr'.");
+        }
+        if (lhs_res.type == TYPE_NULLPTR && !is_pointer_type(c, rhs_res.type) && rhs_res.type != TYPE_NULLPTR) {
+            WhitelangExceptions.throw_type_error(b_node.pos, "Cannot use 'nullptr' with non-pointer types.");
+        }
+        if (rhs_res.type == TYPE_NULLPTR && !is_pointer_type(c, lhs_res.type) && lhs_res.type != TYPE_NULLPTR) {
+            WhitelangExceptions.throw_type_error(b_node.pos, "Cannot use 'nullptr' with non-pointer types.");
+        }
+        if (lhs_res.type == TYPE_INT || lhs_res.type == TYPE_FLOAT || lhs_res.type == TYPE_BOOL || lhs_res.type == TYPE_BYTE) {
+            WhitelangExceptions.throw_type_error(b_node.pos, "Operator 'is' cannot be used with primitive types.");
+        }
         
         // convert to i8* for address comparison
         if (lhs_res.type != TYPE_STRING && lhs_res.type != TYPE_NULL && lhs_res.type != TYPE_NULLPTR) {
@@ -3524,14 +3985,36 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             let f_info -> FuncInfo = map_get(c.func_table, var_name);
             if (f_info is !null) {
                 let specific_type_id -> Int = get_func_type_id(c, f_info.ret_type);
-                
                 let sig -> String = get_func_sig_str(c, f_info);
                 let func_ptr -> String = "@" + var_name;
                 
                 let cast_reg -> String = next_reg(c);
                 file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + sig + " " + func_ptr + " to i8*\n");
+                let clo_reg -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_reg + " = call i8* @malloc(i64 24)\n");
+                let clo_rc_ptr -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_rc_ptr + " = bitcast i8* " + clo_reg + " to i32*\n");
+                file_io.write(c.output_file, c.indent + "store i32 0, i32* " + clo_rc_ptr + "\n");
+                let clo_type_ptr_i8 -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_type_ptr_i8 + " = getelementptr inbounds i8, i8* " + clo_reg + ", i32 4\n");
+                let clo_type_ptr -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_type_ptr + " = bitcast i8* " + clo_type_ptr_i8 + " to i32*\n");
+                file_io.write(c.output_file, c.indent + "store i32 8, i32* " + clo_type_ptr + "\n");
+                let clo_func_ptr_i8 -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_func_ptr_i8 + " = getelementptr inbounds i8, i8* " + clo_reg + ", i32 8\n");
+                let clo_func_ptr -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_func_ptr + " = bitcast i8* " + clo_func_ptr_i8 + " to i8**\n");
+                file_io.write(c.output_file, c.indent + "store i8* " + cast_reg + ", i8** " + clo_func_ptr + "\n");
+                let clo_env_ptr_i8 -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_env_ptr_i8 + " = getelementptr inbounds i8, i8* " + clo_reg + ", i32 16\n");
+                let clo_env_ptr -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_env_ptr + " = bitcast i8* " + clo_env_ptr_i8 + " to i8**\n");
+                file_io.write(c.output_file, c.indent + "store i8* null, i8** " + clo_env_ptr + "\n");
                 
-                return CompileResult(reg=cast_reg, type=specific_type_id);
+                let clo_payload -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + clo_payload + " = getelementptr inbounds i8, i8* " + clo_reg + ", i32 8\n");
+
+                return CompileResult(reg=clo_payload, type=specific_type_id);
             }
 
             WhitelangExceptions.throw_name_error(v.pos, "Undefined variable or function '" + var_name + "'. ");
@@ -3841,13 +4324,15 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                             is_valid_call = true;
                         }
                     }
+                } else {
+                    ret_type_id = callee_res.origin_type;
+                    if (ret_type_id != 0) { is_valid_call = true; }
                 }
                 
                 if (!is_valid_call) {
                     WhitelangExceptions.throw_type_error(n_call.pos, "Generic Function must specify return type.");
                 }
             } 
-
             else {
                 let f_ret_info -> SymbolInfo = map_get(c.func_ret_map, "" + ptr_type);
                 if (f_ret_info is !null) {
@@ -3857,12 +4342,33 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             }
 
             if is_valid_call {
-                let args_sig -> String = "";
-                let args_val_str -> String = "";
+                let is_closure -> Bool = false;
+                let actual_env_reg -> String = "";
+                let raw_func_ptr -> String = callee_res.reg;
+                if (ptr_type == TYPE_GENERIC_FUNCTION || map_get(c.func_ret_map, "" + ptr_type) is !null) {
+                    is_closure = true;
+                    let env_ptr_i8_addr -> String = next_reg(c);
+                    file_io.write(c.output_file, c.indent + env_ptr_i8_addr + " = getelementptr inbounds i8, i8* " + callee_res.reg + ", i32 8\n");
+                    let env_ptr_addr -> String = next_reg(c);
+                    file_io.write(c.output_file, c.indent + env_ptr_addr + " = bitcast i8* " + env_ptr_i8_addr + " to i8**\n");
+                    actual_env_reg = next_reg(c);
+                    file_io.write(c.output_file, c.indent + actual_env_reg + " = load i8*, i8** " + env_ptr_addr + "\n");
+                    let f_ptr_i8_addr -> String = next_reg(c);
+                    file_io.write(c.output_file, c.indent + f_ptr_i8_addr + " = getelementptr inbounds i8, i8* " + callee_res.reg + ", i32 0\n");
+                    let f_ptr_addr -> String = next_reg(c);
+                    file_io.write(c.output_file, c.indent + f_ptr_addr + " = bitcast i8* " + f_ptr_i8_addr + " to i8**\n");
+                    raw_func_ptr = next_reg(c);
+                    file_io.write(c.output_file, c.indent + raw_func_ptr + " = load i8*, i8** " + f_ptr_addr + "\n");
+                }
+
                 let args -> Vector(Struct) = n_call.args;
-                let a_len -> Int = 0;
-                if (args is !null) { a_len = args.length(); }
+                let a_len -> Int = 0; if (args is !null) { a_len = args.length(); }
                 let a_idx -> Int = 0;
+
+                let sig_g -> String = "";
+                let sig_c -> String = "i8*";
+                let args_g_str -> String = "";
+                let args_c_str -> String = "i8* " + actual_env_reg;
                 let first -> Bool = true;
                 
                 while (a_idx < a_len) {
@@ -3870,30 +4376,64 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                     let a_res -> CompileResult = compile_node(c, curr_arg.val);
                     let a_ty -> String = get_llvm_type_str(c, a_res.type);
 
-                    if (first == false) {
-                        args_sig = args_sig + ", ";
-                        args_val_str = args_val_str + ", ";
+                    if (!first) {
+                        sig_g = sig_g + ", ";  args_g_str = args_g_str + ", ";
+                        sig_c = sig_c + ", ";  args_c_str = args_c_str + ", ";
+                    } else {
+                        sig_c = sig_c + ", ";  args_c_str = args_c_str + ", ";
                     }
-                    args_sig += a_ty;
-                    args_val_str += a_ty + " " + a_res.reg;
+                    
+                    sig_g += a_ty;         args_g_str += a_ty + " " + a_res.reg;
+                    sig_c += a_ty;         args_c_str += a_ty + " " + a_res.reg;
                     first = false;
                     a_idx += 1;
                 }
 
                 let ret_ty_str -> String = get_llvm_type_str(c, ret_type_id);
-                let func_ptr_ty -> String = ret_ty_str + " (" + args_sig + ")*";
-                
-                let cast_reg -> String = next_reg(c);
-                file_io.write(c.output_file, c.indent + cast_reg + " = bitcast i8* " + callee_res.reg + " to " + func_ptr_ty + "\n");
 
-                let call_reg -> String = "";
-                if (ret_type_id == TYPE_VOID) {
-                    file_io.write(c.output_file, c.indent + "call void " + cast_reg + "(" + args_val_str + ")\n");
-                    return void_result();
-                } else {
-                    call_reg = next_reg(c);
-                    file_io.write(c.output_file, c.indent + call_reg + " = call " + ret_ty_str + " " + cast_reg + "(" + args_val_str + ")\n");
-                    return CompileResult(reg=call_reg, type=ret_type_id); 
+                if (is_closure) {
+                    let is_env_null -> String = next_reg(c);
+                    file_io.write(c.output_file, c.indent + is_env_null + " = icmp eq i8* " + actual_env_reg + ", null\n");
+                    
+                    let l_global -> String = "call_g_" + c.type_counter;
+                    let l_closure -> String = "call_c_" + c.type_counter;
+                    let l_merge -> String = "call_m_" + c.type_counter;
+                    c.type_counter += 1;
+                    
+                    file_io.write(c.output_file, c.indent + "br i1 " + is_env_null + ", label %" + l_global + ", label %" + l_closure + "\n");
+
+                    file_io.write(c.output_file, "\n" + l_global + ":\n");
+                    let cast_g -> String = next_reg(c);
+                    file_io.write(c.output_file, "  " + cast_g + " = bitcast i8* " + raw_func_ptr + " to " + ret_ty_str + " (" + sig_g + ")*\n");
+                    let res_g -> String = "";
+                    if (ret_type_id == TYPE_VOID) {
+                        file_io.write(c.output_file, "  call void " + cast_g + "(" + args_g_str + ")\n");
+                    } else {
+                        res_g = next_reg(c);
+                        file_io.write(c.output_file, "  " + res_g + " = call " + ret_ty_str + " " + cast_g + "(" + args_g_str + ")\n");
+                    }
+                    file_io.write(c.output_file, "  br label %" + l_merge + "\n");
+
+                    file_io.write(c.output_file, "\n" + l_closure + ":\n");
+                    let cast_c -> String = next_reg(c);
+                    file_io.write(c.output_file, "  " + cast_c + " = bitcast i8* " + raw_func_ptr + " to " + ret_ty_str + " (" + sig_c + ")*\n");
+                    let res_c -> String = "";
+                    if (ret_type_id == TYPE_VOID) {
+                        file_io.write(c.output_file, "  call void " + cast_c + "(" + args_c_str + ")\n");
+                    } else {
+                        res_c = next_reg(c);
+                        file_io.write(c.output_file, "  " + res_c + " = call " + ret_ty_str + " " + cast_c + "(" + args_c_str + ")\n");
+                    }
+                    file_io.write(c.output_file, "  br label %" + l_merge + "\n");
+
+                    file_io.write(c.output_file, "\n" + l_merge + ":\n");
+                    if (ret_type_id == TYPE_VOID) {
+                        return void_result();
+                    } else {
+                        let final_res -> String = next_reg(c);
+                        file_io.write(c.output_file, "  " + final_res + " = phi " + ret_ty_str + " [ " + res_g + ", %" + l_global + " ], [ " + res_c + ", %" + l_closure + " ]\n");
+                        return CompileResult(reg=final_res, type=ret_type_id, origin_type=0);
+                    }
                 }
             }
 
@@ -4331,5 +4871,9 @@ func compile_end(c -> Compiler) -> Void {
         write(c.output_file, def);
         s_idx += 1;
     }
+
+    file_io.write(c.output_file, "; ====== Lambda Lifted Closures and Envs =====\n");
+    file_io.write(c.output_file, c.global_buffer);
+    file_io.write(c.output_file, "\n");
     file_io.close(c.output_file);
 }
