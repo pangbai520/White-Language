@@ -87,5 +87,5 @@ func write(self -> File, content -> String) -> Void {
 
 func remove_file(path -> String) -> Bool {
     let res -> Int = remove(path);
-    return res == false;
+    return res == 0;
 }
