@@ -157,6 +157,7 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "class") { return WhitelangTokens.Token(type=TOK_CLASS, value=value, line=start_line, col=start_col); }
     if (value == "method") { return WhitelangTokens.Token(type=TOK_METHOD, value=value, line=start_line, col=start_col); }
     if (value == "self") { return WhitelangTokens.Token(type=TOK_SELF, value=value, line=start_line, col=start_col); }
+    if (value == "super") { return WhitelangTokens.Token(type=TOK_SUPER, value=value, line=start_line, col=start_col); }
 
     return WhitelangTokens.Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }

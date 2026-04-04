@@ -44,6 +44,7 @@ struct SymbolInfo(
 
 struct FuncInfo(
     name     -> String,
+    base_name  -> String,
     ret_type -> Int, 
     arg_types -> Vector(Struct),
     is_varargs -> Bool
@@ -77,7 +78,9 @@ struct StructInfo(
     llvm_name -> String,
     init_body -> Struct,
     is_class  -> Bool,
-    vtable_name -> String
+    vtable_name -> String,
+    parent_id   -> Int,
+    vtable      -> Vector(Struct)
 )
 
 struct CaptureScope(
@@ -853,4 +856,20 @@ func check_out_index(c -> Compiler, target_node -> Struct, index_node -> Struct,
             }
         }
     }
+}
+
+
+// oop
+func is_subclass(c -> Compiler, child_id -> Int, parent_id -> Int) -> Bool {
+    if (child_id == parent_id) { return true; }
+    let s_info -> StructInfo = map_get(c.struct_id_map, "" + child_id);
+    if (s_info is null) { return false; }
+    let curr_parent -> Int = s_info.parent_id;
+    while (curr_parent != 0) {
+        if (curr_parent == parent_id) { return true; }
+        let p_info -> StructInfo = map_get(c.struct_id_map, "" + curr_parent);
+        if (p_info is null) { return false; }
+        curr_parent = p_info.parent_id;
+    }
+    return false;
 }

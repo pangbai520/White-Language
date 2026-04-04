@@ -150,6 +150,16 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         }
     }
 
+    if (val_res.type >= 100 && expected_type >= 100) {
+        if (is_subclass(c, val_res.type, expected_type)) {
+            let cast_reg -> String = next_reg(c);
+            let dest_ty -> String = get_llvm_type_str(c, expected_type);
+            let src_ty -> String = get_llvm_type_str(c, val_res.type);
+            file_io.write(c.output_file, c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to " + dest_ty + "\n");
+            return CompileResult(reg=cast_reg, type=expected_type, origin_type=val_res.origin_type);
+        }
+    }
+
     WhitelangExceptions.throw_type_error(pos, "Type mismatch. Expected " + get_type_name(c, expected_type) + ", got " + get_type_name(c, val_res.type));
     return val_res;
 }
@@ -223,13 +233,14 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
             let info -> StructInfo = StructInfo(
-                name = s_name,
-                type_id = new_id,
-                fields = null, 
-                llvm_name = "%struct." + s_name,
-                init_body = n.body,
-                is_class = false,
-                vtable_name = ""
+                name=s_name, 
+                type_id=new_id, 
+                fields=null, 
+                llvm_name="%struct." + s_name, 
+                init_body=n.body, is_class=false, 
+                vtable_name="", 
+                parent_id=0, 
+                vtable=null
             );
             map_put(c.struct_table, s_name, info);
             map_put(c.struct_id_map, "" + new_id, info);
@@ -240,13 +251,15 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
             let info -> StructInfo = StructInfo(
-                name = c_name,
-                type_id = new_id,
-                fields = null, 
-                llvm_name = "%class." + c_name,
-                init_body = c_node,
-                is_class = true,
-                vtable_name = "@vtable." + c_name
+                name=c_name, 
+                type_id=new_id, 
+                fields=null, 
+                llvm_name="%class." + c_name, 
+                init_body=c_node, 
+                is_class=true, 
+                vtable_name="@vtable." + c_name, 
+                parent_id=0, 
+                vtable=null
             );
             map_put(c.struct_table, c_name, info);
             map_put(c.struct_id_map, "" + new_id, info);
@@ -289,7 +302,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                 p_idx += 1;
             }
             
-            let f_info -> FuncInfo = FuncInfo(name=func_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=false);
+            let f_info -> FuncInfo = FuncInfo(name=func_name, base_name=raw_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=false);
             map_put(c.func_table, func_name, f_info);
 
         } else if (base.type == NODE_CLASS_DEF) {
@@ -326,7 +339,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                     p_idx += 1;
                 }
                 
-                let f_info -> FuncInfo = FuncInfo(name=m_name, ret_type=ret_id, arg_types=arg_types, is_varargs=false);
+                let f_info -> FuncInfo = FuncInfo(name=m_name, base_name=m_raw_name, ret_type=ret_id, arg_types=arg_types, is_varargs=false);
                 map_put(c.func_table, m_name, f_info);
                 m_idx += 1;
             }
@@ -767,6 +780,27 @@ func compile_arc_hooks(c -> Compiler) -> Void {
             }
             if (!is_in_drop) {
                 file_io.write(c.output_file, "\ndrop_" + class_idx + ":\n");
+
+                let vtable -> Vector(Struct) = cls_info.vtable;
+                let v_len -> Int = 0; if (vtable is !null) { v_len = vtable.length(); }
+                let v_idx -> Int = 0;
+                let deinit_func -> FuncInfo = null;
+                while (v_idx < v_len) {
+                    let f_info -> FuncInfo = vtable[v_idx];
+                    if (f_info.base_name == "$deinit") {
+                        deinit_func = f_info;
+                        break;
+                    }
+                    v_idx += 1;
+                }
+                
+                if (deinit_func is !null) {
+                    let expected_self_node -> TypeListNode = deinit_func.arg_types[0];
+                    let expected_ty_str -> String = get_llvm_type_str(c, expected_self_node.type);
+                    let ret_ty_str -> String = get_llvm_type_str(c, deinit_func.ret_type);
+                    file_io.write(c.output_file, "  %deinit_cast_" + class_idx + " = bitcast i8* %ptr to " + expected_ty_str + "\n");
+                    file_io.write(c.output_file, "  call " + ret_ty_str + " @" + deinit_func.name + "(" + expected_ty_str + " %deinit_cast_" + class_idx + ")\n");
+                }
                 file_io.write(c.output_file, "  %struct_cast_" + class_idx + " = bitcast i8* %ptr to " + cls_info.llvm_name + "*\n");
 
                 let fields_vec -> Vector(Struct) = cls_info.fields;
@@ -1469,34 +1503,32 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
 }
 
 func compile_class_method_call(c -> Compiler, s_info -> StructInfo, obj_res -> CompileResult, method_name -> String, n_call -> CallNode) -> CompileResult {
-    let c_node -> ClassDefNode = s_info.init_body;
-    let methods -> Vector(Struct) = c_node.methods;
-    let m_len -> Int = 0; if (methods is !null) { m_len = methods.length(); }
+    let vtable_vec -> Vector(Struct) = s_info.vtable;
+    let v_len -> Int = 0; if (vtable_vec is !null) { v_len = vtable_vec.length(); }
     
     let m_idx -> Int = 0;
     let found -> Bool = false;
-    while (m_idx < m_len) {
-        let m -> MethodDefNode = methods[m_idx];
-        if (m.name_tok.value == method_name) {
+    let f_info -> FuncInfo = null;
+    
+    while (m_idx < v_len) {
+        let m -> FuncInfo = vtable_vec[m_idx];
+        if (m.base_name == method_name) {
+            f_info = m;
             found = true;
             break;
         }
         m_idx += 1;
     }
     
-    if (!found) {
-        WhitelangExceptions.throw_name_error(n_call.pos, "Method '" + method_name + "' not found in class '" + s_info.name + "'.");
-    }
+    if (!found) { WhitelangExceptions.throw_name_error(n_call.pos, "Method '" + method_name + "' not found in class '" + s_info.name + "'."); }
     
-    let full_m_name -> String = c.current_package_prefix + s_info.name + "_" + method_name;
-    let f_info -> FuncInfo = map_get(c.func_table, full_m_name);
     let sig -> String = get_func_sig_str(c, f_info); 
-    
     let class_llvm_ty -> String = s_info.llvm_name;
     let obj_ptr -> String = obj_res.reg;
     
     let vptr_addr -> String = next_reg(c);
     file_io.write(c.output_file, c.indent + vptr_addr + " = getelementptr inbounds " + class_llvm_ty + ", " + class_llvm_ty + "* " + obj_ptr + ", i32 0, i32 0\n");
+    
     let vtable_i8ptr -> String = next_reg(c);
     file_io.write(c.output_file, c.indent + vtable_i8ptr + " = load i8*, i8** " + vptr_addr + "\n");
     
@@ -1505,13 +1537,21 @@ func compile_class_method_call(c -> Compiler, s_info -> StructInfo, obj_res -> C
     
     let method_i8ptr_addr -> String = next_reg(c);
     file_io.write(c.output_file, c.indent + method_i8ptr_addr + " = getelementptr inbounds %vtable_type." + s_info.name + ", %vtable_type." + s_info.name + "* " + vtable_ptr + ", i32 0, i32 " + m_idx + "\n");
+    
     let method_i8ptr -> String = next_reg(c);
     file_io.write(c.output_file, c.indent + method_i8ptr + " = load i8*, i8** " + method_i8ptr_addr + "\n");
     
     let func_ptr -> String = next_reg(c);
     file_io.write(c.output_file, c.indent + func_ptr + " = bitcast i8* " + method_i8ptr + " to " + sig + "*\n");
+
+    let self_type_node -> TypeListNode = f_info.arg_types[0];
+    let self_expected_type -> Int = self_type_node.type;
     
-    let args_str -> String = class_llvm_ty + "* " + obj_ptr; 
+    c.expected_type = self_expected_type;
+    let casted_obj -> CompileResult = emit_implicit_cast(c, obj_res, self_expected_type, n_call.pos);
+    c.expected_type = 0;
+
+    let args_str -> String = get_llvm_type_str(c, self_expected_type) + " " + casted_obj.reg; 
     let args -> Vector(Struct) = n_call.args;
     let a_len -> Int = 0; if (args is !null) { a_len = args.length(); }
     let arg_idx -> Int = 0;
@@ -1529,6 +1569,7 @@ func compile_class_method_call(c -> Compiler, s_info -> StructInfo, obj_res -> C
         
         let ty_str -> String = get_llvm_type_str(c, arg_val.type);
         args_str = args_str + ", " + ty_str + " " + arg_val.reg;
+        
         arg_idx += 1;
     }
     
@@ -1599,7 +1640,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     }
     let llvm_env_name -> String = "{ " + env_body + " }";
 
-    let env_info -> StructInfo = StructInfo(name=env_struct_name, type_id=env_id, fields=env_fields, llvm_name=llvm_env_name, init_body=null);
+    let env_info -> StructInfo = StructInfo(name=env_struct_name, type_id=env_id, fields=env_fields, llvm_name=llvm_env_name, init_body=null, is_class=false, vtable_name="", parent_id=0, vtable=null);
     map_put(c.struct_id_map, "" + env_id, env_info);
     c.type_drop_list.append(TypeListNode(type=env_id));
 
@@ -1985,63 +2026,123 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
     }
 
     let info -> StructInfo = map_get(c.struct_table, class_name);
-    if (info is null) {
-        WhitelangExceptions.throw_type_error(node.pos, "Class info missing for '" + class_name + "'.");
+
+    let parent_info -> StructInfo = null;
+    if (node.parent_tok is !null) {
+        let p_name -> String = node.parent_tok.value;
+        parent_info = map_get(c.struct_table, p_name);
+        if (parent_info is null || !parent_info.is_class) {
+            WhitelangExceptions.throw_type_error(node.pos, "Parent class '" + p_name + "' is not defined or is not a class.");
+        }
+        info.parent_id = parent_info.type_id;
     }
 
-    let llvm_body -> String = "i8*"; 
+    let llvm_body -> String = "";
     let fields_vec -> Vector(Struct) = [];
-    fields_vec.append(FieldInfo(name="_vptr", type=TYPE_STRING, llvm_type="i8*", offset=0));
+    let vtable_vec -> Vector(Struct) = [];
+    let current_offset -> Int = 0;
 
-    let fields -> Vector(Struct) = node.fields;
-    let f_len -> Int = 0; if (fields is !null) { f_len = fields.length(); }
-    let idx -> Int = 0;
-    
-    while (idx < f_len) {
-        let p -> VarDeclareNode = fields[idx];
+    if (parent_info is !null) {
+        let p_fields -> Vector(Struct) = parent_info.fields;
+        let pf_len -> Int = p_fields.length();
+        let pf_i -> Int = 0;
+        while (pf_i < pf_len) {
+            let pf -> FieldInfo = p_fields[pf_i];
+            fields_vec.append(FieldInfo(name=pf.name, type=pf.type, llvm_type=pf.llvm_type, offset=pf.offset));
+            if (pf_i > 0) { llvm_body += ", "; }
+            llvm_body += pf.llvm_type;
+            current_offset += 1;
+            pf_i += 1;
+        }
+
+        let p_vt -> Vector(Struct) = parent_info.vtable;
+        let pvt_len -> Int = p_vt.length();
+        let pvt_i -> Int = 0;
+        while (pvt_i < pvt_len) {
+            vtable_vec.append(p_vt[pvt_i]);
+            pvt_i += 1;
+        }
+    } else {
+        fields_vec.append(FieldInfo(name="_vptr", type=TYPE_STRING, llvm_type="i8*", offset=0));
+        llvm_body = "i8*";
+        current_offset = 1;
+    }
+
+    let my_fields -> Vector(Struct) = node.fields;
+    let mf_len -> Int = 0; if (my_fields is !null) { mf_len = my_fields.length(); }
+    let mf_idx -> Int = 0;
+    while (mf_idx < mf_len) {
+        let p -> VarDeclareNode = my_fields[mf_idx];
         let f_name -> String = p.name_tok.value;
         let f_type_id -> Int = resolve_type(c, p.type_node);
         let f_llvm_type -> String = get_llvm_type_str(c, f_type_id);
         
-        llvm_body = llvm_body + ", " + f_llvm_type;
-        fields_vec.append(FieldInfo(name=f_name, type=f_type_id, llvm_type=f_llvm_type, offset=idx + 1));
-        idx += 1;
+        if (current_offset > 0) { llvm_body += ", "; }
+        llvm_body += f_llvm_type;
+        fields_vec.append(FieldInfo(name=f_name, type=f_type_id, llvm_type=f_llvm_type, offset=current_offset));
+        current_offset += 1;
+        mf_idx += 1;
     }
-
     info.fields = fields_vec;
 
     let def_str -> String = info.llvm_name + " = type { " + llvm_body + " }\n";
     file_io.write(c.output_file, def_str);
 
-    let methods -> Vector(Struct) = node.methods;
-    let m_len -> Int = 0; if (methods is !null) { m_len = methods.length(); }
-    file_io.write(c.output_file, "%vtable_type." + class_name + " = type [ " + m_len + " x i8* ]\n");
+    let my_methods -> Vector(Struct) = node.methods;
+    let mm_len -> Int = 0; if (my_methods is !null) { mm_len = my_methods.length(); }
+    let mm_idx -> Int = 0;
+    while (mm_idx < mm_len) {
+        let m_node -> MethodDefNode = my_methods[mm_idx];
+        let raw_m_name -> String = m_node.name_tok.value;
+        
+        if (raw_m_name != "$init") {
+            let m_name -> String = c.current_package_prefix + class_name + "_" + raw_m_name;
+            let f_info -> FuncInfo = map_get(c.func_table, m_name);
+            
+            let vt_len -> Int = vtable_vec.length();
+            let vt_i -> Int = 0;
+            let is_override -> Bool = false;
+            while (vt_i < vt_len) {
+                let p_func -> FuncInfo = vtable_vec[vt_i];
+                if (p_func.base_name == raw_m_name) {
+                    vtable_vec[vt_i] = f_info;
+                    is_override = true;
+                    break;
+                }
+                vt_i += 1;
+            }
+            if (!is_override) {
+                vtable_vec.append(f_info);
+            }
+        }
+        mm_idx += 1;
+    }
+    info.vtable = vtable_vec;
 
+    let vt_final_len -> Int = vtable_vec.length();
+    file_io.write(c.output_file, "%vtable_type." + class_name + " = type [ " + vt_final_len + " x i8* ]\n");
     let vt_str -> String = info.vtable_name + " = global %vtable_type." + class_name;
-    if (m_len == 0) {
+    if (vt_final_len == 0) {
         vt_str += " zeroinitializer\n\n";
     } else {
         vt_str += " [ ";
-        let m_idx -> Int = 0;
-        while (m_idx < m_len) {
-            let m_node -> MethodDefNode = methods[m_idx];
-            let m_name -> String = c.current_package_prefix + class_name + "_" + m_node.name_tok.value;
-            let f_info -> FuncInfo = map_get(c.func_table, m_name);
+        let vt_i -> Int = 0;
+        while (vt_i < vt_final_len) {
+            let f_info -> FuncInfo = vtable_vec[vt_i];
             let sig -> String = get_func_sig_str(c, f_info);
-            
-            if (m_idx > 0) { vt_str += ", "; }
-            vt_str += "i8* bitcast (" + sig + " @" + m_name + " to i8*)";
-            m_idx += 1;
+            if (vt_i > 0) { vt_str += ", "; }
+            vt_str += "i8* bitcast (" + sig + " @" + f_info.name + " to i8*)";
+            vt_i += 1;
         }
         vt_str += " ]\n\n";
     }
     file_io.write(c.output_file, vt_str);
 
-    let m_idx2 -> Int = 0;
-    while (m_idx2 < m_len) {
-        let m_node -> MethodDefNode = methods[m_idx2];
+    mm_idx = 0;
+    while (mm_idx < mm_len) {
+        let m_node -> MethodDefNode = my_methods[mm_idx];
         compile_method_def(c, class_name, m_node);
-        m_idx2 += 1;
+        mm_idx += 1;
     }
     
     return void_result();
@@ -2216,7 +2317,7 @@ func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult
         params_str = params_str + "...";
     }
 
-    map_put(c.func_table, func_name, FuncInfo(name=func_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=node.is_varargs));
+    map_put(c.func_table, func_name, FuncInfo(name=func_name, base_name=func_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=node.is_varargs));
     if (map_get(c.declared_externs, func_name) is null) {
         let ret_llvm -> String = get_llvm_type_str(c, ret_type_id);
         file_io.write(c.output_file, "declare " + ret_llvm + " @" + func_name + "(" + params_str + ")\n");
@@ -3247,6 +3348,79 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
         if (callee.type == NODE_FIELD_ACCESS) {
             let f_acc -> FieldAccessNode = n_call.callee;
+
+            let obj_base_pre -> BaseNode = f_acc.obj;
+            if (obj_base_pre.type == NODE_SUPER) {
+                let self_info -> SymbolInfo = find_symbol(c, "self");
+                if (self_info is null) { WhitelangExceptions.throw_invalid_syntax(n_call.pos, "Cannot use 'super' outside of a method."); }
+
+                let curr_class -> StructInfo = map_get(c.struct_id_map, "" + self_info.type);
+                if (curr_class is null || !curr_class.is_class || curr_class.parent_id == 0) {
+                    WhitelangExceptions.throw_type_error(n_call.pos, "Cannot use 'super', class has no parent.");
+                }
+
+                let p_info -> StructInfo = map_get(c.struct_id_map, "" + curr_class.parent_id);
+                let target_m_name -> String = f_acc.field_name;
+                if (target_m_name == "init") { target_m_name = "$init"; }
+                if (target_m_name == "deinit") { target_m_name = "$deinit"; }
+
+                let full_m_name -> String = c.current_package_prefix + p_info.name + "_" + target_m_name;
+                let f_info -> FuncInfo = map_get(c.func_table, full_m_name);
+                if (f_info is null) {
+                    WhitelangExceptions.throw_name_error(n_call.pos, "Method '" + target_m_name + "' not found in parent class '" + p_info.name + "'.");
+                }
+
+                let self_ty_str -> String = get_llvm_type_str(c, self_info.type);
+                let self_val_reg -> String = next_reg(c);
+                file_io.write(c.output_file, c.indent + self_val_reg + " = load " + self_ty_str + ", " + self_ty_str + "* " + self_info.reg + "\n");
+                let self_res -> CompileResult = CompileResult(reg=self_val_reg, type=self_info.type, origin_type=0);
+
+                c.expected_type = curr_class.parent_id;
+                let casted_self -> CompileResult = emit_implicit_cast(c, self_res, curr_class.parent_id, n_call.pos);
+                c.expected_type = 0;
+
+                let sig -> String = get_func_sig_str(c, f_info);
+                let args_str -> String = get_llvm_type_str(c, curr_class.parent_id) + " " + casted_self.reg;
+
+                let args -> Vector(Struct) = n_call.args;
+                let a_len -> Int = 0; if (args is !null) { a_len = args.length(); }
+                let arg_idx -> Int = 0;
+                let expected_types -> Vector(Struct) = f_info.arg_types;
+                
+                let expected_arg_count -> Int = 0;
+                if (expected_types is !null) { expected_arg_count = expected_types.length() - 1; }
+                
+                if (a_len != expected_arg_count) {
+                    WhitelangExceptions.throw_type_error(n_call.pos, "super." + target_m_name + " expects " + expected_arg_count + " arguments, got " + a_len + ".");
+                }
+
+                while (arg_idx < a_len) {
+                    let arg_node_curr -> ArgNode = args[arg_idx];
+                    let expected_type_node -> TypeListNode = expected_types[arg_idx + 1];
+                    let expected_type -> Int = expected_type_node.type;
+
+                    c.expected_type = expected_type;
+                    let arg_val -> CompileResult = compile_node(c, arg_node_curr.val);
+                    c.expected_type = 0;
+                    arg_val = emit_implicit_cast(c, arg_val, expected_type, n_call.pos);
+
+                    let ty_str -> String = get_llvm_type_str(c, arg_val.type);
+                    args_str = args_str + ", " + ty_str + " " + arg_val.reg;
+
+                    arg_idx += 1;
+                }
+
+                let llvm_ret_type -> String = get_llvm_type_str(c, f_info.ret_type);
+                if (f_info.ret_type == TYPE_VOID) {
+                    file_io.write(c.output_file, c.indent + "call " + llvm_ret_type + " @" + full_m_name + "(" + args_str + ")\n");
+                    return CompileResult(reg="", type=TYPE_VOID, origin_type=0);
+                } else {
+                    let call_res -> String = next_reg(c);
+                    file_io.write(c.output_file, c.indent + call_res + " = call " + llvm_ret_type + " @" + full_m_name + "(" + args_str + ")\n");
+                    return CompileResult(reg=call_res, type=f_info.ret_type, origin_type=0);
+                }
+            }
+
             if (f_acc.field_name == "length") {
                 return compile_length_method(c, f_acc.obj, n_call);
             }

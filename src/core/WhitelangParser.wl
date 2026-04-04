@@ -280,6 +280,12 @@ func atom(p -> Parser) -> Struct {
         return VarAccessNode(type=NODE_VAR_ACCESS, name_tok=self_tok, pos=pos);
     }
 
+    if (tok.type == TOK_SUPER) {
+        parser_advance(p);
+        let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        return SuperNode(type=NODE_SUPER, pos=pos);
+    }
+
     // Parenthesized expressions
     if (tok.type == TOK_LPAREN) {
         parser_advance(p);
@@ -1173,6 +1179,22 @@ func parse_class_def(p -> Parser) -> Struct {
     let name_tok -> Token = p.current_tok;
     parser_advance(p);
 
+    let parent_tok -> Token = null;
+    if (p.current_tok.type == TOK_LPAREN) {
+        parser_advance(p); // skip '('
+        if (p.current_tok.type != TOK_IDENTIFIER) {
+            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected parent class name after '('.");
+        }
+        parent_tok = p.current_tok;
+        parser_advance(p); // skip identifier
+        if (p.current_tok.type != TOK_RPAREN) {
+            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ')' after parent class name.");
+        }
+        parser_advance(p); // skip ')'
+    }
+
     if (p.current_tok.type != TOK_LBRACE) {
         let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
         WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '{' before class body.");
@@ -1267,10 +1289,40 @@ func parse_class_def(p -> Parser) -> Struct {
             let body -> Struct = parse_block(p); 
             
             methods.append(MethodDefNode(type=NODE_METHOD_DEF, pos=init_pos, name_tok=init_name_tok, params=params, return_type=ret_type, body=body, is_override=false));
-        
+
+        } else if (p.current_tok.type == TOK_IDENTIFIER && p.current_tok.value == "deinit") {
+            let deinit_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            parser_advance(p); // skip 'deinit'
+
+            let deinit_name_tok -> Token = Token(type=TOK_IDENTIFIER, value="$deinit", line=deinit_pos.ln, col=deinit_pos.col);
+            
+            if (p.current_tok.type != TOK_LPAREN) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '(' after deinit.");
+            }
+            parser_advance(p); // skip '('
+
+            let params -> Vector(Struct) = parse_params(p);
+
+            if (p.current_tok.type != TOK_RPAREN) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ')' after parameters.");
+            }
+            parser_advance(p); // skip ')'
+
+            let void_tok -> Token = Token(type=TOK_T_VOID, value="Void", line=deinit_pos.ln, col=deinit_pos.col);
+            let ret_type -> Struct = VarAccessNode(type=NODE_VAR_ACCESS, name_tok=void_tok, pos=deinit_pos);
+            if (p.current_tok.type == TOK_TYPE_ARROW) {
+                parser_advance(p);
+                parse_return_type(p);
+            }
+
+            let body -> Struct = parse_block(p); 
+            methods.append(MethodDefNode(type=NODE_METHOD_DEF, pos=deinit_pos, name_tok=deinit_name_tok, params=params, return_type=ret_type, body=body, is_override=false));
+
         } else {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-            WhitelangExceptions.throw_invalid_syntax(err_pos, "Only fields ('let'), methods ('method') and constructors ('init') are allowed in class body.");
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Only fields , methods , constructors and destructors are allowed in class body.");
         }
     }
 
@@ -1280,5 +1332,5 @@ func parse_class_def(p -> Parser) -> Struct {
     }
     parser_advance(p); // skip '}'
 
-    return ClassDefNode(type=NODE_CLASS_DEF, pos=pos, name_tok=name_tok, fields=fields, methods=methods);
+    return ClassDefNode(type=NODE_CLASS_DEF, pos=pos, name_tok=name_tok, parent_tok=parent_tok, fields=fields, methods=methods);
 }

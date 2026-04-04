@@ -6,40 +6,70 @@
 
 White Language (suffix: `.wl`) is a statically-typed, self-hosted system programming language designed for predictability, clean syntax, and seamless C interoperability.
 
-Built from the ground up and fully bootstrapped (the White Language Compiler `wlc` is written entirely in White Language), it aims to hit the sweet spot between low-level memory control and high-level ergonomics.
+Built from the ground up and fully bootstrapped (the White Language Compiler `wlc` is written entirely in White Language), it balances C-like memory control with modern syntax and object-oriented safety.
 
 ## Key Features
-
 * **Self-Hosted & Independent**: The compiler has successfully passed the bootstrapping milestone. White Language compiles White Language.
-* **Modern Compiler Architecture**: Under the hood, `wlc` operates on a completely flat, `Vector`-driven Abstract Syntax Tree (AST), ensuring blazing fast compilation times and rock-solid memory safety during the compilation phase.
-* **Predictable Memory Management**: Employs Automatic Reference Counting (ARC) for complex types (`String`, `Struct`, `Vector`) to ensure memory safety without the non-deterministic pauses of a Garbage Collector.
+* **Object-Oriented Programming**: Simple and predictable class inheritance (`class Sub(Parent)`). Supports method overriding, `super` calls, and dynamic dispatch via VTables.
+* **Predictable Memory & RAII**: Employs Automatic Reference Counting (ARC) combined with deterministic destructors (`deinit()`). System resources (files, sockets) are automatically and safely cleaned up via RTTI-routed destructor chaining when objects leave scope—no garbage collector pauses.
+* **Modern Compiler Architecture**: Under the hood, `wlc` operates on a completely flat, `Vector`-driven Abstract Syntax Tree (AST), ensuring fast compilation times and rock-solid memory safety during the compilation phase.
 * **Seamless C Interoperability (FFI)**: Bind to C functions effortlessly with the `extern "C"` syntax. No complex wrappers or boilerplate required.
-* **First-class Pointers**: While ARC handles high-level data, you still have full access to raw memory manipulation using pointers when ultimate performance or hardware interaction is demanded.
-* **Industrial-Grade CLI**: Comes with a standard, Unix-philosophy CLI interface (supporting `-c`, `-S`, `--emit-llvm`, `-O3`, and custom `--ldflags`), making it perfectly suited for modern build systems.
+* **First-class Pointers**: While ARC and OOP handle high-level data, you still have full access to raw memory manipulation using pointers when ultimate performance or hardware interaction is demanded.
+* **CLI**: Comes with a standard, Unix-philosophy CLI interface (supporting `-c`, `-S`, `--emit-llvm`, `-O3`, and custom `--ldflags`), making it perfectly suited for modern build systems.
 
 ## A Taste of White Language
 
-Here is a real example showing ARC, closures, and lexical capture:
+Here is a real example showing VTable polymorphism, `super` dispatch, and automatic RAII resource management:
 
 ```rust
 import "builtin"
 
-func make_counter(start -> Int) -> Function(Int) {
-    let count -> Int = start;
-
-    func increment() -> Int {
-        count += 1;
-        return count;
+class Resource {
+    let name -> String = "Unknown";
+    
+    init(n -> String) { 
+        self.name = n; 
+        builtin.print("Acquired: " + self.name);
     }
     
-    return increment;
+    method work() -> Void {
+        builtin.print("Resource is working...");
+    }
+
+    // Automatically invoked by ARC when ref-count hits 0
+    deinit() { 
+        builtin.print("Destroyed: " + self.name); 
+    }
+}
+
+class Network(Resource) {
+    let ip -> String = "";
+    
+    init(n -> String, ip -> String) {
+        super.init(n); // Static dispatch to parent constructor
+        self.ip = ip;
+    }
+    
+    // Override parent method
+    method work() -> Void {
+        builtin.print("Pinging " + self.ip + "...");
+    }
+    
+    deinit() {
+        builtin.print("Disconnecting " + self.ip + "...");
+        super.deinit(); // Destructor chaining
+    }
 }
 
 func main() -> Int {
-    let counter -> Function(Int) = make_counter(10);
-    
-    builtin.print(counter()); // Output: 11
-    builtin.print(counter()); // Output: 12
+    if (true) {
+        // Implicit upcasting: Network -> Resource
+        let res -> Resource = Network("MainServer", "10.0.0.1"); 
+        
+        // Dynamic Dispatch via VTable! Triggers Network's work()
+        res.work(); 
+        
+    } // <-- ARC kicks in here! Automatically routes to Network's deinit()
     
     return 0;
 }
@@ -47,29 +77,29 @@ func main() -> Int {
 
 ## Why White Language?
 
-* **Versus C**: White Language eliminates the need for header files and manual `malloc`/`free` for strings and vectors thanks to built-in ARC, making it vastly safer for everyday data manipulation while retaining the ability to drop down to raw pointers.
-* **Versus Rust**: White Language avoids the steep learning curve of the borrow checker. You get deterministic memory management via ARC without spending hours fighting the compiler over lifetimes, making prototyping much faster.
-* **Versus Python/Scripting**: White Language is strictly statically typed and compiled ahead-of-time (AOT) to native machine code. It catches errors at compile-time and executes orders of magnitude faster.
+* **Versus C**: White Language eliminates the need for header files, manual `malloc`/`free`, and manual VTable structs. You get modern OOP and deterministic RAII out-of-the-box, making it vastly safer while retaining the ability to drop down to raw pointers.
+* **Versus Rust**: White Language avoids the steep learning curve of the borrow checker. You get deterministic memory management via ARC and traditional object-oriented inheritance without spending hours fighting the compiler over lifetimes, making prototyping much faster.
+* **Versus Python/Scripting**: White Language offers the clean syntax, but it is strictly statically typed and compiled ahead-of-time (AOT) to native machine code. It catches errors at compile-time and executes orders of magnitude faster.
 
 ## Limitations & Known Issues
 
 White Language is a passion project and a work in progress. If you are considering using it for production, please be aware of the following architectural and developmental limitations:
 
-1. **No Cycle Collection in ARC**: The current Automatic Reference Counting implementation is naive. It does not support weak references. If you create cyclic references (e.g., a Struct A pointing to Struct B, which points back to Struct A), memory leaks *will* occur.
-2. **Immature Type System**: 
-   * **No Generics**: True generic programming (templates/monomorphization) is severely limited.
-   * **No Algebraic Data Types (ADTs)**: There is currently no support for Rust-style `Enum`s or pattern matching.
-   * **No Traits/Interfaces**: Polymorphism and interface-based dispatch are not yet implemented.
-3. **Limited Standard Library**: The standard library (`std`) is still in its infancy. It lacks robust cross-platform abstractions for networking, multithreading, async I/O, and advanced file system operations.
-4. **Basic Error Handling**: White Language does not currently have a robust `try/catch` exception mechanism or Monadic error handling (like `Result<T, E>`). Error management heavily relies on manual checking and C-style return codes.
-5. **No Built-in Package Manager (Yet)**: There is no equivalent to `cargo` or `npm`. Dependency management currently relies on physical file paths and environment variables (`WL_PATH`). However, a decentralized package manager WhiteLang Package manager (`wlp`) is on the roadmap.
+1.  **No Cycle Collection in ARC**: The current Automatic Reference Counting implementation is naive. It does not support weak references. If you create cyclic references (e.g., a Struct A pointing to Struct B, which points back to Struct A), memory leaks *will* occur.
+2.  **Immature Type System**:
+* **No Generics**: True generic programming (templates/monomorphization) is severely limited.
+* **No Algebraic Data Types (ADTs)**: There is currently no support for Rust-style `Enum`s or pattern matching.
+* **No Interfaces/Traits**: While class-based inheritance and VTable polymorphism are fully supported, multiple inheritance or interface-based dispatch is not yet implemented.
+3.  **Limited Standard Library**: The standard library (`std`) is still in its infancy. It lacks robust cross-platform abstractions for networking, multithreading, async I/O, and advanced file system operations.
+4.  **Basic Error Handling**: White Language does not currently have a robust `try/catch` exception mechanism or Monadic error handling (like `Result<T, E>`). Error management heavily relies on manual checking and C-style return codes.
+5.  **No Built-in Package Manager (Yet)**: There is no equivalent to `cargo` or `npm`. Dependency management currently relies on physical file paths and environment variables (`WL_PATH`). However, a decentralized package manager WhiteLang Package manager (`wlp`) is on the roadmap.
 
 ## Tooling & Ecosystem
 
 We believe a language is only as good as its tooling. White Language comes with first-class developer experience tools out of the box:
 
 * **VS Code Extension (LSP)**: We provide a dedicated VS Code extension powered by **Langium**. It offers real-time syntax highlighting, semantic validation, autocomplete, and error diagnostics directly in your editor.
-* **Official Website & Binaries (Coming Soon)**: Prefer not to build from source? Our official portal is currently under active development. Once launched, it will serve as the primary hub for downloading pre-compiled, native executable binaries for Windows, macOS, and Linux.
+* **Official Website & Binaries**: Prefer not to build from source? Our official portal is currently under active development. Once launched, it will serve as the primary hub for downloading pre-compiled, native executable binaries for Windows, macOS, and Linux.
 
 ## Building and Bootstrapping
 
@@ -99,7 +129,7 @@ Test the newly built compiler:
 ./wlc_new
 ```
 
-You should see the `White Language Compiler (v0.1.7)` output.
+You should see the `White Language Compiler (v0.1.8)` output.
 
 ## License
 

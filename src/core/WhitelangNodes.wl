@@ -42,6 +42,7 @@ const NODE_INDEX_ASSIGN   -> Int = 39;
 const NODE_IMPORT         -> Int = 40;
 const NODE_CLASS_DEF      -> Int = 41;
 const NODE_METHOD_DEF     -> Int = 42;
+const NODE_SUPER          -> Int = 43;
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -326,6 +327,7 @@ struct ClassDefNode(
     type -> Int, // NODE_CLASS_DEF
     pos -> Position,
     name_tok -> Token,
+    parent_tok -> Token,
     fields -> Vector(Struct),
     methods -> Vector(Struct)
 )
@@ -338,4 +340,9 @@ struct MethodDefNode(
     return_type -> Struct,
     body -> Struct,
     is_override -> Bool
+)
+
+struct SuperNode(
+    type -> Int, // NODE_SUPER
+    pos  -> Position
 )
