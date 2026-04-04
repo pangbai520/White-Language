@@ -75,7 +75,9 @@ struct StructInfo(
     type_id   -> Int,
     fields    -> Vector(Struct),
     llvm_name -> String,
-    init_body -> Struct
+    init_body -> Struct,
+    is_class  -> Bool,
+    vtable_name -> String
 )
 
 struct CaptureScope(

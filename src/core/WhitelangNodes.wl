@@ -40,6 +40,8 @@ const NODE_VECTOR_LIT     -> Int = 37;
 const NODE_INDEX_ACCESS   -> Int = 38;
 const NODE_INDEX_ASSIGN   -> Int = 39;
 const NODE_IMPORT         -> Int = 40;
+const NODE_CLASS_DEF      -> Int = 41;
+const NODE_METHOD_DEF     -> Int = 42;
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -318,4 +320,22 @@ struct ImportNode(
     symbols    -> Vector(Struct),
     alias_tok  -> Token,
     pos        -> Position
+)
+
+struct ClassDefNode(
+    type -> Int, // NODE_CLASS_DEF
+    pos -> Position,
+    name_tok -> Token,
+    fields -> Vector(Struct),
+    methods -> Vector(Struct)
+)
+
+struct MethodDefNode(
+    type -> Int, // NODE_METHOD_DEF
+    pos -> Position,
+    name_tok -> Token,
+    params -> Vector(Struct),
+    return_type -> Struct,
+    body -> Struct,
+    is_override -> Bool
 )

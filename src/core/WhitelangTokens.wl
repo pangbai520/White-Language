@@ -80,6 +80,10 @@ const TOK_IMPORT        -> Int = 66; // import
 const TOK_CONST         -> Int = 67; // const
 const TOK_AS            -> Int = 68; // as
 
+const TOK_CLASS         -> Int = 69; // class
+const TOK_METHOD        -> Int = 70; // method
+const TOK_SELF          -> Int = 71; // self
+
 
 func get_token_name(type -> Int) -> String {
     if (type == TOK_INT) { return "INT"; }
@@ -151,6 +155,10 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_IMPORT)  { return "import"; }
     if (type == TOK_CONST)   { return "const"; }
     if (type == TOK_AS)      { return "as"; }
+
+    if (type == TOK_CLASS)      { return "class"; }
+    if (type == TOK_METHOD)      { return "method"; }
+    if (type == TOK_SELF)      { return "self"; }
 
     return "EOF";
 }

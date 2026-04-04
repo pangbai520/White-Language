@@ -154,6 +154,9 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "import") { return WhitelangTokens.Token(type=TOK_IMPORT, value=value, line=start_line, col=start_col); }
     if (value == "const") { return WhitelangTokens.Token(type=TOK_CONST, value=value, line=start_line, col=start_col); }
     if (value == "as") { return WhitelangTokens.Token(type=TOK_AS, value=value, line=start_line, col=start_col); }
+    if (value == "class") { return WhitelangTokens.Token(type=TOK_CLASS, value=value, line=start_line, col=start_col); }
+    if (value == "method") { return WhitelangTokens.Token(type=TOK_METHOD, value=value, line=start_line, col=start_col); }
+    if (value == "self") { return WhitelangTokens.Token(type=TOK_SELF, value=value, line=start_line, col=start_col); }
 
     return WhitelangTokens.Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }

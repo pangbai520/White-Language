@@ -25,6 +25,7 @@ struct CompilerConfig(
     source_file     -> String,
     output_file     -> String,
     extra_ldflags   -> String,
+    extra_files     -> String,
     is_compile_only -> Bool,  // -c
     is_asm_only     -> Bool,  // -S
     is_emit_llvm    -> Bool,  // --emit-llvm
@@ -37,8 +38,12 @@ struct CompilerConfig(
 )
 
 func print_usage() -> Void {
-    builtin.print("White Language Compiler (v0.1.6)");
-    builtin.print("Usage: wlc <source.wl> [options]");
+    builtin.print("White Language Compiler (v0.1.7)");
+    builtin.print("Usage: wlc <source.wl> [extra_files...] [options]");
+    builtin.print("");
+    builtin.print("Arguments:");
+    builtin.print("  <source.wl>           Primary WhiteLang source file");
+    builtin.print("  [extra_files...]      Additional .wl, .c, or .obj files to compile/link");
     builtin.print("");
     builtin.print("Options:");
     builtin.print("  -o <file>             Write output to <file>");
@@ -80,6 +85,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         source_file     = "",
         output_file     = "",
         extra_ldflags   = "",
+        extra_files     = "",
         is_compile_only = false,
         is_asm_only     = false,
         is_emit_llvm    = false,
@@ -125,7 +131,11 @@ func main(argc -> Int, ptr argv -> String) -> Int {
             if (cfg.source_file.length() == 0) {
                 cfg.source_file = arg;
             } else {
-                builtin.print("Warning: Ignoring extra argument: " + arg);
+                if (cfg.extra_files.length() == 0) {
+                    cfg.extra_files = arg;
+                } else {
+                    cfg.extra_files = cfg.extra_files + " " + arg;
+                }
             }
         }
         i++;
@@ -239,6 +249,10 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     if (cfg.debug_info) { cmd += " -g"; }
     
     cmd += " -Wno-override-module " + cfg.opt_level + " \"" + ll_file + "\"";
+
+    if (cfg.extra_files.length() > 0) {
+        cmd += " " + cfg.extra_files;
+    }
 
     if (cfg.is_asm_only) {
         cmd += " -S";
