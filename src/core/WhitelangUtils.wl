@@ -132,18 +132,18 @@ struct LoopScope(
 
 // compiler init & state utils
 func new_compiler(out_path -> String) -> Compiler {
-    let f -> File = file_io.open(out_path, "w");
+    let f -> File = File(out_path, "w");
     // initialize empty scope
-    let root_scope -> Scope = Scope(table=map_new(32), parent=null, gc_vars=[]);
+    let root_scope -> Scope = Scope(table=HashMap(32), parent=null, gc_vars=[]);
 
     let comp -> Compiler = Compiler(
         output_file = f,
         reg_count = 1,
         symbol_table = root_scope,
-        global_symbol_table = map_new(32),
-        func_table = map_new(32),
-        struct_table = map_new(32),
-        struct_id_map = map_new(32),
+        global_symbol_table = HashMap(32),
+        func_table = HashMap(32),
+        struct_table = HashMap(32),
+        struct_id_map = HashMap(32),
         indent = "  ",
         loop_stack = null,
         scope_depth = 0,
@@ -152,16 +152,16 @@ func new_compiler(out_path -> String) -> Compiler {
         string_list = [],
         str_count = 0,
         type_counter = 100,
-        ptr_cache=map_new(32),
-        ptr_base_map=map_new(32),
-        vector_cache=map_new(32),
-        vector_base_map=map_new(32),
-        func_ret_map=map_new(32),
-        declared_externs=map_new(32),
-        imported_modules=map_new(32),
+        ptr_cache=HashMap(32),
+        ptr_base_map=HashMap(32),
+        vector_cache=HashMap(32),
+        vector_base_map=HashMap(32),
+        func_ret_map=HashMap(32),
+        declared_externs=HashMap(32),
+        imported_modules=HashMap(32),
         current_package_prefix = "",
-        loaded_packages = map_new(32),
-        loaded_files = map_new(32),
+        loaded_packages = HashMap(32),
+        loaded_files = HashMap(32),
         current_dir = ".",
         curr_func = null,
         expected_type = 0,
@@ -194,12 +194,12 @@ func void_result() -> CompileResult {
 func find_symbol(c -> Compiler, name -> String) -> SymbolInfo {
     let curr -> Scope = c.symbol_table;
     while (curr is !null) {
-        let info -> SymbolInfo = map_get(curr.table, name);
+        let info -> SymbolInfo = curr.table.get(name);
         if (info is !null) { return info; }
         curr = curr.parent;
     }
 
-    return map_get(c.global_symbol_table, name);
+    return c.global_symbol_table.get(name);
 }
 
 func find_field(s_info -> StructInfo, name -> String) -> FieldInfo {
@@ -241,30 +241,30 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
 
         let lookup_name -> String = prefix + orig_name;
         if (target_name != lookup_name) {
-            if (map_get(c.func_table, target_name) is !null ||
-                map_get(c.struct_table, target_name) is !null ||
-                map_get(c.global_symbol_table, target_name) is !null) {
+            if (c.func_table.get(target_name) is !null ||
+                c.struct_table.get(target_name) is !null ||
+                c.global_symbol_table.get(target_name) is !null) {
                 WhitelangExceptions.throw_import_error(node.pos, "Name '" + target_name + "' is already defined. Use 'as' to alias it.");
             }
         }
 
         let found -> Bool = false;
 
-        let f_info -> FuncInfo = map_get(c.func_table, lookup_name);
+        let f_info -> FuncInfo = c.func_table.get(lookup_name);
         if (f_info is !null) {
-            map_put(c.func_table, target_name, f_info);
+            c.func_table.put(target_name, f_info);
             found = true;
         }
 
-        let s_info -> StructInfo = map_get(c.struct_table, lookup_name);
+        let s_info -> StructInfo = c.struct_table.get(lookup_name);
         if (s_info is !null) {
-            map_put(c.struct_table, target_name, s_info);
+            c.struct_table.put(target_name, s_info);
             found = true;
         }
 
-        let g_info -> SymbolInfo = map_get(c.global_symbol_table, lookup_name);
+        let g_info -> SymbolInfo = c.global_symbol_table.get(lookup_name);
         if (g_info is !null) {
-            map_put(c.global_symbol_table, target_name, g_info);
+            c.global_symbol_table.put(target_name, g_info);
             found = true;
         }
 
@@ -290,23 +290,23 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_FUNCTION) { return "i8*"; }
 
     if (type_id >= 100) {
-        let f_info -> SymbolInfo = map_get(c.func_ret_map, "" + type_id);
+        let f_info -> SymbolInfo = c.func_ret_map.get("" + type_id);
         if (f_info is !null) {
             return "i8*";
         }
 
-        let ptr_info -> SymbolInfo = map_get(c.ptr_base_map, "" + type_id);
+        let ptr_info -> SymbolInfo = c.ptr_base_map.get("" + type_id);
         if (ptr_info is !null) {
             if (ptr_info.type == TYPE_VOID) { return "i8*"; }
             return get_llvm_type_str(c, ptr_info.type) + "*";
         }
 
-        let s_info -> StructInfo = map_get(c.struct_id_map, "" + type_id);
+        let s_info -> StructInfo = c.struct_id_map.get("" + type_id);
         if (s_info is !null) { 
             return s_info.llvm_name + "*"; 
         }
 
-        let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + type_id);
+        let v_info -> SymbolInfo = c.vector_base_map.get("" + type_id);
         if (v_info is !null) {
             let elem_ty -> String = get_llvm_type_str(c, v_info.type);
             return "{ i64, i64, " + elem_ty + "* }*";
@@ -330,22 +330,22 @@ func get_type_name(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_FUNCTION) { return "Function"; }
 
     if (type_id >= 100) {
-        let f_info -> SymbolInfo = map_get(c.func_ret_map, "" + type_id);
+        let f_info -> SymbolInfo = c.func_ret_map.get("" + type_id);
         if (f_info is !null) {
             return "Function(" + get_type_name(c, f_info.type) + ")";
         }
 
-        let s_info -> StructInfo = map_get(c.struct_id_map, "" + type_id);
+        let s_info -> StructInfo = c.struct_id_map.get("" + type_id);
         if (s_info is !null) {
             return s_info.name;
         }
 
-        let ptr_info -> SymbolInfo = map_get(c.ptr_base_map, "" + type_id);
+        let ptr_info -> SymbolInfo = c.ptr_base_map.get("" + type_id);
         if (ptr_info is !null) {
             return "Ptr<" + get_type_name(c, ptr_info.type) + ">";
         }
 
-        let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + type_id);
+        let v_info -> SymbolInfo = c.vector_base_map.get("" + type_id);
         if (v_info is !null) {
             return "Vector(" + get_type_name(c, v_info.type) + ")";
         }
@@ -359,7 +359,7 @@ func is_pointer_type(c -> Compiler, type_id -> Int) -> Bool {
 
     if (type_id >= 100) {
         let key -> String = "" + type_id;
-        let info -> SymbolInfo = map_get(c.ptr_base_map, key);
+        let info -> SymbolInfo = c.ptr_base_map.get(key);
         if (info is !null) { return true; }
     }
     
@@ -368,7 +368,7 @@ func is_pointer_type(c -> Compiler, type_id -> Int) -> Bool {
 
 func is_void_ptr(c -> Compiler, type_id -> Int) -> Bool {
     if (type_id >= 100) {
-        let base_info -> SymbolInfo = map_get(c.ptr_base_map, "" + type_id);
+        let base_info -> SymbolInfo = c.ptr_base_map.get("" + type_id);
         if (base_info is !null && base_info.type == TYPE_VOID) {
             return true;
         }
@@ -381,9 +381,9 @@ func is_ref_type(c -> Compiler, type_id -> Int) -> Bool {
     if (type_id == TYPE_GENERIC_STRUCT) { return true; }
     if (type_id == TYPE_GENERIC_FUNCTION) { return true; }
     if (type_id >= 100) {
-        if (map_get(c.struct_id_map, "" + type_id) is !null) { return true; }
-        if (map_get(c.vector_base_map, "" + type_id) is !null) { return true; }
-        if (map_get(c.func_ret_map, "" + type_id) is !null) { return true; }
+        if (c.struct_id_map.get("" + type_id) is !null) { return true; }
+        if (c.vector_base_map.get("" + type_id) is !null) { return true; }
+        if (c.func_ret_map.get("" + type_id) is !null) { return true; }
     }
     
     return false;
@@ -391,41 +391,41 @@ func is_ref_type(c -> Compiler, type_id -> Int) -> Bool {
 
 func get_ptr_type_id(c -> Compiler, base_id -> Int) -> Int {
     let key -> String = "ptr_" + base_id;
-    let cached -> SymbolInfo = map_get(c.ptr_cache, key);
+    let cached -> SymbolInfo = c.ptr_cache.get(key);
     if (cached is !null) { return cached.type; }
     
     let new_id -> Int = c.type_counter;
     c.type_counter += 1;
 
-    map_put(c.ptr_cache, key, SymbolInfo(reg="", type=new_id, origin_type=0));
-    map_put(c.ptr_base_map, "" + new_id, SymbolInfo(reg="", type=base_id));
+    c.ptr_cache.put(key, SymbolInfo(reg="", type=new_id, origin_type=0));
+    c.ptr_base_map.put("" + new_id, SymbolInfo(reg="", type=base_id));
     
     return new_id;
 }
 
 func get_func_type_id(c -> Compiler, ret_type_id -> Int) -> Int {
     let key -> String = "func_" + ret_type_id;
-    let cached -> SymbolInfo = map_get(c.ptr_cache, key);
+    let cached -> SymbolInfo = c.ptr_cache.get(key);
     if (cached is !null) { return cached.type; }
     let new_id -> Int = c.type_counter;
     c.type_counter += 1;
 
-    map_put(c.func_ret_map, "" + new_id, SymbolInfo(reg="", type=ret_type_id, origin_type=0));
-    map_put(c.ptr_cache, key, SymbolInfo(reg="", type=new_id, origin_type=0));
+    c.func_ret_map.put("" + new_id, SymbolInfo(reg="", type=ret_type_id, origin_type=0));
+    c.ptr_cache.put(key, SymbolInfo(reg="", type=new_id, origin_type=0));
     return new_id;
 }
 
 func get_vector_type_id(c -> Compiler, base_id -> Int) -> Int {
     let key -> String = "vec_" + base_id;
-    let cached -> SymbolInfo = map_get(c.vector_cache, key);
+    let cached -> SymbolInfo = c.vector_cache.get(key);
     if (cached is !null) { return cached.type; }
     
     let new_id -> Int = c.type_counter;
     c.type_drop_list.append(TypeListNode(type=new_id));
     c.type_counter += 1;
 
-    map_put(c.vector_cache, key, SymbolInfo(reg="", type=new_id, origin_type=0));
-    map_put(c.vector_base_map, "" + new_id, SymbolInfo(reg="", type=base_id, origin_type=0));
+    c.vector_cache.put(key, SymbolInfo(reg="", type=new_id, origin_type=0));
+    c.vector_base_map.put("" + new_id, SymbolInfo(reg="", type=base_id, origin_type=0));
     
     return new_id;
 }
@@ -450,7 +450,7 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
         let f -> FieldAccessNode = node;
         let obj_type -> Int = get_expr_type(c, f.obj);
         if (obj_type >= 100) {
-            let s_info -> StructInfo = map_get(c.struct_id_map, "" + obj_type);
+            let s_info -> StructInfo = c.struct_id_map.get("" + obj_type);
             if (s_info is !null) {
                 let field -> FieldInfo = find_field(s_info, f.field_name);
                 if (field is !null) { return field.type; }
@@ -463,11 +463,11 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
         let idx_node -> IndexAccessNode = node;
         let target_type -> Int = get_expr_type(c, idx_node.target);
         if (is_pointer_type(c, target_type) == true) {
-            let base_info -> SymbolInfo = map_get(c.ptr_base_map, "" + target_type);
+            let base_info -> SymbolInfo = c.ptr_base_map.get("" + target_type);
             if (base_info is !null) { return base_info.type; }
         }
         if (target_type >= 100) {
-            let v_info -> SymbolInfo = map_get(c.vector_base_map, "" + target_type);
+            let v_info -> SymbolInfo = c.vector_base_map.get("" + target_type);
             if (v_info is !null) { return v_info.type; }
         }
         if (target_type == TYPE_STRING) { return TYPE_BYTE; }
@@ -479,7 +479,7 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
         let callee -> BaseNode = call_node.callee;
         if (callee.type == NODE_VAR_ACCESS) {
             let v -> VarAccessNode = call_node.callee;
-            let f_info -> FuncInfo = map_get(c.func_table, v.name_tok.value);
+            let f_info -> FuncInfo = c.func_table.get(v.name_tok.value);
             if (f_info is !null) { return f_info.ret_type; }
         }
         return 0;
@@ -535,7 +535,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         if (name == "Struct") { return TYPE_GENERIC_STRUCT; }
         if (name == "Function") { return TYPE_GENERIC_FUNCTION; }
         
-        let s_info -> StructInfo = map_get(c.struct_table, name);
+        let s_info -> StructInfo = c.struct_table.get(name);
         if (s_info is !null) { return s_info.type_id; }
         
         WhitelangExceptions.throw_type_error(v.pos, "Unknown type: " + name);
@@ -594,11 +594,11 @@ func string_escape(s -> String) -> String {
 }
 
 func file_exists(path -> String) -> Bool {
-    let f -> File = file_io.open(path, "rb");
-    if (f is null) {
+    let f -> File = File(path, "rb");
+    if (f.handle is nullptr) {
         return false;
     }
-    file_io.close(f);
+    f.close();
     return true;
 }
 
@@ -645,9 +645,9 @@ func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> 
 
 // closure analysis utils
 func record_capture(scope -> CaptureScope, v_name -> String) -> Void {
-    if (map_get(scope.local_vars, v_name) is null) {
-        if (map_get(scope.captured_vars, v_name) is null) {
-            map_put(scope.captured_vars, v_name, TypeListNode(type=1));
+    if (scope.local_vars.get(v_name) is null) {
+        if (scope.captured_vars.get(v_name) is null) {
+            scope.captured_vars.put(v_name, TypeListNode(type=1));
             scope.captured_list.append(v_name);
         }
     }
@@ -670,7 +670,7 @@ func analyze_captures(node -> Struct, scope -> CaptureScope) -> Void {
     }
     else if (type == NODE_VAR_DECL) {
         let decl -> VarDeclareNode = node;
-        map_put(scope.local_vars, decl.name_tok.value, TypeListNode(type=1));
+        scope.local_vars.put(decl.name_tok.value, TypeListNode(type=1));
         if (decl.value is !null) {
             analyze_captures(decl.value, scope);
         }
@@ -779,16 +779,16 @@ func analyze_captures(node -> Struct, scope -> CaptureScope) -> Void {
     }
     else if (type == NODE_FUNC_DEF) {
         let func_def -> FunctionDefNode = node;
-        map_put(scope.local_vars, func_def.name_tok.value, TypeListNode(type=1));
+        scope.local_vars.put(func_def.name_tok.value, TypeListNode(type=1));
 
-        let child_scope -> CaptureScope = CaptureScope(local_vars=map_new(32), captured_vars=map_new(32), captured_list=[]);
+        let child_scope -> CaptureScope = CaptureScope(local_vars=HashMap(32), captured_vars=HashMap(32), captured_list=[]);
 
         let params -> Vector(Struct) = func_def.params;
         let i -> Int = 0;
         let len -> Int = 0; if (params is !null) { len = params.length(); }
         while (i < len) {
             let p_node -> ParamNode = params[i];
-            map_put(child_scope.local_vars, p_node.name_tok.value, TypeListNode(type=1));
+            child_scope.local_vars.put(p_node.name_tok.value, TypeListNode(type=1));
             i += 1;
         }
 
@@ -862,12 +862,12 @@ func check_out_index(c -> Compiler, target_node -> Struct, index_node -> Struct,
 // oop
 func is_subclass(c -> Compiler, child_id -> Int, parent_id -> Int) -> Bool {
     if (child_id == parent_id) { return true; }
-    let s_info -> StructInfo = map_get(c.struct_id_map, "" + child_id);
+    let s_info -> StructInfo = c.struct_id_map.get("" + child_id);
     if (s_info is null) { return false; }
     let curr_parent -> Int = s_info.parent_id;
     while (curr_parent != 0) {
         if (curr_parent == parent_id) { return true; }
-        let p_info -> StructInfo = map_get(c.struct_id_map, "" + curr_parent);
+        let p_info -> StructInfo = c.struct_id_map.get("" + curr_parent);
         if (p_info is null) { return false; }
         curr_parent = p_info.parent_id;
     }

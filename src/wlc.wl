@@ -38,7 +38,7 @@ struct CompilerConfig(
 )
 
 func print_usage() -> Void {
-    builtin.print("White Language Compiler (v0.1.8)");
+    builtin.print("White Language Compiler (v0.1.9)");
     builtin.print("Usage: wlc <source.wl> [extra_files...] [options]");
     builtin.print("");
     builtin.print("Arguments:");
@@ -168,13 +168,13 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     }
 
     log_stage(cfg, "Frontend & Middle-end");
-    let f_in -> File = file_io.open(cfg.source_file, "rb");
+    let f_in -> File = File(cfg.source_file, "rb");
     if (f_in is null) {
         builtin.print("Error: Could not open " + cfg.source_file);
         return 1;
     }
-    let source -> String = file_io.read_all(f_in);
-    file_io.close(f_in);
+    let source -> String = f_in.read_all();
+    f_in.close();
 
     let lexer -> Lexer = new_lexer(cfg.source_file, source);
     let parser -> Parser = Parser(lexer=lexer, current_tok=get_next_token(lexer));
@@ -187,9 +187,9 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     compile(compiler, ast);
 
     if (cfg.dump_ir) {
-        let f_ir -> File = file_io.open(ll_file, "rb");
-        let ir_content -> String = file_io.read_all(f_ir);
-        file_io.close(f_ir);
+        let f_ir -> File = File(ll_file, "rb");
+        let ir_content -> String = f_ir.read_all();
+        f_ir.close();
         builtin.print(ir_content);
     }
 
@@ -215,9 +215,9 @@ func main(argc -> Int, ptr argv -> String) -> Int {
             portable_clang = wl_path + "/tools/llvm/bin/clang";
         }
 
-        let probe -> File = file_io.open(portable_clang, "rb");
+        let probe -> File = File(portable_clang, "rb");
         if (probe is !null) {
-            file_io.close(probe);
+            probe.close();
             clang_cmd = "\"" + portable_clang + "\"";
             has_clang = true;
             if (cfg.verbose) { builtin.print("Using portable LLVM: " + portable_clang); }

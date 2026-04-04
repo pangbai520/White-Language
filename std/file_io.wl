@@ -1,13 +1,9 @@
-// std/io.wl
+// std/file_io.wl
 //
 // Standard Input/Output Library.
 // This file provides high-level abstractions over C stdio file operations.
 
-// ----------------------------------------------------------
-// C Runtime Bindings
-// ----------------------------------------------------------
 extern "C" {
-    // 'String' to represent generic C pointers (FILE*, void*).
     func fopen(filename -> String, mode -> String) -> ptr Void;
     func fclose(stream -> ptr Void) -> Int;
     func fread(p -> String, size -> Long, count -> Long, stream -> ptr Void) -> Long;
@@ -17,73 +13,56 @@ extern "C" {
     func rewind(stream -> ptr Void) -> Void;
     func remove(filename -> String) -> Int;
 
-    // White Lang C Helper
-    func __wl_str_set(s -> String, idx -> Int, val -> Int) -> Void;
     func wl_alloc_string(size -> Long) -> String;
 }
 
-// ==========================================================
-// Constants
-// ==========================================================
+
 const SEEK_SET -> Int = 0;
 const SEEK_CUR -> Int = 1;
 const SEEK_END -> Int = 2;
 
-// ==========================================================
-// Imports
-// ==========================================================
-import "builtin"
 
-// ==========================================================
-// Type Definitions
-// ==========================================================
-struct File(handle -> ptr Void, path -> String)
+class File {
+    let ptr handle -> Void = nullptr;
+    let path -> String = "";
 
-
-// ==========================================================
-// File Operations
-// ==========================================================
-func open(path -> String, mode -> String) -> File {
-    let ptr raw_handle -> Void = fopen(path, mode);
-
-    if (raw_handle is nullptr) {
-        return null;
+    init(p -> String, mode -> String) {
+        self.path = p;
+        let ptr raw_handle -> Void = fopen(p, mode);
+        if (raw_handle is !nullptr) {
+            self.handle = raw_handle;
+        }
     }
 
-    return File(handle=raw_handle, path=path);
-}
+    method read_all() -> String {
+        if (self.handle is nullptr) { return wl_alloc_string(0); }
 
-func close(self -> File) -> Void {
-    if (self.handle is !nullptr) {
-        fclose(self.handle);
-        self.handle = nullptr; 
-    }
-}
-
-
-func read_all(self -> File) -> String {
-    if (self.handle is nullptr) {
-        return wl_alloc_string(0);
+        fseek(self.handle, 0, SEEK_END);
+        let size -> Long = ftell(self.handle);
+        rewind(self.handle);
+        
+        let buffer -> String = wl_alloc_string(size);
+        fread(buffer, 1, size, self.handle);
+        return buffer;
     }
 
-    let ptr handle -> Void = self.handle;
-    fseek(handle, 0, SEEK_END);
-    let size -> Long = ftell(handle);
-    rewind(handle);
-    let buffer -> String = wl_alloc_string(size);
-    fread(buffer, 1, size, handle);
+    method write(content -> String) -> Void {
+        if (self.handle is nullptr) { return; }
+        let len -> Long = content.length(); 
+        fwrite(content, 1, len, self.handle);
+    }
 
-    return buffer;
+    method close() -> Void {
+        if (self.handle is !nullptr) {
+            fclose(self.handle);
+            self.handle = nullptr; 
+        }
+    }
+
+    deinit() {
+        self.close();
+    }
 }
-
-
-func write(self -> File, content -> String) -> Void {
-    if (self.handle is nullptr) { return; }
-    let len -> Long = content.length(); 
-
-    fwrite(content, 1, len, self.handle);
-}
-
 
 func remove_file(path -> String) -> Bool {
     let res -> Int = remove(path);

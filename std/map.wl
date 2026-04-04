@@ -1,127 +1,92 @@
 // std/map.wl
-//
-// Standard Map Library.
-// This files provides the definition and operations of maps.
-
-// ----------------------------------------------------------
-// C Runtime Bindings
-// ----------------------------------------------------------
 extern "C" {
     func calloc(num -> Long, size -> Long) -> ptr Void;
-    
-    // Standard memory allocation
-    func malloc(size -> Long) -> ptr Void;
-    
-    // Releases memory
     func free(ptr p -> Void) -> Void;
-    
-    // Compares two strings. Returns 0 if they are equal.
     func strcmp(s1 -> String, s2 -> String) -> Int;
-    
-    // Returns the length of the string
-    func strlen(s -> String) -> Long;
 }
 
-// ==========================================================
-// Type Definitions
-// ==========================================================
-struct MapEntry(
-    key   -> String, 
-    value -> Struct, 
-    next  -> MapEntry
-)
 
-struct HashMap(
-    ptr buckets  -> MapEntry, 
-    capacity -> Int,          
-    size     -> Int           
-)
-
-// ----------------------------------------------------------
-// Hash Function (DJB2)
-// ----------------------------------------------------------
 func hash_djb2(key -> String) -> Int {
     let hash -> Int = 5381;
     let i -> Int = 0;
-    
     while (i < key.length()) {
         let c -> Int = key[i];
         if (c == 0) { break; }
         hash = ((hash * 33) + c);
         i++;
     }
-    
-    if (hash < 0) {
-        hash = 0 - hash;
-    }
-
-    let final_hash -> Int = hash;
-    if (final_hash < 0) {
-        final_hash = 0 - final_hash; // absolute value
-    }
-    return final_hash;
+    if (hash < 0) { hash = 0 - hash; }
+    return hash;
 }
 
 
-// ==========================================================
-// Map Operations
-// ==========================================================
-func map_new(capacity -> Int) -> HashMap {
-    let ptr raw_mem -> Void = calloc(capacity, 8);
-    let ptr buckets -> MapEntry = raw_mem;
+class MapEntry {
+    let key   -> String = "";
+    let value -> Struct = null;
+    let next  -> MapEntry = null;
 
-    return HashMap(buckets=buckets, capacity=capacity, size=0);
+    init(k -> String, v -> Struct, n -> MapEntry) {
+        self.key = k;
+        self.value = v;
+        self.next = n;
+    }
 }
 
 
-func map_put(self -> HashMap, key -> String, val -> Struct) -> Void {
-    let h -> Int = hash_djb2(key);
-    let idx -> Int = h % self.capacity;
-    if (idx < 0) { idx = 0 - idx; }
-    let current -> MapEntry = self.buckets[idx];
-    let iter -> MapEntry = current;
-    while (iter is !null) {
-        if (strcmp(iter.key, key) == 0) {
-            iter.value = val;
-            return;
+class HashMap {
+    let ptr buckets -> MapEntry = nullptr; 
+    let capacity -> Int = 0;          
+    let size     -> Int = 0;           
+
+    init(cap -> Int) {
+        self.capacity = cap;
+        self.size = 0;
+        self.buckets = calloc(cap, 8);
+    }
+
+    method put(key -> String, val -> Struct) -> Void {
+        let h -> Int = hash_djb2(key);
+        let idx -> Int = h % self.capacity;
+        if (idx < 0) { idx = 0 - idx; }
+        
+        let current -> MapEntry = self.buckets[idx];
+        let iter -> MapEntry = current;
+        
+        while (iter is !null) {
+            if (strcmp(iter.key, key) == 0) {
+                iter.value = val;
+                return;
+            }
+            iter = iter.next;
         }
-        iter = iter.next;
+        
+        self.buckets[idx] = MapEntry(key, val, current);
+        self.size++;
     }
-    
-    let new_entry -> MapEntry = MapEntry(key=key, value=val, next=current);
-    self.buckets[idx] = new_entry;
-    
-    self.size++;
-}
 
-
-func map_get(self -> HashMap, key -> String) -> Struct {
-    let h -> Int = hash_djb2(key);
-    let idx -> Int = h % self.capacity;
-    
-    // Retrieve the head of the chain
-    let current -> MapEntry = self.buckets[idx];
-    
-    // Traverse the chain
-    while (current is !null) {
-        if (strcmp(current.key, key) == 0) {
-            return current.value;
+    method get(key -> String) -> Struct {
+        let h -> Int = hash_djb2(key);
+        let idx -> Int = h % self.capacity;
+        
+        let current -> MapEntry = self.buckets[idx];
+        while (current is !null) {
+            if (strcmp(current.key, key) == 0) {
+                return current.value;
+            }
+            current = current.next;
         }
-        current = current.next;
+        return null;
     }
-    
-    return null; // Not found
+
+    deinit() {
+        if (self.buckets is !nullptr) {
+            free(self.buckets);
+            self.buckets = nullptr;
+        }
+    }
 }
 
-func map_free(self -> HashMap) -> Void {
-    let ptr raw_buckets -> Void = self.buckets;
-    free(raw_buckets);
-}
-
-// in keyword support
 func _compiler_helper_IN(self -> HashMap, key -> String) -> Bool {
-    let val -> Struct = map_get(self, key);
+    let val -> Struct = self.get(key);
     return val is !null;
 }
-
-
