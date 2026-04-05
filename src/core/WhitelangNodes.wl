@@ -43,6 +43,7 @@ const NODE_IMPORT         -> Int = 40;
 const NODE_CLASS_DEF      -> Int = 41;
 const NODE_METHOD_DEF     -> Int = 42;
 const NODE_SUPER          -> Int = 43;
+const NODE_METHOD_TYPE    -> Int = 44;
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -345,4 +346,10 @@ struct MethodDefNode(
 struct SuperNode(
     type -> Int, // NODE_SUPER
     pos  -> Position
+)
+
+struct MethodTypeNode(
+    type        -> Int,    // NODE_METHOD_TYPE
+    return_type -> Struct,
+    pos         -> Position
 )

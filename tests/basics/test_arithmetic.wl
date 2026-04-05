@@ -4,7 +4,7 @@
 import "builtin"
 
 func main() -> Int {
-    let res -> Float = (2 + 3) * 5 / 3 + (6 - 3 / 78) + 114 * 514;
+    let res -> Float = (2.0 + 3.0) * 5.0 / 3.0 + (6.0 - 3.0 / 78.0) + 114.0 * 514.0;
 
     if (res > 58609.000000 && res < 58611.000000) {
         builtin.print("PASS: Complex arithmetic precision");

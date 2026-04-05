@@ -20,6 +20,8 @@ const TYPE_GENERIC_STRUCT   -> Int = 7;
 const TYPE_GENERIC_FUNCTION -> Int = 8;
 const TYPE_LONG  -> Int = 9;
 const TYPE_BYTE  -> Int = 10;
+const TYPE_GENERIC_CLASS -> Int = 11;
+const TYPE_GENERIC_METHOD -> Int = 12;
 const TYPE_NULLPTR -> Int = 99;
 
 
@@ -119,7 +121,8 @@ struct Compiler(
     curr_func -> FuncInfo,
     expected_type -> Int,
     type_drop_list -> Vector(Struct),
-    global_buffer -> String
+    global_buffer -> String,
+    string_pool -> HashMap
 )
 
 
@@ -166,7 +169,8 @@ func new_compiler(out_path -> String) -> Compiler {
         curr_func = null,
         expected_type = 0,
         type_drop_list = [],
-        global_buffer = ""
+        global_buffer = "",
+        string_pool = map.HashMap(128)
     );
 
     comp.type_drop_list.append(TypeListNode(type=TYPE_GENERIC_FUNCTION));
@@ -288,6 +292,8 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_STRING){ return "i8*"; }
     if (type_id == TYPE_GENERIC_STRUCT) { return "i8*"; }
     if (type_id == TYPE_GENERIC_FUNCTION) { return "i8*"; }
+    if (type_id == TYPE_GENERIC_CLASS) { return "i8*"; }
+    if (type_id == TYPE_GENERIC_METHOD) { return "i8*"; }
 
     if (type_id >= 100) {
         let f_info -> SymbolInfo = c.func_ret_map.get("" + type_id);
@@ -328,6 +334,8 @@ func get_type_name(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_NULLPTR){ return "nullptr"; }
     if (type_id == TYPE_GENERIC_STRUCT) { return "Struct"; }
     if (type_id == TYPE_GENERIC_FUNCTION) { return "Function"; }
+    if (type_id == TYPE_GENERIC_CLASS) { return "Class"; }
+    if (type_id == TYPE_GENERIC_METHOD) { return "Method"; }
 
     if (type_id >= 100) {
         let f_info -> SymbolInfo = c.func_ret_map.get("" + type_id);
@@ -380,6 +388,9 @@ func is_ref_type(c -> Compiler, type_id -> Int) -> Bool {
     if (type_id == TYPE_STRING) { return true; }
     if (type_id == TYPE_GENERIC_STRUCT) { return true; }
     if (type_id == TYPE_GENERIC_FUNCTION) { return true; }
+    if (type_id == TYPE_GENERIC_CLASS) { return true; }
+    if (type_id == TYPE_GENERIC_METHOD) { return true; }
+
     if (type_id >= 100) {
         if (c.struct_id_map.get("" + type_id) is !null) { return true; }
         if (c.vector_base_map.get("" + type_id) is !null) { return true; }
@@ -495,10 +506,14 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
     if (base.type == NODE_FUNCTION_TYPE) {
         let f_node -> FunctionTypeNode = node;
         let ret_id -> Int = resolve_type(c, f_node.return_type);
-        
         return get_func_type_id(c, ret_id);
     }
-    
+    if (base.type == NODE_METHOD_TYPE) {
+        let m_node -> MethodTypeNode = node;
+        let ret_id -> Int = resolve_type(c, m_node.return_type);
+        return get_func_type_id(c, ret_id);
+    }
+
     // Pointer Type (ptr*N Type)
     if (base.type == NODE_PTR_TYPE) {
         let p_node -> PointerTypeNode = node;
@@ -534,6 +549,8 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         if (name == "Void") { return TYPE_VOID; }
         if (name == "Struct") { return TYPE_GENERIC_STRUCT; }
         if (name == "Function") { return TYPE_GENERIC_FUNCTION; }
+        if (name == "Class") { return TYPE_GENERIC_CLASS; }
+        if (name == "Method") { return TYPE_GENERIC_METHOD; }
         
         let s_info -> StructInfo = c.struct_table.get(name);
         if (s_info is !null) { return s_info.type_id; }

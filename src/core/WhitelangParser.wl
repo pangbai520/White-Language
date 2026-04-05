@@ -135,6 +135,24 @@ func parse_return_type(p -> Parser) -> Struct {
             let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             return VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
         }
+        if (tok.value == "Method") {
+            parser_advance(p); // skip Method
+            if (p.current_tok.type == TOK_LPAREN) {
+                parser_advance(p); // skip '('
+                let ret_ty -> Struct = parse_return_type(p);
+                if (p.current_tok.type != TOK_RPAREN) {
+                    let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ')' after Method return type.");
+                }
+                parser_advance(p); // skip ')'
+
+                let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                return MethodTypeNode(type=NODE_METHOD_TYPE, return_type=ret_ty, pos=pos);
+            }
+
+            let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            return VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
+        }
         if (tok.value == "Vector") {
             parser_advance(p); // skip Vector
             if (p.current_tok.type != TOK_LPAREN) {

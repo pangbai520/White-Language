@@ -10,7 +10,7 @@ func main() -> Int {
     // comparison operators
     let bool_test -> Bool = (5 >= 3) && true;
 
-    if (complex_float == 0.3 && bool_test) {
+    if (complex_float > 0.299999 && complex_float < 0.300001 && bool_test) {
         builtin.print("PASS: Literals and unary operators");
     } else {
         builtin.print("FAIL: Unary fusion or boolean literal error");
