@@ -8,6 +8,7 @@ import "core/WhitelangLexer.wl"
 import "core/WhitelangNodes.wl"
 import "core/WhitelangParser.wl"
 import "core/WhitelangCompiler.wl"
+import "core/WhitelangUtils.wl"
 
 
 extern func get_arg(ptr argv -> String, idx -> Int) -> String from "C";
@@ -38,7 +39,7 @@ struct CompilerConfig(
 )
 
 func print_usage() -> Void {
-    builtin.print("White Language Compiler (v0.2)");
+    builtin.print("White Language Compiler (v0.2.1)");
     builtin.print("Usage: wlc <source.wl> [extra_files...] [options]");
     builtin.print("");
     builtin.print("Arguments:");

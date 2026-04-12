@@ -4029,64 +4029,68 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
 // BUILTIN HELPER
 func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position, origin_id -> Int) -> Void {
-    if (type_id == TYPE_INT) {
-        c.output_file.write(c.indent + "call void @builtin.print_i(i32 " + reg + ")\n");
-    } else if (type_id == TYPE_LONG) {
-        c.output_file.write(c.indent + "call void @builtin.print_l(i64 " + reg + ")\n");
-    } else if (type_id == TYPE_FLOAT) {
-        c.output_file.write(c.indent + "call void @builtin.print_f(double " + reg + ")\n");
-    } else if (type_id == TYPE_STRING) {
-        c.output_file.write(c.indent + "call void @builtin.print_s(i8* " + reg + ")\n");
-    } else if (type_id == TYPE_BOOL) {
-        c.output_file.write(c.indent + "call void @builtin.print_b(i1 " + reg + ")\n");
-    } else if (type_id == TYPE_BYTE) {
-        c.output_file.write(c.indent + "call void @builtin.print_c(i8 " + reg + ")\n");
+    if (type_id == TYPE_STRING) {
+        c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + reg + ")\n");
+        return;
     }
-    else if (is_pointer_type(c, type_id)) {
-        let base_info -> SymbolInfo = c.ptr_base_map.get("" + type_id);
 
+    if (type_id == TYPE_INT || type_id == TYPE_LONG || type_id == TYPE_FLOAT || type_id == TYPE_BOOL || type_id == TYPE_BYTE) {
+        let temp_res -> CompileResult = CompileResult(reg=reg, type=type_id, origin_type=origin_id);
+        let str_res -> CompileResult = convert_to_string(c, temp_res);
+        c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + str_res.reg + ")\n");
+        return;
+    }
+
+    if (type_id == TYPE_NULL || type_id == TYPE_NULLPTR) {
+        c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
+        return;
+    }
+
+    if (is_pointer_type(c, type_id)) {
+        let base_info -> SymbolInfo = c.ptr_base_map.get("" + type_id);
         if (base_info is !null && base_info.type == TYPE_BYTE) {
-            c.output_file.write(c.indent + "call void @builtin.print_s(i8* " + reg + ")\n");
+            c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + reg + ")\n");
         } else {
             c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_hex_ptr, i32 0, i32 0), i8* " + reg + ")\n");
         }
+        return;
     }
-    else if (type_id == TYPE_GENERIC_STRUCT || type_id == TYPE_GENERIC_CLASS) {
+    
+    if (type_id == TYPE_GENERIC_STRUCT || type_id == TYPE_GENERIC_CLASS) {
         if (origin_id >= 100) {
             let s_info_real -> StructInfo = c.struct_id_map.get("" + origin_id);
             if (s_info_real is !null) {
                 let cast_reg -> String = next_reg(c);
                 c.output_file.write(c.indent + cast_reg + " = bitcast i8* " + reg + " to " + s_info_real.llvm_name + "*\n");
                 compile_print_struct_internal(c, cast_reg, s_info_real, pos);
-            } else {
-                c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_hex_ptr, i32 0, i32 0), i8* " + reg + ")\n");
+                return;
             }
         }
-        else {
-            c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_hex_ptr, i32 0, i32 0), i8* " + reg + ")\n");
-        }
+        c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_hex_ptr, i32 0, i32 0), i8* " + reg + ")\n");
+        return;
     }
-    else if (type_id >= 100) {
+    
+    if (type_id >= 100) {
         let s_info -> StructInfo = c.struct_id_map.get("" + type_id);
         if (s_info is !null) {
             compile_print_struct_internal(c, reg, s_info, pos);
-        } else {
-            let v_info -> SymbolInfo = c.vector_base_map.get("" + type_id);
-            if (v_info is !null) {
-                compile_print_vector_internal(c, reg, v_info, pos);
-            }
+            return;
+        } 
+        
+        let v_info -> SymbolInfo = c.vector_base_map.get("" + type_id);
+        if (v_info is !null) {
+            compile_print_vector_internal(c, reg, v_info, pos);
+            return;
         }
     } 
-    else if (type_id == TYPE_NULL || type_id == TYPE_NULLPTR) {
-        c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
-    }
 }
 
 func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> StructInfo, pos -> Position) -> Void {
     let header -> String = s_info.name + "(";
     let header_id -> Int = register_string_constant(c, header);
     let header_ptr -> String = get_string_ptr(header_id, header);
-    c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* " + header_ptr + ")\n");
+    
+    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + header_ptr + ")\n");
 
     let fields_vec -> Vector(Struct) = s_info.fields;
     let f_len -> Int = 0;
@@ -4099,7 +4103,8 @@ func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> S
         let fn_id -> Int = register_string_constant(c, f_name_eq);
         let fn_ptr -> String = get_string_ptr(fn_id, f_name_eq);
     
-        c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* " + fn_ptr + ")\n");
+        c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + fn_ptr + ")\n");
+        
         let f_ptr -> String = next_reg(c);
         c.output_file.write(c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_reg + ", i32 0, i32 " + f_curr.offset + "\n");
         let f_val_reg -> String = next_reg(c);
@@ -4108,10 +4113,10 @@ func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> S
 
         f_idx += 1;
         if (f_idx < f_len) {
-            c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
+            c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
         }
     }
-    c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_paren, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_paren, i32 0, i32 0))\n");
 }
 
 func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> SymbolInfo, pos -> Position) -> Void {
@@ -4129,7 +4134,7 @@ func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> S
     let data_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_ptr_ptr + "\n");
 
-    c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_open_bracket, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_open_bracket, i32 0, i32 0))\n");
 
     let label_cond -> String = next_label(c);
     let label_body -> String = next_label(c);
@@ -4165,11 +4170,11 @@ func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> S
     c.output_file.write(c.indent + "br i1 " + is_not_last + ", label %" + label_sep + ", label %" + label_cond + "\n");
 
     c.output_file.write("\n" + label_sep + ":\n");
-    c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
     c.output_file.write(c.indent + "br label %" + label_cond + "\n");
 
     c.output_file.write("\n" + label_end + ":\n");
-    c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0))\n");
 }
 
 func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -> String, call_node -> CallNode) -> CompileResult {
@@ -4254,6 +4259,9 @@ func compile_start(c -> Compiler) -> Void {
 
     c.output_file.write("declare i8* @realloc(i8*, i64)\n");
     c.declared_externs.put("realloc", StringConstant(id=0, value=""));
+
+    c.output_file.write("declare void @wl_write_utf8(i8*)\n");
+    c.declared_externs.put("wl_write_utf8", StringConstant(id=0, value=""));
 
 
     c.output_file.write("@.fmt_int = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\"\n");

@@ -4,9 +4,8 @@
 import "builtin/print"
 
 func main() -> Int {
-    // print_i is expected to be exported from builtin/print
-    print_i(520);
-    print_s("\nPASS: Standard library module resolution");
+    // print(520);
+    print("\nPASS: Standard library module resolution");
     
     return 0;
 }

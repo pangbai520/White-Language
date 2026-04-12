@@ -1,5 +1,6 @@
 // core/WhitelangNodes.wl
 import "WhitelangTokens.wl"
+import "WhitelangExceptions.wl"
 
 const NODE_INT            -> Int = 1;
 const NODE_FLOAT          -> Int = 2;

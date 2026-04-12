@@ -99,7 +99,7 @@ White Language is a passion project and a work in progress. If you are consideri
 We believe a language is only as good as its tooling. White Language comes with first-class developer experience tools out of the box:
 
 * **VS Code Extension (LSP)**: We provide a dedicated VS Code extension powered by **Langium**. It offers real-time syntax highlighting, semantic validation, autocomplete, and error diagnostics directly in your editor.
-* **Official Website & Binaries**: Prefer not to build from source? Our official portal is currently under active development. Once launched, it will serve as the primary hub for downloading pre-compiled, native executable binaries for Windows, macOS, and Linux.
+* **Official Website & Binaries**: Prefer not to build from source? Our official portal is now live! You can download pre-compiled, native executable binaries for Windows, macOS, and Linux directly from our website.
 
 ## Building and Bootstrapping
 
@@ -129,7 +129,7 @@ Test the newly built compiler:
 ./wlc_new
 ```
 
-You should see the `White Language Compiler (v0.2)` output.
+You should see the `White Language Compiler (v0.2.1)` output.
 
 ## License
 
