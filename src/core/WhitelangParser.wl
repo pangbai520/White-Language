@@ -90,7 +90,6 @@ func String_to_Int(s -> String) -> Int {
     return res;
 }
 
-
 func parse_return_type(p -> Parser) -> Struct {
     // Support 'ptr' in type position (e.g. -> ptr Int) for compatibility
     if (p.current_tok.type == TOK_PTR) {
@@ -115,7 +114,9 @@ func parse_return_type(p -> Parser) -> Struct {
 
     let tok -> Token = p.current_tok;
     let tt -> Int = p.current_tok.type;
-    
+    let type_node -> Struct = null;
+    let start_pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+
     if (tt == TOK_T_INT || tt == TOK_T_FLOAT || tt == TOK_T_STRING || tt == TOK_T_BOOL || tt == TOK_T_VOID || tt == TOK_IDENTIFIER) {
         if (tok.value == "Function") {
             parser_advance(p); // skip Function
@@ -129,13 +130,13 @@ func parse_return_type(p -> Parser) -> Struct {
                 parser_advance(p); // skip ')'
 
                 let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                return FunctionTypeNode(type=NODE_FUNCTION_TYPE, return_type=ret_ty, pos=pos);
+                type_node = FunctionTypeNode(type=NODE_FUNCTION_TYPE, return_type=ret_ty, pos=pos);
+            } else {
+                let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                type_node = VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
             }
-
-            let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-            return VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
         }
-        if (tok.value == "Method") {
+        else if (tok.value == "Method") {
             parser_advance(p); // skip Method
             if (p.current_tok.type == TOK_LPAREN) {
                 parser_advance(p); // skip '('
@@ -147,13 +148,13 @@ func parse_return_type(p -> Parser) -> Struct {
                 parser_advance(p); // skip ')'
 
                 let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                return MethodTypeNode(type=NODE_METHOD_TYPE, return_type=ret_ty, pos=pos);
+                type_node = MethodTypeNode(type=NODE_METHOD_TYPE, return_type=ret_ty, pos=pos);
+            } else {
+                let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                type_node = VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
             }
-
-            let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-            return VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
         }
-        if (tok.value == "Vector") {
+        else if (tok.value == "Vector") {
             parser_advance(p); // skip Vector
             if (p.current_tok.type != TOK_LPAREN) {
                 let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -170,12 +171,65 @@ func parse_return_type(p -> Parser) -> Struct {
             parser_advance(p); // skip )
             
             let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-            return VectorTypeNode(type=NODE_VECTOR_TYPE, element_type=elem_type, pos=pos);
+            type_node = VectorTypeNode(type=NODE_VECTOR_TYPE, element_type=elem_type, pos=pos);
+        }
+        else if (tok.value == "Array") {
+            parser_advance(p); // skip Array
+            if (p.current_tok.type != TOK_LPAREN) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '(' after Array.");
+            }
+            parser_advance(p); // skip (
+            
+            let elem_type -> Struct = parse_return_type(p);
+            
+            if (p.current_tok.type != TOK_RPAREN) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ')' after Array type.");
+            }
+            parser_advance(p); // skip )
+            
+            type_node = SliceTypeNode(type=NODE_SLICE_TYPE, element_type=elem_type, pos=start_pos);
+        }
+        else {
+            parser_advance(p);
+            let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            type_node = VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
         }
 
-        parser_advance(p);
-        let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-        return VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
+        let sizes -> Vector(Struct) = [];
+        while (p.current_tok.type == TOK_LBRACKET) {
+            parser_advance(p); // skip '['
+
+            if (p.current_tok.type != TOK_INT) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected integer literal for array size.");
+            }
+            sizes.append(p.current_tok);
+            parser_advance(p);
+            
+            if (p.current_tok.type != TOK_RBRACKET) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ']' after array size.");
+            }
+            parser_advance(p); // skip ']'
+        }
+
+        let s_len -> Int = 0;
+        if (sizes is !null) { s_len = sizes.length(); }
+        let s_i -> Int = s_len - 1;
+        while (s_i >= 0) {
+            let s_tok -> Token = sizes[s_i];
+            type_node = ArrayTypeNode(
+                type=NODE_ARRAY_TYPE, 
+                base_type=type_node, 
+                size_tok=s_tok, 
+                pos=start_pos
+            );
+            s_i -= 1;
+        }
+
+        return type_node;
     }
     
     let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -420,16 +474,30 @@ func postfix_expr(p -> Parser) -> Struct {
             let bracket_tok -> Token = p.current_tok;
             parser_advance(p); // skip [
             
-            let idx_expr -> Struct = expression(p);
-            
-            if (p.current_tok.type != TOK_RBRACKET) {
-                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ']' after index.");
+            let first_idx -> Struct = expression(p);
+            if (p.current_tok.type == TOK_COLON) {
+                parser_advance(p); // skip ':'
+                let second_idx -> Struct = expression(p);
+                
+                if (p.current_tok.type != TOK_RBRACKET) {
+                    let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ']' after slice end index.");
+                }
+                parser_advance(p); // skip ']'
+                
+                let pos -> Position = WhitelangExceptions.Position(idx=0, ln=bracket_tok.line, col=bracket_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                node = SliceAccessNode(type=NODE_SLICE_ACCESS, target=node, start_idx=first_idx, end_idx=second_idx, pos=pos);
             }
-            parser_advance(p); // skip ]
-            
-            let pos -> Position = WhitelangExceptions.Position(idx=0, ln=bracket_tok.line, col=bracket_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-            node = IndexAccessNode(type=NODE_INDEX_ACCESS, target=node, index_node=idx_expr, pos=pos);
+            else {
+                if (p.current_tok.type != TOK_RBRACKET) {
+                    let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ']' after index.");
+                }
+                parser_advance(p); // skip ']'
+                
+                let pos -> Position = WhitelangExceptions.Position(idx=0, ln=bracket_tok.line, col=bracket_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                node = IndexAccessNode(type=NODE_INDEX_ACCESS, target=node, index_node=first_idx, pos=pos);
+            }
         }
     }
     return node;

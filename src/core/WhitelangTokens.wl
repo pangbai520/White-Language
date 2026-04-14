@@ -85,6 +85,8 @@ const TOK_METHOD        -> Int = 70; // method
 const TOK_SELF          -> Int = 71; // self
 const TOK_SUPER         -> Int = 72; // super
 
+const TOK_COLON         -> Int = 73; // :
+
 
 func get_token_name(type -> Int) -> String {
     if (type == TOK_INT) { return "INT"; }
@@ -161,6 +163,8 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_METHOD)      { return "method"; }
     if (type == TOK_SELF)      { return "self"; }
     if (type == TOK_SUPER)      { return "super"; }
+
+    if (type == TOK_COLON)  { return ":"; }
 
     return "EOF";
 }

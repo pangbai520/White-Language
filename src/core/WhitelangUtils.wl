@@ -53,9 +53,7 @@ struct FuncInfo(
     is_varargs -> Bool
 )
 
-struct TypeListNode(
-    type -> Int
-)
+struct TypeListNode(type -> Int)
 
 struct Scope(
     table  -> HashMap, // symbol table of the current level
@@ -86,6 +84,12 @@ struct StructInfo(
     vtable      -> Vector(Struct)
 )
 
+struct ArrayInfo(
+    base_type -> Int,
+    size      -> Int,
+    llvm_name -> String
+)
+
 struct CaptureScope(
     local_vars -> HashMap,
     captured_vars -> HashMap,
@@ -112,6 +116,8 @@ struct Compiler(
     ptr_base_map -> HashMap,    // Key: "ID", Value: SymbolInfo(reg="", type=base_id)
     vector_cache -> HashMap,    // Key: "vec_baseID", Value: SymbolInfo(type=new_id)
     vector_base_map -> HashMap, // Key: "ID", Value: SymbolInfo(type=baseID)
+    array_info_map -> HashMap, 
+    array_type_cache -> HashMap,
     func_ret_map -> HashMap,
     declared_externs -> HashMap,
     imported_modules -> HashMap,
@@ -128,8 +134,8 @@ struct Compiler(
 
 
 struct LoopScope(
-    label_continue -> String,  
-    label_break    -> String,  
+    label_continue -> String,
+    label_break    -> String,
     parent         -> Struct
 )
 
@@ -171,7 +177,9 @@ func new_compiler(out_path -> String) -> Compiler {
         expected_type = 0,
         type_drop_list = [],
         global_buffer = "",
-        string_pool = map.HashMap(128)
+        string_pool = HashMap(128),
+        array_info_map = HashMap(32),
+        array_type_cache = HashMap(32)
     );
 
     comp.type_drop_list.append(TypeListNode(type=TYPE_GENERIC_FUNCTION));
@@ -296,6 +304,11 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_CLASS) { return "i8*"; }
     if (type_id == TYPE_GENERIC_METHOD) { return "i8*"; }
 
+    let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
+    if (arr_info is !null) {
+        return arr_info.llvm_name;
+    }
+
     if (type_id >= 100) {
         let f_info -> SymbolInfo = c.func_ret_map.get("" + type_id);
         if (f_info is !null) {
@@ -358,6 +371,11 @@ func get_type_name(c -> Compiler, type_id -> Int) -> String {
         if (v_info is !null) {
             return "Vector(" + get_type_name(c, v_info.type) + ")";
         }
+
+        let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
+        if (arr_info is !null) {
+            return get_type_name(c, arr_info.base_type) + "[" + arr_info.size + "]";
+        }
     }
     
     return "Unknown";
@@ -393,6 +411,7 @@ func is_ref_type(c -> Compiler, type_id -> Int) -> Bool {
     if (type_id == TYPE_GENERIC_METHOD) { return true; }
 
     if (type_id >= 100) {
+        if (c.array_info_map.get("" + type_id) is !null) { return false; }
         if (c.struct_id_map.get("" + type_id) is !null) { return true; }
         if (c.vector_base_map.get("" + type_id) is !null) { return true; }
         if (c.func_ret_map.get("" + type_id) is !null) { return true; }
@@ -518,6 +537,28 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
     // Pointer Type (ptr*N Type)
     if (base.type == NODE_PTR_TYPE) {
         let p_node -> PointerTypeNode = node;
+        let inner_base -> BaseNode = p_node.base_type;
+
+        if (inner_base.type == NODE_ARRAY_TYPE) {
+            let arr_node -> ArrayTypeNode = p_node.base_type;
+
+            let fake_ptr -> PointerTypeNode = PointerTypeNode(
+                type=p_node.type,
+                base_type=arr_node.base_type,
+                level=p_node.level,
+                pos=p_node.pos
+            );
+            
+            let fake_arr -> ArrayTypeNode = ArrayTypeNode(
+                type=arr_node.type,
+                base_type=fake_ptr,
+                size_tok=arr_node.size_tok,
+                pos=arr_node.pos
+            );
+            
+            return resolve_type(c, fake_arr);
+        }
+
         let base_id -> Int = resolve_type(c, p_node.base_type);
         
         let current_id -> Int = base_id;
@@ -534,6 +575,59 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         let v_node -> VectorTypeNode = node;
         let elem_id -> Int = resolve_type(c, v_node.element_type);
         return get_vector_type_id(c, elem_id);
+    }
+
+    if (base.type == NODE_ARRAY_TYPE) {
+        let arr_node -> ArrayTypeNode = node;
+        let base_id -> Int = resolve_type(c, arr_node.base_type);
+
+        let size_str -> String = arr_node.size_tok.value;
+        let size -> Int = 0;
+        let s_i -> Int = 0;
+        while (s_i < size_str.length()) {
+            let ch -> Int = size_str[s_i];
+            size = size * 10 + (ch - 48);
+            s_i += 1;
+        }
+        
+        let cache_key -> String = "arr_" + base_id + "_" + size;
+        let cached -> SymbolInfo = c.array_type_cache.get(cache_key);
+        
+        if (cached is !null) {
+            return cached.type;
+        }
+        
+        let new_id -> Int = c.type_counter;
+        c.type_counter += 1;
+        
+        c.array_type_cache.put(cache_key, SymbolInfo(reg="", type=new_id, origin_type=0, is_const=false));
+        
+        let llvm_name -> String = "[" + size + " x " + get_llvm_type_str(c, base_id) + "]";
+        c.array_info_map.put("" + new_id, ArrayInfo(base_type=base_id, size=size, llvm_name=llvm_name));
+        
+        return new_id;
+    }
+
+    if (base.type == NODE_SLICE_TYPE) {
+        let s_node -> SliceTypeNode = node;
+        let elem_id -> Int = resolve_type(c, s_node.element_type);
+        
+        let cache_key -> String = "slice_" + elem_id;
+        let cached -> SymbolInfo = c.array_type_cache.get(cache_key);
+        if (cached is !null) { return cached.type; }
+        
+        let new_id -> Int = c.type_counter;
+        c.type_counter += 1;
+        c.array_type_cache.put(cache_key, SymbolInfo(reg="", type=new_id, origin_type=0, is_const=false));
+        
+        let elem_ty_str -> String = get_llvm_type_str(c, elem_id);
+        let llvm_name -> String = "%slice." + new_id;
+        c.array_info_map.put("" + new_id, ArrayInfo(base_type=elem_id, size=-1, llvm_name=llvm_name));
+
+        // { i64 length, T* data }
+        c.output_file.write(llvm_name + " = type { i64, " + elem_ty_str + "* }\n\n");
+
+        return new_id;
     }
     
     // Named Type (Int, Float, StructName)

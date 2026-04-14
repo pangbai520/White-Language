@@ -337,6 +337,7 @@ func get_next_token(l -> Lexer) -> Token {
         if (char == 44) { lexer_advance(l);  return WhitelangTokens.Token(type=TOK_COMMA,    value=",", line=char_line, col=char_col); }
         if (char == 91) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_LBRACKET, value="[", line=char_line, col=char_col); }
         if (char == 93) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_RBRACKET, value="]", line=char_line, col=char_col); }
+        if (char == 58) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_COLON, value=":", line=char_line, col=char_col); }
 
         WhitelangExceptions.throw_illegal_char(l.pos, "unknown character '" + char + "'. ");
     }

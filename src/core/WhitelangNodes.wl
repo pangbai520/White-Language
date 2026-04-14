@@ -45,6 +45,10 @@ const NODE_CLASS_DEF      -> Int = 41;
 const NODE_METHOD_DEF     -> Int = 42;
 const NODE_SUPER          -> Int = 43;
 const NODE_METHOD_TYPE    -> Int = 44;
+const NODE_ARRAY_TYPE     -> Int = 45;
+const NODE_SLICE_TYPE     -> Int = 46;
+const NODE_SLICE_ACCESS   -> Int = 47;
+
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -120,8 +124,7 @@ struct VarAssignNode(
 )
 
 struct StmtListNode(
-    stmt -> Struct,
-    next -> Struct
+    stmt -> Struct
 )
 
 struct BlockNode(
@@ -184,8 +187,7 @@ struct ParamNode(
 
 
 struct ParamListNode(
-    param -> Struct, // ParamNode
-    next  -> Struct
+    param -> Struct // ParamNode
 )
 
 
@@ -313,8 +315,7 @@ struct IndexAssignNode(
 
 struct ImportSymbolNode(
     name_tok -> Token,
-    alias_tok -> Token,
-    next     -> Struct
+    alias_tok -> Token
 )
 
 struct ImportNode(
@@ -353,4 +354,25 @@ struct MethodTypeNode(
     type        -> Int,    // NODE_METHOD_TYPE
     return_type -> Struct,
     pos         -> Position
+)
+
+struct ArrayTypeNode(
+    type      -> Int,    // NODE_ARRAY_TYPE
+    base_type -> Struct,
+    size_tok  -> Token,
+    pos       -> Position
+)
+
+struct SliceTypeNode(
+    type         -> Int, // NODE_SLICE_TYPE
+    element_type -> Struct,
+    pos          -> Position
+)
+
+struct SliceAccessNode(
+    type -> Int, // NODE_SLICE_ACCESS
+    target -> Struct, // data
+    start_idx -> Struct,
+    end_idx -> Struct,
+    pos -> Position
 )

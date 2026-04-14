@@ -164,6 +164,44 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         }
     }
 
+    let expected_arr -> ArrayInfo = c.array_info_map.get("" + expected_type);
+    if (expected_arr is !null && expected_arr.size == -1) {
+        let elem_type -> Int = expected_arr.base_type;
+        let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
+
+        let val_arr -> ArrayInfo = c.array_info_map.get("" + val_res.type);
+        if (val_arr is !null && val_arr.size > 0 && val_arr.base_type == elem_type) {
+            let data_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + data_ptr + " = getelementptr inbounds " + val_arr.llvm_name + ", " + val_arr.llvm_name + "* " + val_res.reg + ", i32 0, i32 0\n");
+            
+            let v1 -> String = next_reg(c);
+            c.output_file.write(c.indent + v1 + " = insertvalue " + expected_arr.llvm_name + " undef, i64 " + val_arr.size + ", 0\n");
+            let v2 -> String = next_reg(c);
+            c.output_file.write(c.indent + v2 + " = insertvalue " + expected_arr.llvm_name + " " + v1 + ", " + elem_ty_str + "* " + data_ptr + ", 1\n");
+            return CompileResult(reg=v2, type=expected_type, origin_type=0);
+        }
+
+        let val_vec -> SymbolInfo = c.vector_base_map.get("" + val_res.type);
+        if (val_vec is !null && val_vec.type == elem_type) {
+            let vec_struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+            let size_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + size_ptr + " = getelementptr inbounds " + vec_struct_ty + ", " + vec_struct_ty + "* " + val_res.reg + ", i32 0, i32 0\n");
+            let size_val -> String = next_reg(c);
+            c.output_file.write(c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
+            
+            let data_ptr_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + data_ptr_ptr + " = getelementptr inbounds " + vec_struct_ty + ", " + vec_struct_ty + "* " + val_res.reg + ", i32 0, i32 2\n");
+            let data_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_ptr_ptr + "\n");
+            
+            let v1 -> String = next_reg(c);
+            c.output_file.write(c.indent + v1 + " = insertvalue " + expected_arr.llvm_name + " undef, i64 " + size_val + ", 0\n");
+            let v2 -> String = next_reg(c);
+            c.output_file.write(c.indent + v2 + " = insertvalue " + expected_arr.llvm_name + " " + v1 + ", " + elem_ty_str + "* " + data_ptr + ", 1\n");
+            return CompileResult(reg=v2, type=expected_type, origin_type=0);
+        }
+    }
+
     WhitelangExceptions.throw_type_error(pos, "Type mismatch. Expected " + get_type_name(c, expected_type) + ", got " + get_type_name(c, val_res.type));
     return val_res;
 }
@@ -606,6 +644,48 @@ func emit_vector_bounds_check(c -> Compiler, vec_reg -> String, idx_reg -> Strin
     emit_runtime_error(c, pos, "Index out of bounds");
 
     c.output_file.write("\n" + ok_label + ":\n");
+}
+
+func emit_array_bounds_check(c -> Compiler, idx_reg -> String, len_val -> String, pos -> Position) -> Void {
+    let cmp1 -> String = next_reg(c);
+    c.output_file.write(c.indent + cmp1 + " = icmp slt i32 " + idx_reg + ", 0\n");
+    let cmp2 -> String = next_reg(c);
+    c.output_file.write(c.indent + cmp2 + " = icmp sge i32 " + idx_reg + ", " + len_val + "\n");
+    
+    let or1 -> String = next_reg(c);
+    c.output_file.write(c.indent + or1 + " = or i1 " + cmp1 + ", " + cmp2 + "\n");
+    
+    let fail_lbl -> String = "arr_fail_" + c.type_counter;
+    let ok_lbl -> String = "arr_ok_" + c.type_counter;
+    c.type_counter += 1;
+
+    c.output_file.write(c.indent + "br i1 " + or1 + ", label %" + fail_lbl + ", label %" + ok_lbl + "\n");
+    c.output_file.write("\n" + fail_lbl + ":\n");
+    emit_runtime_error(c, pos, "Index out of bounds.");
+    c.output_file.write("\n" + ok_lbl + ":\n");
+}
+
+func emit_slice_bounds_check(c -> Compiler, start_reg -> String, end_reg -> String, len_val -> String, pos -> Position) -> Void {
+    let cmp1 -> String = next_reg(c);
+    c.output_file.write(c.indent + cmp1 + " = icmp slt i32 " + start_reg + ", 0\n");
+    let cmp2 -> String = next_reg(c);
+    c.output_file.write(c.indent + cmp2 + " = icmp sgt i32 " + start_reg + ", " + end_reg + "\n");
+    let cmp3 -> String = next_reg(c);
+    c.output_file.write(c.indent + cmp3 + " = icmp sgt i32 " + end_reg + ", " + len_val + "\n");
+    
+    let or1 -> String = next_reg(c);
+    c.output_file.write(c.indent + or1 + " = or i1 " + cmp1 + ", " + cmp2 + "\n");
+    let or2 -> String = next_reg(c);
+    c.output_file.write(c.indent + or2 + " = or i1 " + or1 + ", " + cmp3 + "\n");
+    
+    let fail_lbl -> String = "slice_fail_" + c.type_counter;
+    let ok_lbl -> String = "slice_ok_" + c.type_counter;
+    c.type_counter += 1;
+    
+    c.output_file.write(c.indent + "br i1 " + or2 + ", label %" + fail_lbl + ", label %" + ok_lbl + "\n");
+    c.output_file.write("\n" + fail_lbl + ":\n");
+    emit_runtime_error(c, pos, "Slice boundaries out of range.");
+    c.output_file.write("\n" + ok_lbl + ":\n");
 }
 
 // === COMPILE ===
@@ -1073,22 +1153,42 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
     let origin_id -> Int = target_type_id;
 
     if (node.value is !null) {
-        c.expected_type = target_type_id;
-        let val_res -> CompileResult = compile_node(c, node.value);
-        c.expected_type = 0;
+        let is_array_init -> Bool = false;
+        let val_base -> BaseNode = node.value;
+        let target_arr -> ArrayInfo = c.array_info_map.get("" + target_type_id);
+        if (target_arr is !null && val_base.type == NODE_VECTOR_LIT) {
+            if (target_arr.size == -1) {
+                WhitelangExceptions.throw_type_error(node.pos, "Cannot initialize Array(Type) slice directly from a literal.");
+            }
 
-        val_res = emit_implicit_cast(c, val_res, target_type_id, node.pos);
-        if (target_type_id == TYPE_GENERIC_STRUCT || target_type_id == TYPE_GENERIC_CLASS) {
-            if (val_res.origin_type >= 100) { origin_id = val_res.origin_type; }
-        } else if (target_type_id == TYPE_GENERIC_FUNCTION || target_type_id == TYPE_GENERIC_METHOD) {
-            if (val_res.origin_type >= 100) { origin_id = val_res.origin_type; }
+            is_array_init = true;
+            let lit_node -> VectorLitNode = node.value;
+            
+            if (lit_node.count > target_arr.size) {
+                WhitelangExceptions.throw_type_error(node.pos, "Array literal too large: expected " + target_arr.size + " elements.");
+            }
+
+            compile_array_literal(c, lit_node, target_type_id, ptr_reg);
         }
 
-        if (c.scope_depth > 0) {
-            emit_retain(c, val_res.reg, target_type_id);
-        }
+        if (!is_array_init) {
+            c.expected_type = target_type_id;
+            let val_res -> CompileResult = compile_node(c, node.value);
+            c.expected_type = 0;
 
-        c.output_file.write(c.indent + "store " + llvm_ty_str + " " + val_res.reg + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
+            val_res = emit_implicit_cast(c, val_res, target_type_id, node.pos);
+            if (target_type_id == TYPE_GENERIC_STRUCT || target_type_id == TYPE_GENERIC_CLASS) {
+                if (val_res.origin_type >= 100) { origin_id = val_res.origin_type; }
+            } else if (target_type_id == TYPE_GENERIC_FUNCTION || target_type_id == TYPE_GENERIC_METHOD) {
+                if (val_res.origin_type >= 100) { origin_id = val_res.origin_type; }
+            }
+
+            if (c.scope_depth > 0) {
+                emit_retain(c, val_res.reg, target_type_id);
+            }
+
+            c.output_file.write(c.indent + "store " + llvm_ty_str + " " + val_res.reg + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
+        }
     }
     else {
         if (target_type_id == TYPE_GENERIC_STRUCT || target_type_id == TYPE_GENERIC_CLASS) {
@@ -2236,6 +2336,14 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
     if (field is !null) {
         let f_ptr -> String = next_reg(c);
         c.output_file.write(c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_reg + ", i32 0, i32 " + field.offset + "\n");
+
+        let arr_check -> ArrayInfo = c.array_info_map.get("" + field.type);
+        if (arr_check is !null) {
+            if (arr_check.size != -1) {
+                return CompileResult(reg=f_ptr, type=field.type);
+            }
+        }
+
         let val_reg -> String = next_reg(c);
         c.output_file.write(c.indent + val_reg + " = load " + field.llvm_type + ", " + field.llvm_type + "* " + f_ptr + "\n");
         return CompileResult(reg=val_reg, type=field.type);
@@ -2400,6 +2508,51 @@ func compile_extern_block(c -> Compiler, node -> ExternBlockNode) -> CompileResu
         i += 1;
     }
     return void_result();
+}
+
+func compile_array_literal(c -> Compiler, lit_node -> VectorLitNode, target_arr_id -> Int, ptr_reg -> String) -> Void {
+    let target_arr -> ArrayInfo = c.array_info_map.get("" + target_arr_id);
+    if (target_arr is null) { return; }
+    
+    if (lit_node.count > target_arr.size) {
+        WhitelangExceptions.throw_type_error(lit_node.pos, "Array literal too large: expected " + target_arr.size + " elements, got " + lit_node.count);
+    }
+    
+    let lit_i -> Int = 0;
+    let elem_ty_str -> String = get_llvm_type_str(c, target_arr.base_type);
+    
+    while (lit_i < lit_node.count) {
+        let elem_node -> ArgNode = lit_node.elements[lit_i];
+        let elem_base -> BaseNode = elem_node.val;
+        
+        let elem_ptr_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + elem_ptr_reg + " = getelementptr inbounds " + target_arr.llvm_name + ", " + target_arr.llvm_name + "* " + ptr_reg + ", i32 0, i32 " + lit_i + "\n");
+        
+        let is_nested -> Bool = false;
+        if (elem_base.type == NODE_VECTOR_LIT) {
+            let inner_arr_info -> ArrayInfo = c.array_info_map.get("" + target_arr.base_type);
+            if (inner_arr_info is !null) {
+                is_nested = true;
+                let inner_lit -> VectorLitNode = elem_node.val;
+                compile_array_literal(c, inner_lit, target_arr.base_type, elem_ptr_reg);
+            }
+        }
+        
+        if (!is_nested) {
+            c.expected_type = target_arr.base_type;
+            let elem_res -> CompileResult = compile_node(c, elem_node.val);
+            c.expected_type = 0;
+            
+            let casted_res -> CompileResult = emit_implicit_cast(c, elem_res, target_arr.base_type, lit_node.pos);
+            c.output_file.write(c.indent + "store " + elem_ty_str + " " + casted_res.reg + ", " + elem_ty_str + "* " + elem_ptr_reg + "\n");
+            
+            if (c.scope_depth > 0 && is_ref_type(c, target_arr.base_type)) {
+                emit_retain(c, casted_res.reg, target_arr.base_type);
+            }
+        }
+        
+        lit_i += 1;
+    }
 }
 
 func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallNode) -> CompileResult {
@@ -2674,6 +2827,19 @@ func compile_length_method(c -> Compiler, obj_node -> Struct, call_node -> CallN
         if (v_info is !null) { is_vec = true; }
     }
 
+    let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
+        if (arr_info is !null) {
+            if (arr_info.size == -1) { // Slice
+                let size_i64 -> String = next_reg(c);
+                c.output_file.write(c.indent + size_i64 + " = extractvalue " + arr_info.llvm_name + " " + obj_res.reg + ", 0\n");
+                let trunc_reg -> String = next_reg(c);
+                c.output_file.write(c.indent + trunc_reg + " = trunc i64 " + size_i64 + " to i32\n");
+                return CompileResult(reg=trunc_reg, type=TYPE_INT);
+            } else {
+                return CompileResult(reg="" + arr_info.size, type=TYPE_INT);
+            }
+        }
+
     if is_vec {
         let v_info -> SymbolInfo = c.vector_base_map.get("" + type_id);
         let elem_ty_str -> String = get_llvm_type_str(c, v_info.type);
@@ -2724,6 +2890,44 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
             
             return CompileResult(reg=load_reg, type=elem_type, origin_type=elem_type);
         }
+    }
+
+    // Array / Slice access
+    let arr_info -> ArrayInfo = c.array_info_map.get("" + target_res.type);
+    if (arr_info is !null) {
+        let elem_type -> Int = arr_info.base_type;
+        let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
+        
+        let idx_i32 -> String = index_res.reg;
+
+        let curr_len -> String = "";
+        let data_ptr -> String = "";
+        if (arr_info.size == -1) {
+            let len_i64 -> String = next_reg(c);
+            c.output_file.write(c.indent + len_i64 + " = extractvalue " + arr_info.llvm_name + " " + target_res.reg + ", 0\n");
+            curr_len = next_reg(c);
+            c.output_file.write(c.indent + curr_len + " = trunc i64 " + len_i64 + " to i32\n");
+            
+            data_ptr = next_reg(c);
+            c.output_file.write(c.indent + data_ptr + " = extractvalue " + arr_info.llvm_name + " " + target_res.reg + ", 1\n");
+        } else {
+            curr_len = "" + arr_info.size;
+            data_ptr = next_reg(c);
+            c.output_file.write(c.indent + data_ptr + " = getelementptr inbounds " + arr_info.llvm_name + ", " + arr_info.llvm_name + "* " + target_res.reg + ", i32 0, i32 0\n");
+        }
+
+        emit_array_bounds_check(c, idx_i32, curr_len, node.pos);
+
+        let ptr_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + ptr_reg + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i32 " + idx_i32 + "\n");
+
+        if (c.array_info_map.get("" + elem_type) is !null) {
+            return CompileResult(reg=ptr_reg, type=elem_type, origin_type=elem_type);
+        }
+        
+        let val_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + val_reg + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + ptr_reg + "\n");
+        return CompileResult(reg=val_reg, type=elem_type, origin_type=elem_type);
     }
     
     // Vector access
@@ -2818,6 +3022,50 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
             return val_res;
         }
     }
+
+    // Array / Slice assign
+    let arr_info -> ArrayInfo = c.array_info_map.get("" + target_res.type);
+    if (arr_info is !null) {
+        let elem_type -> Int = arr_info.base_type;
+        let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
+
+        c.expected_type = elem_type;
+        let val_res -> CompileResult = compile_node(c, node.value);
+        c.expected_type = 0;
+        
+        val_res = emit_implicit_cast(c, val_res, elem_type, node.pos);
+
+        let curr_len -> String = "";
+        let data_ptr -> String = "";
+        if (arr_info.size == -1) {
+            let len_i64 -> String = next_reg(c);
+            c.output_file.write(c.indent + len_i64 + " = extractvalue " + arr_info.llvm_name + " " + target_res.reg + ", 0\n");
+            curr_len = next_reg(c);
+            c.output_file.write(c.indent + curr_len + " = trunc i64 " + len_i64 + " to i32\n");
+            
+            data_ptr = next_reg(c);
+            c.output_file.write(c.indent + data_ptr + " = extractvalue " + arr_info.llvm_name + " " + target_res.reg + ", 1\n");
+        } else {
+            curr_len = "" + arr_info.size;
+            data_ptr = next_reg(c);
+            c.output_file.write(c.indent + data_ptr + " = getelementptr inbounds " + arr_info.llvm_name + ", " + arr_info.llvm_name + "* " + target_res.reg + ", i32 0, i32 0\n");
+        }
+
+        emit_array_bounds_check(c, index_res.reg, curr_len, node.pos);
+
+        let ptr_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + ptr_reg + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i32 " + index_res.reg + "\n");
+        
+        if (is_ref_type(c, elem_type)) {
+            emit_retain(c, val_res.reg, elem_type);
+            let old_val -> String = next_reg(c);
+            c.output_file.write(c.indent + old_val + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + ptr_reg + "\n");
+            emit_release(c, old_val, elem_type);
+        }
+        
+        c.output_file.write(c.indent + "store " + elem_ty_str + " " + val_res.reg + ", " + elem_ty_str + "* " + ptr_reg + "\n");
+        return val_res;
+    }
     
     let is_vec -> Bool = false;
     if (target_res.type >= 100) {
@@ -2886,6 +3134,95 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
     
     WhitelangExceptions.throw_type_error(node.pos, "Type " + get_type_name(c, target_res.type) + " does not support index assignment.");
     return void_result();
+}
+
+func compile_slice_access(c -> Compiler, node -> SliceAccessNode) -> CompileResult {
+    let target_res -> CompileResult = compile_node(c, node.target);
+    let start_res -> CompileResult = compile_node(c, node.start_idx);
+    let end_res -> CompileResult = compile_node(c, node.end_idx);
+    
+    if (target_res.type == TYPE_STRING) {
+        let call_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + call_reg + " = call i8* @builtin.string_slice(i8* " + target_res.reg + ", i32 " + start_res.reg + ", i32 " + end_res.reg + ")\n");
+        return CompileResult(reg=call_reg, type=TYPE_STRING, origin_type=0);
+    }
+
+    let elem_type -> Int = 0;
+    let base_ptr -> String = "";
+    let curr_len -> String = "";
+    
+    let arr_info -> ArrayInfo = c.array_info_map.get("" + target_res.type);
+    let vec_info -> SymbolInfo = c.vector_base_map.get("" + target_res.type);
+    
+    if (arr_info is !null) {
+        elem_type = arr_info.base_type;
+        let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
+        if (arr_info.size == -1) {
+            let len_i64 -> String = next_reg(c);
+            c.output_file.write(c.indent + len_i64 + " = extractvalue " + arr_info.llvm_name + " " + target_res.reg + ", 0\n");
+            curr_len = next_reg(c);
+            c.output_file.write(c.indent + curr_len + " = trunc i64 " + len_i64 + " to i32\n");
+            
+            base_ptr = next_reg(c);
+            c.output_file.write(c.indent + base_ptr + " = extractvalue " + arr_info.llvm_name + " " + target_res.reg + ", 1\n");
+        } else {
+            curr_len = "" + arr_info.size;
+            base_ptr = next_reg(c);
+            c.output_file.write(c.indent + base_ptr + " = getelementptr inbounds " + arr_info.llvm_name + ", " + arr_info.llvm_name + "* " + target_res.reg + ", i32 0, i32 0\n");
+        }
+    } else if (vec_info is !null) {
+        elem_type = vec_info.type;
+        let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
+        let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+        
+        let size_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + target_res.reg + ", i32 0, i32 0\n");
+        let len_i64 -> String = next_reg(c);
+        c.output_file.write(c.indent + len_i64 + " = load i64, i64* " + size_ptr + "\n");
+        curr_len = next_reg(c);
+        c.output_file.write(c.indent + curr_len + " = trunc i64 " + len_i64 + " to i32\n");
+        
+        let data_field_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + target_res.reg + ", i32 0, i32 2\n");
+        base_ptr = next_reg(c);
+        c.output_file.write(c.indent + base_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
+    } else {
+        WhitelangExceptions.throw_type_error(node.pos, "Cannot slice type '" + get_type_name(c, target_res.type) + "'. Only Array, Vector, and String can be sliced.");
+    }
+
+    emit_slice_bounds_check(c, start_res.reg, end_res.reg, curr_len, node.pos);
+
+    let new_len -> String = next_reg(c);
+    c.output_file.write(c.indent + new_len + " = sub i32 " + end_res.reg + ", " + start_res.reg + "\n");
+    let new_len_i64 -> String = next_reg(c);
+    c.output_file.write(c.indent + new_len_i64 + " = sext i32 " + new_len + " to i64\n");
+
+    let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
+    let new_ptr -> String = next_reg(c);
+    c.output_file.write(c.indent + new_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + base_ptr + ", i32 " + start_res.reg + "\n");
+
+    let cache_key -> String = "slice_" + elem_type;
+    let slice_type_id -> Int = 0;
+    let cached -> SymbolInfo = c.array_type_cache.get(cache_key);
+    
+    if (cached is !null) { 
+        slice_type_id = cached.type; 
+    } else {
+        slice_type_id = c.type_counter;
+        c.type_counter += 1;
+        c.array_type_cache.put(cache_key, SymbolInfo(reg="", type=slice_type_id, origin_type=0, is_const=false));
+        let llvm_name -> String = "%slice." + slice_type_id;
+        c.array_info_map.put("" + slice_type_id, ArrayInfo(base_type=elem_type, size=-1, llvm_name=llvm_name));
+        c.output_file.write(llvm_name + " = type { i64, " + elem_ty_str + "* }\n\n");
+    }
+    
+    let slice_llvm_ty -> String = get_llvm_type_str(c, slice_type_id);
+    let v1 -> String = next_reg(c);
+    c.output_file.write(c.indent + v1 + " = insertvalue " + slice_llvm_ty + " undef, i64 " + new_len_i64 + ", 0\n");
+    let v2 -> String = next_reg(c);
+    c.output_file.write(c.indent + v2 + " = insertvalue " + slice_llvm_ty + " " + v1 + ", " + elem_ty_str + "* " + new_ptr + ", 1\n");
+
+    return CompileResult(reg=v2, type=slice_type_id, origin_type=0);
 }
 
 func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
@@ -3196,6 +3533,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_VECTOR_LIT) { return compile_vector_lit(c, node); }
     if (base.type == NODE_INDEX_ACCESS) { return compile_index_access(c, node); }
     if (base.type == NODE_INDEX_ASSIGN) { return compile_index_assign(c, node); }
+    if (base.type == NODE_SLICE_ACCESS) { return compile_slice_access(c, node); }
 
     // function and closure
     if (base.type == NODE_FUNC_DEF) {
@@ -3421,12 +3759,19 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             WhitelangExceptions.throw_name_error(v.pos, "Undefined variable or function '" + var_name + "'. ");
         }
         
-        let val_reg -> String = next_reg(c);
         let llvm_ty_str -> String = get_llvm_type_str(c, info.type);
         if (llvm_ty_str == "") {
             WhitelangExceptions.throw_type_error(v.pos, "Variable '" + var_name + "' has invalid internal type ID. ");
         }
+
+        let arr_check -> ArrayInfo = c.array_info_map.get("" + info.type);
+        if (arr_check is !null) {
+            if (arr_check.size != -1) {
+                return CompileResult(reg=info.reg, type=info.type, origin_type=info.origin_type);
+            }
+        }
         
+        let val_reg -> String = next_reg(c);
         c.output_file.write(c.indent + val_reg + " = load " + llvm_ty_str + ", " + llvm_ty_str + "* " + info.reg + "\n");
         return CompileResult(reg=val_reg, type=info.type, origin_type=info.origin_type);
     }
@@ -4082,6 +4427,12 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
             compile_print_vector_internal(c, reg, v_info, pos);
             return;
         }
+
+        let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
+        if (arr_info is !null) {
+            compile_print_array_internal(c, reg, arr_info, pos);
+            return;
+        }
     } 
 }
 
@@ -4167,6 +4518,79 @@ func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> S
     
     let is_not_last -> String = next_reg(c);
     c.output_file.write(c.indent + is_not_last + " = icmp slt i64 " + next_idx + ", " + size_val + "\n");
+    c.output_file.write(c.indent + "br i1 " + is_not_last + ", label %" + label_sep + ", label %" + label_cond + "\n");
+
+    c.output_file.write("\n" + label_sep + ":\n");
+    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "br label %" + label_cond + "\n");
+
+    c.output_file.write("\n" + label_end + ":\n");
+    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0))\n");
+}
+
+func compile_print_array_internal(c -> Compiler, arr_reg -> String, arr_info -> ArrayInfo, pos -> Position) -> Void {
+    let elem_type -> Int = arr_info.base_type;
+    let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
+
+    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_open_bracket, i32 0, i32 0))\n");
+
+    let size_val -> String = next_reg(c);
+    if (arr_info.size == -1) {
+        let size_i64 -> String = next_reg(c);
+        c.output_file.write(c.indent + size_i64 + " = extractvalue " + arr_info.llvm_name + " " + arr_reg + ", 0\n");
+        c.output_file.write(c.indent + size_val + " = trunc i64 " + size_i64 + " to i32\n");
+    } else {
+        c.output_file.write(c.indent + size_val + " = add i32 0, " + arr_info.size + "\n");
+    }
+
+    let data_ptr -> String = "";
+    if (arr_info.size == -1) {
+        data_ptr = next_reg(c);
+        c.output_file.write(c.indent + data_ptr + " = extractvalue " + arr_info.llvm_name + " " + arr_reg + ", 1\n");
+    } else {
+        data_ptr = next_reg(c);
+        c.output_file.write(c.indent + data_ptr + " = getelementptr inbounds " + arr_info.llvm_name + ", " + arr_info.llvm_name + "* " + arr_reg + ", i32 0, i32 0\n");
+    }
+
+    let label_cond -> String = next_label(c);
+    let label_body -> String = next_label(c);
+    let label_sep  -> String = next_label(c);
+    let label_end  -> String = next_label(c);
+
+    let idx_ptr -> String = next_reg(c);
+    c.output_file.write(c.indent + idx_ptr + " = alloca i32\n");
+    c.output_file.write(c.indent + "store i32 0, i32* " + idx_ptr + "\n");
+    c.output_file.write(c.indent + "br label %" + label_cond + "\n");
+
+    c.output_file.write("\n" + label_cond + ":\n");
+    let curr_idx -> String = next_reg(c);
+    c.output_file.write(c.indent + curr_idx + " = load i32, i32* " + idx_ptr + "\n");
+    let cmp -> String = next_reg(c);
+
+    c.output_file.write(c.indent + cmp + " = icmp slt i32 " + curr_idx + ", " + size_val + "\n");
+    c.output_file.write(c.indent + "br i1 " + cmp + ", label %" + label_body + ", label %" + label_end + "\n");
+
+    c.output_file.write("\n" + label_body + ":\n");
+    let slot_ptr -> String = next_reg(c);
+
+    c.output_file.write(c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i32 " + curr_idx + "\n");
+    
+    let val_reg -> String = "";
+    if (c.array_info_map.get("" + elem_type) is !null) {
+        val_reg = slot_ptr;
+    } else {
+        val_reg = next_reg(c);
+        c.output_file.write(c.indent + val_reg + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot_ptr + "\n");
+    }
+    
+    compile_print(c, val_reg, elem_type, pos, elem_type);
+
+    let next_idx -> String = next_reg(c);
+    c.output_file.write(c.indent + next_idx + " = add i32 " + curr_idx + ", 1\n");
+    c.output_file.write(c.indent + "store i32 " + next_idx + ", i32* " + idx_ptr + "\n");
+    
+    let is_not_last -> String = next_reg(c);
+    c.output_file.write(c.indent + is_not_last + " = icmp slt i32 " + next_idx + ", " + size_val + "\n");
     c.output_file.write(c.indent + "br i1 " + is_not_last + ", label %" + label_sep + ", label %" + label_cond + "\n");
 
     c.output_file.write("\n" + label_sep + ":\n");
