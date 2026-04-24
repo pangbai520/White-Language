@@ -16,6 +16,21 @@ struct TypedIdent(
     type_node -> Struct
 )
 
+func synchronize(p -> Parser) -> Void {
+    parser_advance(p);
+    while (p.current_tok.type != TOK_EOF) {
+        if (p.current_tok.type == TOK_SEMICOLON) {
+            parser_advance(p);
+            return;
+        }
+        let type -> Int = p.current_tok.type;
+        if (type == TOK_FUNC || type == TOK_LET || type == TOK_CONST || type == TOK_IF || type == TOK_WHILE || type == TOK_FOR || type == TOK_RETURN || type == TOK_CLASS || type == TOK_STRUCT) {
+            return;
+        }
+        parser_advance(p);
+    }
+}
+
 func parse(p -> Parser) -> Struct {
     let stmts -> Vector(Struct) = [];
     
@@ -42,9 +57,12 @@ func parse(p -> Parser) -> Struct {
         } else {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             WhitelangExceptions.throw_invalid_syntax(err_pos, "Top level code must be function definitions or global variables. Found: " + get_token_name(p.current_tok.type));
+            synchronize(p);
+            continue;
         }
-        
-        stmts.append(stmt);
+        if (stmt is !null) {
+            stmts.append(stmt);
+        }
     }
     
     return BlockNode(type=NODE_BLOCK, stmts=stmts);
@@ -283,10 +301,12 @@ func parse_typed_identifier_param(p -> Parser) -> Struct {
 
     let type_node -> Struct = parse_return_type(p);
 
-    let t_base -> BaseNode = type_node;
-    if (t_base.type == NODE_PTR_TYPE) {
-        let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=name_tok.line, col=name_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-        WhitelangExceptions.throw_invalid_syntax(err_pos, "Syntax Error: Cannot use '-> ptr Type' for variable or parameter declarations. Use 'ptr " + name_tok.value + " -> Type' instead.");
+    if (type_node is !null) {
+        let t_base -> BaseNode = type_node;
+        if (t_base.type == NODE_PTR_TYPE) {
+            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=name_tok.line, col=name_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Syntax Error: Cannot use '-> ptr Type' for variable or parameter declarations. Use 'ptr " + name_tok.value + " -> Type' instead.");
+        }
     }
 
     if is_ptr {
@@ -890,9 +910,12 @@ func parse_block(p -> Parser) -> Struct {
             if (!is_compound) {
                 let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
                 WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ';' after statement in block. ");
+                synchronize(p);
             }
         }
-        stmts.append(stmt);
+        if (stmt is !null) {
+            stmts.append(stmt);
+        }
     }
     if (p.current_tok.type != TOK_RBRACE) {
         let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);

@@ -7,6 +7,7 @@ import "core/WhitelangTokens.wl"
 import "core/WhitelangLexer.wl"
 import "core/WhitelangNodes.wl"
 import "core/WhitelangParser.wl"
+import "core/WhitelangExceptions.wl"
 import "core/WhitelangCompiler.wl"
 import "core/WhitelangUtils.wl"
 
@@ -181,11 +182,15 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     let parser -> Parser = Parser(lexer=lexer, current_tok=get_next_token(lexer));
     let ast -> Struct = parse(parser);
 
+    WhitelangExceptions.check_errors_and_abort();
+
     if (cfg.dump_ast) { builtin.print("[Debug] AST Dumped"); }
 
     let compiler -> Compiler = new_compiler(ll_file);
     compiler.current_dir = get_dir_name(cfg.source_file);
     compile(compiler, ast);
+
+    WhitelangExceptions.check_errors_and_abort();
 
     if (cfg.dump_ir) {
         let f_ir -> File = File(ll_file, "rb");

@@ -81,7 +81,8 @@ func get_string(l -> Lexer) -> Token {
     }
     
     WhitelangExceptions.throw_illegal_char(l.pos, "Unterminated string literal. ");
-    return WhitelangTokens.Token(type=TOK_EOF, value="", line=0, col=0);
+    // return WhitelangTokens.Token(type=TOK_EOF, value="", line=0, col=0);
+    return WhitelangTokens.Token(type=TOK_STR_LIT, value=result, line=start_ln, col=start_col);
 }
 
 
@@ -365,6 +366,8 @@ func get_next_token(l -> Lexer) -> Token {
         if (char == 58) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_COLON, value=":", line=char_line, col=char_col); }
 
         WhitelangExceptions.throw_illegal_char(l.pos, "unknown character '" + char + "'. ");
+        lexer_advance(l);
+        continue;
     }
 
     return WhitelangTokens.Token(type=TOK_EOF, value="", line=l.pos.ln, col=l.pos.col);

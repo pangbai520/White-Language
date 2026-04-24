@@ -1,7 +1,10 @@
-// core/WhitelangException.wl
+// core/WhitelangExceptions.wl
 import "builtin"
 
 extern func exit(status -> Int) -> Void from "C";
+
+let GLOBAL_ERROR_COUNT -> Int = 0;
+let LAST_ERROR_FILE -> String = "";
 
 struct Position(
     idx  -> Int,
@@ -22,9 +25,17 @@ func advance_pos(pos -> Position, current_char -> Byte) -> Void {
 }
 
 func report_error(pos -> Position, name -> String, details -> String) -> Void {
-    builtin.print(name + ": " + details);
-    builtin.print("In file: " + pos.fn);
-    builtin.print("Line " + (pos.ln + 1) + ", column " + (pos.col + 1));
+    GLOBAL_ERROR_COUNT = GLOBAL_ERROR_COUNT + 1;
+
+    let ln -> Int = pos.ln + 1;
+    let col -> Int = pos.col + 1;
+
+    if (LAST_ERROR_FILE != pos.fn) {
+        builtin.print("In file:");
+        
+    }
+    builtin.print("   " + pos.fn + ":" + ln + ":" + col);
+    LAST_ERROR_FILE = pos.fn;
 
     let text -> String = pos.text;
     let target_ln -> Int = pos.ln;
@@ -45,11 +56,18 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
         end_idx += 1;
     }
 
-
     if (start_idx < text.length()) {
         let line_text -> String = text.slice(start_idx, end_idx);
-        builtin.print("");
-        builtin.print(line_text);
+        
+        let ln_str -> String = "" + ln;
+        let ln_width -> Int = ln_str.length();
+        
+        let empty_prefix -> String = "  ";
+        let p1 -> Int = 0;
+        while (p1 < ln_width) { empty_prefix = empty_prefix + " "; p1 += 1; }
+        
+        builtin.print(empty_prefix + "| ");
+        builtin.print(" " + ln_str + " | " + line_text);
 
         let err_len -> Int = 1;
         let line_len -> Int = line_text.length();
@@ -69,10 +87,17 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
             }
         }
 
-        let caret_line -> String = "";
+        let caret_line -> String = empty_prefix + "| ";
         let j -> Int = 0;
         while (j < pos.col) {
-            caret_line = caret_line + " ";
+            let ch -> Int = 32;
+            if (j < line_len) { ch = line_text[j]; }
+            
+            if (ch == 9) { 
+                caret_line = caret_line + line_text.slice(j, j + 1);
+            } else {
+                caret_line = caret_line + " ";
+            }
             j += 1;
         }
         
@@ -85,7 +110,12 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
         builtin.print(caret_line);
     }
 
-    exit(1); 
+    builtin.print(name + ": " + details + "\n");
+
+    if (GLOBAL_ERROR_COUNT > 50) {
+        builtin.print("fatal error: too many errors emitted, stopping now");
+        exit(1);
+    }
 }
 
 func throw_illegal_char(pos -> Position, details -> String) -> Void {
@@ -140,4 +170,13 @@ func throw_missing_main_function() -> Void { // special
 func throw_environment_error(details -> String) -> Void { // special
     builtin.print("EnvironmentError: " + details);
     exit(1);
+}
+
+func check_errors_and_abort() -> Void {
+    if (GLOBAL_ERROR_COUNT > 0) {
+        let suffix -> String = " error.";
+        if (GLOBAL_ERROR_COUNT > 1) { suffix = " errors."; }
+        builtin.print("Found " + GLOBAL_ERROR_COUNT + suffix);
+        exit(1);
+    }
 }
