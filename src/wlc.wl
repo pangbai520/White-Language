@@ -40,26 +40,26 @@ struct CompilerConfig(
 )
 
 func print_usage() -> Void {
-    builtin.print("White Language Compiler (v0.2.2)");
+    builtin.print("White Language Compiler (v0.2.3)");
     builtin.print("Usage: wlc <source.wl> [extra_files...] [options]");
     builtin.print("");
     builtin.print("Arguments:");
-    builtin.print("  <source.wl>           Primary WhiteLang source file");
-    builtin.print("  [extra_files...]      Additional .wl, .c, or .obj files to compile/link");
+    builtin.print("  <source.wl>            Primary WhiteLang source file");
+    builtin.print("  [extra_files...]       Additional .wl, .c, or .obj files to compile/link");
     builtin.print("");
     builtin.print("Options:");
-    builtin.print("  -o <file>             Write output to <file>");
-    builtin.print("  -c                    Compile and assemble, but do not link");
-    builtin.print("  -S                    Compile only; do not assemble or link");
-    builtin.print("  --emit-llvm           Use the LLVM representation for assembler and object files");
-    builtin.print("  -O<level>             Optimization level (0, 1, 2, 3). Default: 2");
-    builtin.print("  -g                    Generate source-level debug information");
-    builtin.print("  --ldflags <flags>     Pass extra flags to the linker (e.g., \"-lm -lpthread\")");
-    builtin.print("  -v, --verbose         Enable verbose logging");
-    builtin.print("  --dump-ast            Dump Abstract Syntax Tree to stdout");
-    builtin.print("  --dump-ir             Dump LLVM IR to stdout");
-    builtin.print("  --keep-temps          Do not delete intermediate LLVM IR files");
-    builtin.print("  -h, --help            Display this information");
+    builtin.print("  -o <file>              Write output to <file>");
+    builtin.print("  -c                     Compile and assemble, but do not link");
+    builtin.print("  -S                     Compile only; do not assemble or link");
+    builtin.print("  --emit-llvm            Use the LLVM representation for assembler and object files");
+    builtin.print("  -O<level>              Optimization level (0, 1, 2, 3). Default: 2");
+    builtin.print("  -g                     Generate source-level debug information");
+    builtin.print("  --ldflags <flags>      Pass extra flags to the linker (e.g., \"-lm -lpthread\")");
+    builtin.print("  -v, --verbose          Enable verbose logging");
+    builtin.print("  --dump-ast             Dump Abstract Syntax Tree to stdout");
+    builtin.print("  --dump-ir              Dump LLVM IR to stdout");
+    builtin.print("  --keep-temps           Do not delete intermediate LLVM IR files");
+    builtin.print("  -h, --help             Display this information");
 }
 
 func log_stage(cfg -> CompilerConfig, name -> String) -> Void {
@@ -149,7 +149,43 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     }
 
     let base_name -> String = get_base_name(cfg.source_file);
-    let ll_file -> String = base_name + ".ll";
+    let ll_file -> String = "";
+    
+    if (cfg.keep_temps || cfg.is_emit_llvm) {
+        ll_file = base_name + ".ll";
+    } else {
+        let temp_dir -> String = "";
+        
+        if (is_windows() == 1) {
+            temp_dir = wl_getenv("TMP");
+            if (temp_dir is null) { temp_dir = wl_getenv("TEMP"); }
+            if (temp_dir is null) { temp_dir = "."; }
+            
+            if (!temp_dir.ends_with("\\") && !temp_dir.ends_with("/")) {
+                temp_dir += "\\";
+            }
+        } else {
+            temp_dir = "/tmp/";
+        }
+
+        let file_only -> String = base_name;
+        let len -> Int = base_name.length();
+        let idx -> Int = len - 1;
+        while (idx >= 0) {
+            let ch -> Int = base_name[idx];
+            if (ch == 47 || ch == 92) {
+                file_only = base_name.slice(idx + 1, len);
+                break;
+            }
+            idx -= 1;
+        }
+
+        ll_file = temp_dir + "wlc_tmp_" + file_only + ".ll";
+    }
+
+    if (!cfg.keep_temps && !cfg.is_emit_llvm) {
+        CLEAN_TMP_LL = ll_file;
+    }
 
     if (cfg.output_file.length() == 0) {
         if (cfg.is_asm_only) {
@@ -301,6 +337,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     if (!cfg.keep_temps && cfg.output_file != ll_file) {
         if (cfg.verbose) { builtin.print("Cleaning up: " + ll_file); }
         file_io.remove_file(ll_file);
+        CLEAN_TMP_LL = "";
     }
 
     if (ret != 0) {

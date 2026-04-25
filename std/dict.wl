@@ -8,6 +8,9 @@ extern "C" {
     func strcmp(s1 -> String, s2 -> String) -> Int;
 }
 
+struct _Variant(
+    // compiler internal implementation
+)
 
 func hash_string(key -> String) -> Int {
     let hash -> Int = 5381;
@@ -22,7 +25,6 @@ func hash_string(key -> String) -> Int {
     }
 
     if (hash < 0) { hash = ~hash; }
-
     if (hash < 2) { hash += 2; }
     
     return hash;
@@ -30,7 +32,7 @@ func hash_string(key -> String) -> Int {
 
 class Dict {
     let ptr keys      -> String = nullptr; 
-    let ptr values    -> Struct = nullptr; 
+    let ptr values    -> _Variant = nullptr; 
     // this array stores the hashes but also tracks state (0 = empty, 1 = deleted)
     let ptr hashes    -> Int    = nullptr; 
     
@@ -48,22 +50,22 @@ class Dict {
         self.size = 0;
         self.tombstones = 0;
         
-        // 8 bytes for pointers, 4 for the hash ints
+        // 8 bytes for keys (ptrs), 16 for variants, 4 for hashes
         self.keys   = calloc(actual_cap, 8); 
-        self.values = calloc(actual_cap, 8); 
+        self.values = calloc(actual_cap, 16); 
         self.hashes = calloc(actual_cap, 4); 
     }
 
     method _resize() -> Void {
         let old_cap -> Int = self.capacity;
-        let ptr old_keys -> String = self.keys;
-        let ptr old_vals -> Struct = self.values;
-        let ptr old_hashes -> Int  = self.hashes;
+        let ptr old_keys -> String   = self.keys;
+        let ptr old_vals -> _Variant = self.values;
+        let ptr old_hashes -> Int    = self.hashes;
 
         // standard x2 growth strategy
         self.capacity <<= 1; 
         self.keys   = calloc(self.capacity, 8);
-        self.values = calloc(self.capacity, 8);
+        self.values = calloc(self.capacity, 16);
         self.hashes = calloc(self.capacity, 4);
         
         self.size = 0;
@@ -83,7 +85,7 @@ class Dict {
         free(old_hashes);
     }
 
-    method put(key -> String, val -> Struct) -> Void {
+    method put(key -> String, val -> _Variant) -> Void {
         // if we're 75% full (counting dead slots), we need to grow
         if ((self.size + self.tombstones) * 3 >= self.capacity << 1) {
             self._resize();
@@ -131,8 +133,8 @@ class Dict {
         }
     }
 
-    method get(key -> String) -> Struct {
-        if (self.size == 0) { return null; }
+    method get(key -> String) -> _Variant {
+        if (self.size == 0) { return null; } // 0 means empty
 
         let hash -> Int = hash_string(key);
         let mask -> Int = self.capacity - 1;
@@ -166,7 +168,7 @@ class Dict {
         let mask -> Int = self.capacity - 1;
         let idx  -> Int = hash & mask;
 
-        while (true) {
+        while true {
             let curr_h -> Int = self.hashes[idx];
             
             if (curr_h == 0) { return; } // nothing to delete
@@ -176,7 +178,7 @@ class Dict {
                     // turn this into a "tombstone" so we don't break the probe chain
                     self.hashes[idx] = 1; 
                     self.keys[idx] = "";  // clear the ref
-                    self.values[idx] = null;
+                    self.values[idx] = _Variant(type_id=0, payload=0);
                     self.size--;
                     self.tombstones++;
                     return;
@@ -205,6 +207,6 @@ class Dict {
 
 // internal hook for the compiler's 'in' operator
 func _compiler_helper_IN(self -> Dict, key -> String) -> Bool {
-    let val -> Struct = self.get(key);
-    return val is !null;
+    let val -> _Variant = self.get(key);
+    return val.type_id != 0;
 }

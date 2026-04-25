@@ -11,6 +11,10 @@ import "WhitelangLexer.wl"
 import "WhitelangParser.wl"
 
 
+extern func is_windows() -> Int from "C";
+extern func wl_getenv(name -> String) -> String from "C";
+
+
 func promote_to_float(c -> Compiler, res -> CompileResult) -> CompileResult {
     if (res.type == TYPE_FLOAT) { return res; }
     let input_reg -> String = res.reg;
@@ -92,6 +96,148 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
 
     if (val_res.type == expected_type) { return val_res; }
     let origin -> Int = val_res.origin_type;
+
+    let variant_info -> StructInfo = c.struct_table.get("$Variant");
+    if (variant_info is !null && expected_type == variant_info.type_id) {
+        // packing something into the 16-byte Variant box
+        let variant_llvm -> String = variant_info.llvm_name; // e.g. "%struct.$Variant"
+
+        // alloca a local box
+        let box_ptr -> String = emit_alloc_obj(c, "16", "" + expected_type, variant_llvm + "*");
+
+        // store the Type ID (tag)
+        let type_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + type_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + box_ptr + ", i32 0, i32 0\n");
+        c.output_file.write(c.indent + "store i32 " + val_res.type + ", i32* " + type_ptr + "\n");
+
+        // prepare the Payload (convert anything to i64)
+        let payload_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + payload_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + box_ptr + ", i32 0, i32 1\n");
+        
+        let payload_i64 -> String = next_reg(c);
+        if (val_res.type == TYPE_INT || val_res.type == TYPE_BOOL || val_res.type == TYPE_BYTE) {
+            
+            let prim_ty -> String = get_llvm_type_str(c, val_res.type);
+            c.output_file.write(c.indent + payload_i64 + " = zext " + prim_ty + " " + val_res.reg + " to i64\n");
+        } else if (val_res.type == TYPE_LONG) {
+            c.output_file.write(c.indent + payload_i64 + " = add i64 0, " + val_res.reg + "\n"); 
+        } else if (val_res.type == TYPE_FLOAT) {
+            c.output_file.write(c.indent + payload_i64 + " = bitcast double " + val_res.reg + " to i64\n");
+        } else {
+            let ptr_ty -> String = get_llvm_type_str(c, val_res.type);
+            c.output_file.write(c.indent + payload_i64 + " = ptrtoint " + ptr_ty + " " + val_res.reg + " to i64\n");
+            if (is_ref_type(c, val_res.type)) {
+                emit_retain(c, val_res.reg, val_res.type);
+            }
+        }
+        
+        c.output_file.write(c.indent + "store i64 " + payload_i64 + ", i64* " + payload_ptr + "\n");
+        return CompileResult(reg=box_ptr, type=expected_type, origin_type=val_res.type);
+    }
+
+    let variant_info_check -> StructInfo = c.struct_table.get("$Variant");
+    if (variant_info_check is !null && val_res.type == variant_info_check.type_id) {
+        let variant_llvm -> String = variant_info_check.llvm_name;
+        
+        let read_box_label -> String = "read_box_" + c.type_counter;
+        let check_match_label -> String = "check_match_" + c.type_counter;
+        let unbox_label -> String = "unbox_" + c.type_counter;
+        let merge_label -> String = "merge_" + c.type_counter;
+        let fail_label -> String = "unbox_fail_" + c.type_counter;
+        let null_return_label -> String = "ret_null_" + c.type_counter;
+        c.type_counter += 1;
+
+        let can_be_null -> Bool = false;
+        if (expected_type >= 100) { can_be_null = true; } 
+        if (expected_type == TYPE_STRING || expected_type == TYPE_GENERIC_STRUCT || expected_type == TYPE_GENERIC_CLASS || expected_type == TYPE_GENERIC_FUNCTION || expected_type == TYPE_GENERIC_METHOD) { can_be_null = true; }
+        if (is_pointer_type(c, expected_type)) { can_be_null = true; }
+
+        let is_null_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + is_null_ptr + " = icmp eq " + variant_llvm + "* " + val_res.reg + ", null\n");
+        
+        if (can_be_null) {
+            c.output_file.write(c.indent + "br i1 " + is_null_ptr + ", label %" + null_return_label + ", label %" + read_box_label + "\n");
+        } else {
+            c.output_file.write(c.indent + "br i1 " + is_null_ptr + ", label %" + fail_label + ", label %" + read_box_label + "\n");
+        }
+
+        c.output_file.write("\n" + read_box_label + ":\n");
+        let type_id_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + type_id_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + val_res.reg + ", i32 0, i32 0\n");
+        let type_id_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + type_id_reg + " = load i32, i32* " + type_id_ptr + "\n");
+
+        let is_zero_tag -> String = next_reg(c);
+        c.output_file.write(c.indent + is_zero_tag + " = icmp eq i32 " + type_id_reg + ", 0\n");
+        
+        if (can_be_null) {
+            c.output_file.write(c.indent + "br i1 " + is_zero_tag + ", label %" + null_return_label + ", label %" + check_match_label + "\n");
+        } else {
+            c.output_file.write(c.indent + "br i1 " + is_zero_tag + ", label %" + fail_label + ", label %" + check_match_label + "\n");
+        }
+
+        c.output_file.write("\n" + check_match_label + ":\n");
+        let is_match -> String = next_reg(c);
+        
+        if (expected_type == TYPE_GENERIC_STRUCT || expected_type == TYPE_GENERIC_CLASS) {
+            let is_ptr_type -> String = next_reg(c);
+            c.output_file.write(c.indent + is_ptr_type + " = icmp sge i32 " + type_id_reg + ", 100\n"); 
+            let is_str_type -> String = next_reg(c);
+            c.output_file.write(c.indent + is_str_type + " = icmp eq i32 " + type_id_reg + ", " + TYPE_STRING + "\n");
+            c.output_file.write(c.indent + is_match + " = or i1 " + is_ptr_type + ", " + is_str_type + "\n");
+        } else {
+            c.output_file.write(c.indent + is_match + " = icmp eq i32 " + type_id_reg + ", " + expected_type + "\n");
+        }
+        
+        c.output_file.write(c.indent + "br i1 " + is_match + ", label %" + unbox_label + ", label %" + fail_label + "\n");
+
+        c.output_file.write("\n" + fail_label + ":\n");
+        emit_runtime_error(c, pos, "Dict value type mismatch or missing. Expected " + get_type_name(c, expected_type) + ".");
+
+        c.output_file.write("\n" + unbox_label + ":\n");
+        let payload_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + payload_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + val_res.reg + ", i32 0, i32 1\n");
+        let payload_i64 -> String = next_reg(c);
+        c.output_file.write(c.indent + payload_i64 + " = load i64, i64* " + payload_ptr + "\n");
+        
+        let unboxed_reg -> String = next_reg(c);
+        if (expected_type == TYPE_INT || expected_type == TYPE_BOOL || expected_type == TYPE_BYTE) {
+            let prim_ty -> String = get_llvm_type_str(c, expected_type);
+            c.output_file.write(c.indent + unboxed_reg + " = trunc i64 " + payload_i64 + " to " + prim_ty + "\n");
+        } else if (expected_type == TYPE_LONG) {
+            c.output_file.write(c.indent + unboxed_reg + " = add i64 0, " + payload_i64 + "\n");
+        } else if (expected_type == TYPE_FLOAT) {
+            c.output_file.write(c.indent + unboxed_reg + " = bitcast i64 " + payload_i64 + " to double\n");
+        } else {
+            let ptr_ty -> String = get_llvm_type_str(c, expected_type);
+            c.output_file.write(c.indent + unboxed_reg + " = inttoptr i64 " + payload_i64 + " to " + ptr_ty + "\n");
+        }
+        c.output_file.write(c.indent + "br label %" + merge_label + "\n");
+
+        if (can_be_null) {
+            c.output_file.write("\n" + null_return_label + ":\n");
+            c.output_file.write(c.indent + "br label %" + merge_label + "\n");
+        }
+
+        c.output_file.write("\n" + merge_label + ":\n");
+        let final_val_reg -> String = next_reg(c);
+        let exp_ty_str -> String = get_llvm_type_str(c, expected_type);
+        
+        if (can_be_null) {
+            let zero_val -> String = "0";
+            if (expected_type == TYPE_FLOAT) {
+                zero_val = "0.0";
+            } else if (expected_type == TYPE_STRING || expected_type >= 100 || is_pointer_type(c, expected_type)) {
+                zero_val = "null";
+            }
+            
+            c.output_file.write(c.indent + final_val_reg + " = phi " + exp_ty_str + " [ " + unboxed_reg + ", %" + unbox_label + " ], [ " + zero_val + ", %" + null_return_label + " ]\n");
+        } else {
+            c.output_file.write(c.indent + final_val_reg + " = phi " + exp_ty_str + " [ " + unboxed_reg + ", %" + unbox_label + " ]\n");
+        }
+
+        return CompileResult(reg=final_val_reg, type=expected_type, origin_type=0);
+    }
 
     if (val_res.type == TYPE_NULLPTR) {
         if (is_pointer_type(c, expected_type)) {
@@ -332,6 +478,18 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
         if (base.type == NODE_STRUCT_DEF) {
             let n -> StructDefNode = stmts[i];
             let s_name -> String = n.name_tok.value;
+
+            // for dict.wl
+            if (s_name == "_Variant") {
+                let existing -> StructInfo = c.struct_table.get("_Variant");
+                if (existing is null) {
+                    let intrinsic_info -> StructInfo = c.struct_table.get("$Variant");
+                    c.struct_table.put("_Variant", intrinsic_info);
+                    i += 1;
+                    continue; 
+                }
+            }
+
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
             let info -> StructInfo = StructInfo(
@@ -1881,7 +2039,21 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     }
 
     let old_file -> File = c.output_file;
-    let tmp_name -> String = ".lambda_" + env_id + ".ll";
+
+    let temp_dir -> String = "";
+    if (is_windows() == 1) {
+        temp_dir = wl_getenv("TMP");
+        if (temp_dir is null) { temp_dir = wl_getenv("TEMP"); }
+        if (temp_dir is null) { temp_dir = "."; }
+        if (!temp_dir.ends_with("\\") && !temp_dir.ends_with("/")) {
+            temp_dir += "\\";
+        }
+    } else {
+        temp_dir = "/tmp/";
+    }
+
+    let tmp_name -> String = temp_dir + "wl_lambda_tmp_" + env_id + ".ll";
+    
     c.output_file = File(tmp_name, "w");
     
     let lambda_name -> String = "lambda." + func_def.name_tok.value + "." + env_id;
@@ -1963,7 +2135,8 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     let tmp_read -> File = File(tmp_name, "rb");
     let lambda_ir -> String = tmp_read.read_all();
     tmp_read.close();
-    file_io.remove_file(tmp_name);
+    file_io.remove_file(tmp_name); 
+
     c.global_buffer = c.global_buffer + lambda_ir;
 
     let clo_payload -> String = emit_alloc_obj(c, "16", "8", "i8*");
@@ -2042,6 +2215,14 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
 
 func compile_struct_def(c -> Compiler, node -> StructDefNode) -> CompileResult {
     let struct_name -> String = node.name_tok.value;
+
+    // for dict.wl
+    if (struct_name == "_Variant") {
+        let v_info -> StructInfo = c.struct_table.get("_Variant");
+        if (v_info is !null && v_info.name == "$Variant") {
+            return void_result();
+        }
+    }
 
     let full_name -> String = "struct." + struct_name;
     if (c.struct_table.get(full_name) is !null) {
@@ -4967,6 +5148,25 @@ func compile_start(c -> Compiler) -> Void {
     c.output_file.write("@.str_open_paren = private unnamed_addr constant [2 x i8] c\"(\\00\"\n");
     c.output_file.write("@.str_close_paren = private unnamed_addr constant [2 x i8] c\")\\00\"\n");
     c.output_file.write("@.str_equal = private unnamed_addr constant [2 x i8] c\"=\\00\"\n");
+
+    // for dict.wl
+    let variant_id -> Int = c.type_counter;
+    c.type_counter += 1;
+    let v_fields -> Vector(Struct) = [];
+    v_fields.append(FieldInfo(name="type_id", type=TYPE_INT, llvm_type="i32", offset=0));
+    v_fields.append(FieldInfo(name="payload", type=TYPE_LONG, llvm_type="i64", offset=1));
+
+    let variant_info -> StructInfo = StructInfo(
+        name="$Variant", 
+        type_id=variant_id, 
+        fields=v_fields, 
+        llvm_name="%struct.$Variant", 
+        init_body=null, is_class=false, vtable_name="", parent_id=0, vtable=null
+    );
+    c.struct_table.put("$Variant", variant_info);
+    c.struct_id_map.put("" + variant_id, variant_info);
+    c.output_file.write("; ====== COMPILER INTRINSICS ======\n");
+    c.output_file.write("%struct.$Variant = type { i32, i64 }\n\n");
 }
 
 func compile(c -> Compiler, node -> Struct) -> Void {

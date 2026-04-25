@@ -1,10 +1,12 @@
 // core/WhitelangExceptions.wl
 import "builtin"
+import "file_io"
 
 extern func exit(status -> Int) -> Void from "C";
 
 let GLOBAL_ERROR_COUNT -> Int = 0;
 let LAST_ERROR_FILE -> String = "";
+let CLEAN_TMP_LL -> String = "";
 
 struct Position(
     idx  -> Int,
@@ -22,6 +24,13 @@ func advance_pos(pos -> Position, current_char -> Byte) -> Void {
         pos.ln = pos.ln + 1;
         pos.col = 0;
     }
+}
+
+func abort_and_clean(status -> Int) -> Void {
+    if (CLEAN_TMP_LL.length() > 0) {
+        file_io.remove_file(CLEAN_TMP_LL);
+    }
+    exit(status);
 }
 
 func report_error(pos -> Position, name -> String, details -> String) -> Void {
@@ -114,7 +123,7 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
 
     if (GLOBAL_ERROR_COUNT > 50) {
         builtin.print("fatal error: too many errors emitted, stopping now");
-        exit(1);
+        abort_and_clean(1);
     }
 }
 
@@ -164,12 +173,12 @@ func throw_zero_division_error(pos -> Position, details -> String) -> Void {
 
 func throw_missing_main_function() -> Void { // special
     builtin.print("MissingMainFunction: No 'main' function defined.");
-    exit(1);
+    abort_and_clean(1);
 }
 
 func throw_environment_error(details -> String) -> Void { // special
     builtin.print("EnvironmentError: " + details);
-    exit(1);
+    abort_and_clean(1);
 }
 
 func check_errors_and_abort() -> Void {
@@ -177,6 +186,6 @@ func check_errors_and_abort() -> Void {
         let suffix -> String = " error.";
         if (GLOBAL_ERROR_COUNT > 1) { suffix = " errors."; }
         builtin.print("Found " + GLOBAL_ERROR_COUNT + suffix);
-        exit(1);
+        abort_and_clean(1);
     }
 }

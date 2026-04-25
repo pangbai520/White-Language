@@ -417,7 +417,7 @@ func atom(p -> Parser) -> Struct {
                 
                 if (p.current_tok.type != TOK_COLON) {
                     let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ':' after map key.");
+                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ':' after dictionary key.");
                 }
                 parser_advance(p); // skip ':'
                 
@@ -427,6 +427,9 @@ func atom(p -> Parser) -> Struct {
                 
                 if (p.current_tok.type == TOK_COMMA) {
                     parser_advance(p); // skip ','
+                    if (p.current_tok.type == TOK_RBRACE) {
+                        break;
+                    }
                 } else {
                     break;
                 }
@@ -435,7 +438,7 @@ func atom(p -> Parser) -> Struct {
         
         if (p.current_tok.type != TOK_RBRACE) {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '}' to close map literal.");
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '}' to close dictionary literal.");
         }
         parser_advance(p); // skip '}'
         
