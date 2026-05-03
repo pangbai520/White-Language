@@ -1,7 +1,7 @@
 // core/WhitelangCompiler.wl
 import "builtin"
 import "file_io"
-import "map"
+import "dict"
 import "WhitelangTokens.wl"
 import "WhitelangNodes.wl"
 import "WhitelangExceptions.wl"
@@ -439,7 +439,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
 
 // === SCOPE ===
 func enter_scope(c -> Compiler) -> Void {
-    let new_scope -> Scope = Scope(table=HashMap(32), parent=c.symbol_table, gc_vars=[]);
+    let new_scope -> Scope = Scope(table=Dict(32), parent=c.symbol_table, gc_vars=[]);
     c.symbol_table = new_scope;
     c.scope_depth += 1;
 }
@@ -1513,7 +1513,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     c.output_file.write("entry:\n");
 
     let old_sym -> Scope = c.symbol_table;
-    c.symbol_table = Scope(table=HashMap(32), parent=null, gc_vars=[]);
+    c.symbol_table = Scope(table=Dict(32), parent=null, gc_vars=[]);
     
     c.reg_count = 0; 
     c.scope_depth = 1;
@@ -1611,7 +1611,7 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
     c.output_file.write("entry:\n");
 
     let old_sym -> Scope = c.symbol_table;
-    c.symbol_table = Scope(table=HashMap(32), parent=null, gc_vars=[]);
+    c.symbol_table = Scope(table=Dict(32), parent=null, gc_vars=[]);
     
     c.reg_count = 0; 
     c.scope_depth = 1;
@@ -1756,7 +1756,7 @@ func compile_class_method_call(c -> Compiler, s_info -> StructInfo, obj_res -> C
 }
 
 func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> CompileResult {
-    let scope -> CaptureScope = CaptureScope(local_vars=HashMap(32), captured_vars=HashMap(32), captured_list=[]);
+    let scope -> CaptureScope = CaptureScope(local_vars=Dict(32), captured_vars=Dict(32), captured_list=[]);
     let params -> Vector(Struct) = func_def.params;
     let p_len -> Int = 0; if (params is !null) { p_len = params.length(); }
     let p_i -> Int = 0;
@@ -1868,7 +1868,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     let old_reg -> Int = c.reg_count;
     let old_ret -> Int = c.current_ret_type;
     
-    c.symbol_table = Scope(table=HashMap(32), parent=null, gc_vars=[]);
+    c.symbol_table = Scope(table=Dict(32), parent=null, gc_vars=[]);
     c.scope_depth = 1;
     c.reg_count = 1;
     c.current_ret_type = ret_type_id;
@@ -3322,6 +3322,44 @@ func compile_slice_access(c -> Compiler, node -> SliceAccessNode) -> CompileResu
     return CompileResult(reg=v2, type=slice_type_id, origin_type=0);
 }
 
+func compile_map_lit(c -> Compiler, lit_node -> Struct) -> CompileResult {
+    let node -> MapLitNode = lit_node;
+    let pairs -> Vector(Struct) = node.pairs;
+    let pair_count -> Int = 0;
+    if (pairs is !null) { pair_count = pairs.length(); }
+
+    let cap -> Int = pair_count * 2;
+    if (cap < 8) { cap = 8; }
+
+    let dict_info -> StructInfo = c.struct_table.get("Dict");
+    if (dict_info is null) { dict_info = c.struct_table.get("dict.Dict"); }
+    if (dict_info is null) { WhitelangExceptions.throw_type_error(node.pos, "Compiler error: 'Dict' class not found in prelude."); }
+
+    let cap_tok -> Token = Token(type=TOK_INT, value="" + cap, line=node.pos.ln, col=node.pos.col);
+    let cap_node -> IntNode = IntNode(type=NODE_INT, tok=cap_tok, pos=node.pos);
+
+    let init_args -> Vector(Struct) = [];
+    init_args.append(ArgNode(val=cap_node, name=null));
+    let fake_init_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=init_args, pos=node.pos);
+
+    let dict_res -> CompileResult = compile_class_init(c, dict_info, fake_init_call);
+
+    // dict.put(k, v)
+    let i -> Int = 0;
+    while (i < pair_count) {
+        let pair -> MapPairNode = pairs[i];
+        let put_args -> Vector(Struct) = [];
+        put_args.append(ArgNode(val=pair.key, name=null));
+        put_args.append(ArgNode(val=pair.value, name=null));
+        let fake_put_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=put_args, pos=node.pos);
+        
+        compile_class_method_call(c, dict_info, dict_res, "put", fake_put_call);
+        i += 1;
+    }
+
+    return CompileResult(reg=dict_res.reg, type=dict_info.type_id, origin_type=0);
+}
+
 func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
     let left -> CompileResult = compile_node(c, node.left);
     let op_type -> Int = node.op_tok.type; 
@@ -3636,6 +3674,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_INDEX_ACCESS) { return compile_index_access(c, node); }
     if (base.type == NODE_INDEX_ASSIGN) { return compile_index_assign(c, node); }
     if (base.type == NODE_SLICE_ACCESS) { return compile_slice_access(c, node); }
+    if (base.type == NODE_MAP_LIT) { return compile_map_lit(c, node); }
 
     // function and closure
     if (base.type == NODE_FUNC_DEF) {
@@ -4832,6 +4871,12 @@ func compile_start(c -> Compiler) -> Void {
 
 func compile(c -> Compiler, node -> Struct) -> Void {
     compile_start(c);
+
+    let fake_path -> Token = Token(type=TOK_STR_LIT, value="dict", line=0, col=0);
+    let fake_pos -> Position = WhitelangExceptions.Position(idx=0, ln=0, col=0, text="", fn="<prelude>");
+    let fake_import -> ImportNode = ImportNode(type=NODE_IMPORT, path_tok=fake_path, symbols=null, alias_tok=null, pos=fake_pos);
+    compile_import(c, fake_import);
+
     compile_ast(c, node);
     compile_end(c);
 }

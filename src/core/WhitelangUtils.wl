@@ -1,7 +1,7 @@
 // core/WhitelangUtils.wl
 import "builtin"
 import "file_io"
-import "map"
+import "dict"
 import "WhitelangTokens.wl"
 import "WhitelangNodes.wl"
 import "WhitelangExceptions.wl"
@@ -57,7 +57,7 @@ struct FuncInfo(
 struct TypeListNode(type -> Int)
 
 struct Scope(
-    table  -> HashMap, // symbol table of the current level
+    table  -> Dict, // symbol table of the current level
     parent -> Struct,  // parent scope or null
     gc_vars -> Vector(Struct)
 )
@@ -92,8 +92,8 @@ struct ArrayInfo(
 )
 
 struct CaptureScope(
-    local_vars -> HashMap,
-    captured_vars -> HashMap,
+    local_vars -> Dict,
+    captured_vars -> Dict,
     captured_list -> Vector(String)
 )
 
@@ -101,10 +101,10 @@ struct Compiler(
     output_file -> File,
     reg_count   -> Int, 
     symbol_table -> Scope,
-    global_symbol_table -> HashMap,
-    func_table   -> HashMap,
-    struct_table -> HashMap,
-    struct_id_map -> HashMap,
+    global_symbol_table -> Dict,
+    func_table   -> Dict,
+    struct_table -> Dict,
+    struct_id_map -> Dict,
     indent      -> String, 
     loop_stack   -> Struct, 
     scope_depth  -> Int,
@@ -113,24 +113,24 @@ struct Compiler(
     string_list -> Vector(Struct),
     str_count   -> Int,
     type_counter -> Int, // custom type
-    ptr_cache -> HashMap,       // Key: "ptr_ID", Value: SymbolInfo(reg="", type=ptr_id)
-    ptr_base_map -> HashMap,    // Key: "ID", Value: SymbolInfo(reg="", type=base_id)
-    vector_cache -> HashMap,    // Key: "vec_baseID", Value: SymbolInfo(type=new_id)
-    vector_base_map -> HashMap, // Key: "ID", Value: SymbolInfo(type=baseID)
-    array_info_map -> HashMap, 
-    array_type_cache -> HashMap,
-    func_ret_map -> HashMap,
-    declared_externs -> HashMap,
-    imported_modules -> HashMap,
+    ptr_cache -> Dict,       // Key: "ptr_ID", Value: SymbolInfo(reg="", type=ptr_id)
+    ptr_base_map -> Dict,    // Key: "ID", Value: SymbolInfo(reg="", type=base_id)
+    vector_cache -> Dict,    // Key: "vec_baseID", Value: SymbolInfo(type=new_id)
+    vector_base_map -> Dict, // Key: "ID", Value: SymbolInfo(type=baseID)
+    array_info_map -> Dict, 
+    array_type_cache -> Dict,
+    func_ret_map -> Dict,
+    declared_externs -> Dict,
+    imported_modules -> Dict,
     current_package_prefix -> String,
-    loaded_packages -> HashMap,
-    loaded_files -> HashMap,
+    loaded_packages -> Dict,
+    loaded_files -> Dict,
     current_dir -> String,
     curr_func -> FuncInfo,
     expected_type -> Int,
     type_drop_list -> Vector(Struct),
     global_buffer -> String,
-    string_pool -> HashMap
+    string_pool -> Dict
 )
 
 
@@ -145,16 +145,16 @@ struct LoopScope(
 func new_compiler(out_path -> String) -> Compiler {
     let f -> File = File(out_path, "w");
     // initialize empty scope
-    let root_scope -> Scope = Scope(table=HashMap(32), parent=null, gc_vars=[]);
+    let root_scope -> Scope = Scope(table=Dict(32), parent=null, gc_vars=[]);
 
     let comp -> Compiler = Compiler(
         output_file = f,
         reg_count = 1,
         symbol_table = root_scope,
-        global_symbol_table = HashMap(32),
-        func_table = HashMap(32),
-        struct_table = HashMap(32),
-        struct_id_map = HashMap(32),
+        global_symbol_table = Dict(32),
+        func_table = Dict(32),
+        struct_table = Dict(32),
+        struct_id_map = Dict(32),
         indent = "  ",
         loop_stack = null,
         scope_depth = 0,
@@ -163,24 +163,24 @@ func new_compiler(out_path -> String) -> Compiler {
         string_list = [],
         str_count = 0,
         type_counter = 100,
-        ptr_cache=HashMap(32),
-        ptr_base_map=HashMap(32),
-        vector_cache=HashMap(32),
-        vector_base_map=HashMap(32),
-        func_ret_map=HashMap(32),
-        declared_externs=HashMap(32),
-        imported_modules=HashMap(32),
+        ptr_cache=Dict(32),
+        ptr_base_map=Dict(32),
+        vector_cache=Dict(32),
+        vector_base_map=Dict(32),
+        func_ret_map=Dict(32),
+        declared_externs=Dict(32),
+        imported_modules=Dict(32),
         current_package_prefix = "",
-        loaded_packages = HashMap(32),
-        loaded_files = HashMap(32),
+        loaded_packages = Dict(32),
+        loaded_files = Dict(32),
         current_dir = ".",
         curr_func = null,
         expected_type = 0,
         type_drop_list = [],
         global_buffer = "",
-        string_pool = HashMap(128),
-        array_info_map = HashMap(32),
-        array_type_cache = HashMap(32)
+        string_pool = Dict(128),
+        array_info_map = Dict(32),
+        array_type_cache = Dict(32)
     );
 
     comp.type_drop_list.append(TypeListNode(type=TYPE_GENERIC_FUNCTION));
@@ -898,7 +898,7 @@ func analyze_captures(node -> Struct, scope -> CaptureScope) -> Void {
         let func_def -> FunctionDefNode = node;
         scope.local_vars.put(func_def.name_tok.value, TypeListNode(type=1));
 
-        let child_scope -> CaptureScope = CaptureScope(local_vars=HashMap(32), captured_vars=HashMap(32), captured_list=[]);
+        let child_scope -> CaptureScope = CaptureScope(local_vars=Dict(32), captured_vars=Dict(32), captured_list=[]);
 
         let params -> Vector(Struct) = func_def.params;
         let i -> Int = 0;
