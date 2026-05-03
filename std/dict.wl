@@ -1,4 +1,4 @@
-// std/map.wl
+// std/dict.wl
 // Basic open-addressed hash map. Uses linear probing and "tombstones" for deletes.
 // Forced 2^n capacity so we can use bitmasking instead of slow modulo ops.
 

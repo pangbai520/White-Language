@@ -227,7 +227,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
             let zero_val -> String = "0";
             if (expected_type == TYPE_FLOAT) {
                 zero_val = "0.0";
-            } else if (expected_type == TYPE_STRING || expected_type >= 100 || is_pointer_type(c, expected_type)) {
+            } else if (expected_type == TYPE_STRING || expected_type >= 100 || expected_type == TYPE_GENERIC_STRUCT || expected_type == TYPE_GENERIC_CLASS || expected_type == TYPE_GENERIC_FUNCTION || expected_type == TYPE_GENERIC_METHOD || expected_type == TYPE_AUTO || is_pointer_type(c, expected_type)) {
                 zero_val = "null";
             }
             
@@ -1401,7 +1401,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
 
         if (is_valid_struct) {
             let fake_args -> Vector(Struct) = [];
-            let fake_call -> CallNode = CallNode(type=16, callee=null, args=fake_args, pos=node.pos);
+            let fake_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=fake_args, pos=node.pos);
             let val_res -> CompileResult = null;
             
             if (s_info.is_class) {
@@ -1697,10 +1697,8 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         let p -> ParamNode = params[arg_idx];
         let p_type_id -> Int = resolve_type(c, p.type_tok);
         let p_llvm_type -> String = get_llvm_type_str(c, p_type_id);
-        if (arg_idx > 0) { params_str = params_str + ", ";
-        }
+        if (arg_idx > 0) { params_str = params_str + ", "; }
         params_str += p_llvm_type + " %arg" + arg_idx;
-        
         arg_idx += 1;
     }
 
@@ -3170,7 +3168,7 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
         if has_get {
             let fake_args -> Vector(Struct) = [];
             fake_args.append(ArgNode(val=node.index_node, name=null));
-            let fake_call -> CallNode = CallNode(type=16, callee=null, args=fake_args, pos=node.pos);
+            let fake_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=fake_args, pos=node.pos);
             return compile_class_method_call(c, s_info, target_res, "get", fake_call);
         }
     }
@@ -3315,7 +3313,7 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
             let fake_args -> Vector(Struct) = [];
             fake_args.append(ArgNode(val=node.index_node, name=null));
             fake_args.append(ArgNode(val=node.value, name=null));
-            let fake_call -> CallNode = CallNode(type=16, callee=null, args=fake_args, pos=node.pos);
+            let fake_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=fake_args, pos=node.pos);
             compile_class_method_call(c, s_info, target_res, "put", fake_call);
             return void_result();
         }
@@ -4855,6 +4853,10 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
     if (type_id >= 100) {
         let s_info -> StructInfo = c.struct_id_map.get("" + type_id);
         if (s_info is !null) {
+            if (s_info.name == "$Variant" || s_info.name == "_Variant") {
+                compile_print_variant_internal(c, reg, s_info, pos);
+                return;
+            }
             compile_print_struct_internal(c, reg, s_info, pos);
             return;
         } 
@@ -4887,6 +4889,10 @@ func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> S
     
     while (f_idx < f_len) {
         let f_curr -> FieldInfo = fields_vec[f_idx];
+        if (f_curr.name == "_vptr") {
+            f_idx += 1;
+            continue;
+        }
         let f_name_eq -> String = f_curr.name + "=";
         let fn_id -> Int = register_string_constant(c, f_name_eq);
         let fn_ptr -> String = get_string_ptr(fn_id, f_name_eq);
@@ -5038,6 +5044,98 @@ func compile_print_array_internal(c -> Compiler, arr_reg -> String, arr_info -> 
     c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0))\n");
 }
 
+func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info -> StructInfo, pos -> Position) -> Void {
+    let variant_llvm -> String = v_info.llvm_name;
+
+    let is_null -> String = next_reg(c);
+    c.output_file.write(c.indent + is_null + " = icmp eq " + variant_llvm + "* " + variant_reg + ", null\n");
+    let label_null_print -> String = "var_null_print_" + c.type_counter;
+    let label_not_null -> String = "var_not_null_" + c.type_counter;
+    let label_end -> String = "var_end_" + c.type_counter;
+    c.type_counter += 1;
+
+    c.output_file.write(c.indent + "br i1 " + is_null + ", label %" + label_null_print + ", label %" + label_not_null + "\n");
+
+    c.output_file.write("\n" + label_null_print + ":\n");
+    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "br label %" + label_end + "\n");
+
+    c.output_file.write("\n" + label_not_null + ":\n");
+
+    let type_id_ptr -> String = next_reg(c);
+    c.output_file.write(c.indent + type_id_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + variant_reg + ", i32 0, i32 0\n");
+    let type_id_reg -> String = next_reg(c);
+    c.output_file.write(c.indent + type_id_reg + " = load i32, i32* " + type_id_ptr + "\n");
+
+    let payload_ptr -> String = next_reg(c);
+    c.output_file.write(c.indent + payload_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + variant_reg + ", i32 0, i32 1\n");
+    let payload_i64 -> String = next_reg(c);
+    c.output_file.write(c.indent + payload_i64 + " = load i64, i64* " + payload_ptr + "\n");
+
+    let label_null -> String = "var_null_" + c.type_counter;
+    let label_int -> String = "var_int_" + c.type_counter;
+    let label_long -> String = "var_long_" + c.type_counter;
+    let label_float -> String = "var_float_" + c.type_counter;
+    let label_bool -> String = "var_bool_" + c.type_counter;
+    let label_string -> String = "var_string_" + c.type_counter;
+    let label_default -> String = "var_default_" + c.type_counter;
+    c.type_counter += 1;
+
+    c.output_file.write(c.indent + "switch i32 " + type_id_reg + ", label %" + label_default + " [\n");
+    c.output_file.write("    i32 0, label %" + label_null + "\n");
+    c.output_file.write("    i32 " + TYPE_INT + ", label %" + label_int + "\n");
+    c.output_file.write("    i32 " + TYPE_LONG + ", label %" + label_long + "\n");
+    c.output_file.write("    i32 " + TYPE_FLOAT + ", label %" + label_float + "\n");
+    c.output_file.write("    i32 " + TYPE_BOOL + ", label %" + label_bool + "\n");
+    c.output_file.write("    i32 " + TYPE_STRING + ", label %" + label_string + "\n");
+    c.output_file.write("  ]\n");
+
+    // null
+    c.output_file.write("\n" + label_null + ":\n");
+    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "br label %" + label_end + "\n");
+
+    // Int
+    c.output_file.write("\n" + label_int + ":\n");
+    let unboxed_int -> String = next_reg(c);
+    c.output_file.write(c.indent + unboxed_int + " = trunc i64 " + payload_i64 + " to i32\n");
+    compile_print(c, unboxed_int, TYPE_INT, pos, 0);
+    c.output_file.write(c.indent + "br label %" + label_end + "\n");
+
+    // Long
+    c.output_file.write("\n" + label_long + ":\n");
+    compile_print(c, payload_i64, TYPE_LONG, pos, 0);
+    c.output_file.write(c.indent + "br label %" + label_end + "\n");
+
+    // Float
+    c.output_file.write("\n" + label_float + ":\n");
+    let unboxed_float -> String = next_reg(c);
+    c.output_file.write(c.indent + unboxed_float + " = bitcast i64 " + payload_i64 + " to double\n");
+    compile_print(c, unboxed_float, TYPE_FLOAT, pos, 0);
+    c.output_file.write(c.indent + "br label %" + label_end + "\n");
+    
+    // Bool
+    c.output_file.write("\n" + label_bool + ":\n");
+    let unboxed_bool -> String = next_reg(c);
+    c.output_file.write(c.indent + unboxed_bool + " = trunc i64 " + payload_i64 + " to i1\n");
+    compile_print(c, unboxed_bool, TYPE_BOOL, pos, 0);
+    c.output_file.write(c.indent + "br label %" + label_end + "\n");
+
+    // String
+    c.output_file.write("\n" + label_string + ":\n");
+    let unboxed_str -> String = next_reg(c);
+    c.output_file.write(c.indent + unboxed_str + " = inttoptr i64 " + payload_i64 + " to i8*\n");
+    compile_print(c, unboxed_str, TYPE_STRING, pos, 0);
+    c.output_file.write(c.indent + "br label %" + label_end + "\n");
+
+    // other object
+    c.output_file.write("\n" + label_default + ":\n");
+    c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_hex_ptr, i32 0, i32 0), i64 " + payload_i64 + ")\n");
+    c.output_file.write(c.indent + "br label %" + label_end + "\n");
+
+    c.output_file.write("\n" + label_end + ":\n");
+}
+
 func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -> String, call_node -> CallNode) -> CompileResult {
     let target_func -> String = "string_" + method_name;
     let real_func_name -> String = "";
@@ -5133,6 +5231,7 @@ func compile_start(c -> Compiler) -> Void {
 
     c.output_file.write("@.fmt_int_simple = private unnamed_addr constant [3 x i8] c\"%d\\00\"\n");
     c.output_file.write("@.fmt_float_simple = private unnamed_addr constant [3 x i8] c\"%f\\00\"\n");
+    c.output_file.write("@.fmt_long_simple = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n");
     c.output_file.write("@.str_true = private unnamed_addr constant [5 x i8] c\"true\\00\"\n");
     c.output_file.write("@.str_false = private unnamed_addr constant [6 x i8] c\"false\\00\"\n");
     c.output_file.write("@.str_null = private unnamed_addr constant [5 x i8] c\"null\\00\"\n\n");
