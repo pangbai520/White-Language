@@ -14,7 +14,7 @@ func compute_sum(a -> Int, b -> Int) -> Int { return a + b; }
 
 func main() -> Int {
     // FFI and raw memory
-    let raw_ptr -> ptr Byte = malloc(16);
+    let ptr raw_ptr -> Byte = malloc(16);
     free(raw_ptr);
 
     // recursive Vector/Struct mix

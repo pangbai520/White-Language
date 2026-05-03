@@ -48,7 +48,7 @@ const NODE_METHOD_TYPE    -> Int = 44;
 const NODE_ARRAY_TYPE     -> Int = 45;
 const NODE_SLICE_TYPE     -> Int = 46;
 const NODE_SLICE_ACCESS   -> Int = 47;
-
+const NODE_MAP_LIT        -> Int = 48;
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -375,4 +375,14 @@ struct SliceAccessNode(
     start_idx -> Struct,
     end_idx -> Struct,
     pos -> Position
+)
+
+struct MapPairNode(
+    key   -> Struct,
+    value -> Struct
+)
+struct MapLitNode(
+    type  -> Int, // NODE_MAP_LIT
+    pairs -> Vector(Struct), // MapPairNode
+    pos   -> Position
 )

@@ -23,6 +23,7 @@ const TYPE_LONG  -> Int = 9;
 const TYPE_BYTE  -> Int = 10;
 const TYPE_GENERIC_CLASS -> Int = 11;
 const TYPE_GENERIC_METHOD -> Int = 12;
+const TYPE_AUTO -> Int = 13;
 const TYPE_NULLPTR -> Int = 99;
 
 
@@ -303,6 +304,7 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_FUNCTION) { return "i8*"; }
     if (type_id == TYPE_GENERIC_CLASS) { return "i8*"; }
     if (type_id == TYPE_GENERIC_METHOD) { return "i8*"; }
+    if (type_id == TYPE_AUTO) { return "i8*"; }
 
     let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
     if (arr_info is !null) {
@@ -350,6 +352,7 @@ func get_type_name(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_FUNCTION) { return "Function"; }
     if (type_id == TYPE_GENERIC_CLASS) { return "Class"; }
     if (type_id == TYPE_GENERIC_METHOD) { return "Method"; }
+    if (type_id == TYPE_AUTO) { return "Auto"; }
 
     if (type_id >= 100) {
         let f_info -> SymbolInfo = c.func_ret_map.get("" + type_id);
@@ -409,6 +412,7 @@ func is_ref_type(c -> Compiler, type_id -> Int) -> Bool {
     if (type_id == TYPE_GENERIC_FUNCTION) { return true; }
     if (type_id == TYPE_GENERIC_CLASS) { return true; }
     if (type_id == TYPE_GENERIC_METHOD) { return true; }
+    if (type_id == TYPE_AUTO) { return true; }
 
     if (type_id >= 100) {
         if (c.array_info_map.get("" + type_id) is !null) { return false; }
@@ -646,6 +650,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         if (name == "Function") { return TYPE_GENERIC_FUNCTION; }
         if (name == "Class") { return TYPE_GENERIC_CLASS; }
         if (name == "Method") { return TYPE_GENERIC_METHOD; }
+        if (name == "Auto") { return TYPE_AUTO; }
         
         let s_info -> StructInfo = c.struct_table.get(name);
         if (s_info is !null) { return s_info.type_id; }

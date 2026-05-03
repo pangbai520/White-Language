@@ -300,32 +300,57 @@ func get_next_token(l -> Lexer) -> Token {
             return WhitelangTokens.Token(type=TOK_ASSIGN, value="=", line=char_line, col=char_col);
         }
 
-        // < and <=
+        // <, <=, <<, <<=
         if (char == 60) {
             lexer_advance(l);
             if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_LTE, value="<=", line=char_line, col=char_col); }
+            if (l.current_char == 60) { // <<
+                lexer_advance(l);
+                if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_LSHIFT_ASSIGN, value="<<=", line=char_line, col=char_col); }
+                return WhitelangTokens.Token(type=TOK_LSHIFT, value="<<", line=char_line, col=char_col);
+            }
             return WhitelangTokens.Token(type=TOK_LT, value="<", line=char_line, col=char_col);
         }
 
-        // > and >=
+        // >, >=, >>, >>=
         if (char == 62) {
             lexer_advance(l);
             if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_GTE, value=">=", line=char_line, col=char_col); }
+            if (l.current_char == 62) { // >>
+                lexer_advance(l);
+                if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_RSHIFT_ASSIGN, value=">>=", line=char_line, col=char_col); }
+                return WhitelangTokens.Token(type=TOK_RSHIFT, value=">>", line=char_line, col=char_col);
+            }
             return WhitelangTokens.Token(type=TOK_GT, value=">", line=char_line, col=char_col);
         }
 
-        // &&
+        // &, &&, &=
         if (char == 38) {
             lexer_advance(l);
             if (l.current_char == 38) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_AND, value="&&", line=char_line, col=char_col); }
-            WhitelangExceptions.throw_illegal_char(l.pos, "Expected '&' after '&'.");
+            if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_BIT_AND_ASSIGN, value="&=", line=char_line, col=char_col); }
+            return WhitelangTokens.Token(type=TOK_BIT_AND, value="&", line=char_line, col=char_col);
         }
 
-        // ||
+        // |, ||, |=
         if (char == 124) {
             lexer_advance(l);
             if (l.current_char == 124) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_OR, value="||", line=char_line, col=char_col); }
-            WhitelangExceptions.throw_illegal_char(l.pos, "Expected '|' after '|'.");
+            if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_BIT_OR_ASSIGN, value="|=", line=char_line, col=char_col); }
+            return WhitelangTokens.Token(type=TOK_BIT_OR, value="|", line=char_line, col=char_col);
+        }
+
+        // ^, ^=
+        if (char == 94) {
+            lexer_advance(l);
+            if (l.current_char == 61) { lexer_advance(l); return WhitelangTokens.Token(type=TOK_BIT_XOR_ASSIGN, value="^=", line=char_line, col=char_col); }
+            return WhitelangTokens.Token(type=TOK_BIT_XOR, value="^", line=char_line, col=char_col);
+        }
+
+        // ~
+        if (char == 126) {
+            lexer_advance(l);
+            return WhitelangTokens.Token(type=TOK_BIT_NOT, value="~", line=char_line, col=char_col);
         }
 
         // Single char tokens

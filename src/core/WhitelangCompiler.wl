@@ -140,6 +140,35 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         }
     }
 
+    if (is_void_ptr(c, expected_type)) {
+        if (val_res.type == TYPE_STRING) {
+            return CompileResult(reg=val_res.reg, type=expected_type, origin_type=val_res.type);
+        }
+        if (!is_pointer_type(c, val_res.type) && val_res.type != TYPE_NULL && val_res.type != TYPE_NULLPTR) {
+            let prim_ty -> String = get_llvm_type_str(c, val_res.type);
+            let temp_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + temp_ptr + " = alloca " + prim_ty + "\n");
+            c.output_file.write(c.indent + "store " + prim_ty + " " + val_res.reg + ", " + prim_ty + "* " + temp_ptr + "\n");
+            let void_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + void_ptr + " = bitcast " + prim_ty + "* " + temp_ptr + " to i8*\n");
+            return CompileResult(reg=void_ptr, type=expected_type, origin_type=val_res.type);
+        }
+    }
+
+    if (is_void_ptr(c, val_res.type) && expected_type != TYPE_NULL && expected_type != TYPE_NULLPTR && !is_void_ptr(c, expected_type)) {
+        if (expected_type == TYPE_STRING) {
+            return CompileResult(reg=val_res.reg, type=expected_type, origin_type=origin);
+        }
+        if (!is_pointer_type(c, expected_type)) {
+            let dest_ty -> String = get_llvm_type_str(c, expected_type);
+            let typed_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + typed_ptr + " = bitcast i8* " + val_res.reg + " to " + dest_ty + "*\n");
+            let loaded_val -> String = next_reg(c);
+            c.output_file.write(c.indent + loaded_val + " = load " + dest_ty + ", " + dest_ty + "* " + typed_ptr + "\n");
+            return CompileResult(reg=loaded_val, type=expected_type, origin_type=0);
+        }
+    }
+
     if (expected_type == TYPE_GENERIC_FUNCTION || expected_type == TYPE_GENERIC_METHOD) {
         if (val_res.type >= 100) {
             let f_check -> SymbolInfo = c.func_ret_map.get("" + val_res.type);
@@ -345,7 +374,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
             }
             
             if (c.func_table.get(func_name) is !null) {
-                WhitelangExceptions.throw_type_error(f_node.pos, "Function '" + func_name + "' is already defined.");
+                WhitelangExceptions.throw_import_error(f_node.pos, "Function '" + func_name + "' is already defined.");
             }
             
             let ret_type_id -> Int = resolve_type(c, f_node.ret_type_tok);
@@ -381,7 +410,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                 let m_name -> String = c.current_package_prefix + c_name + "_" + m_raw_name; 
                 
                 if (c.func_table.get(m_name) is !null) {
-                    WhitelangExceptions.throw_type_error(m_node.pos, "Method '" + m_name + "' is already defined.");
+                    WhitelangExceptions.throw_import_error(m_node.pos, "Method '" + m_name + "' is already defined.");
                 }
 
                 let ret_id -> Int = resolve_type(c, m_node.return_type);
@@ -538,6 +567,17 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
         let v_node -> VarDeclareNode = node;
         if (c.scope_depth > 0) {
             let target_type_id -> Int = resolve_type(c, v_node.type_node);
+
+            if (target_type_id == TYPE_AUTO) {
+                if (v_node.value is null) {
+                    WhitelangExceptions.throw_invalid_syntax(v_node.pos, "Cannot infer 'Auto' type without an initializer.");
+                }
+                target_type_id = get_expr_type(c, v_node.value);
+                if (target_type_id == 0 || target_type_id == TYPE_AUTO) {
+                    WhitelangExceptions.throw_type_error(v_node.pos, "Failed to statically infer type for 'Auto'. Please specify type explicitly.");
+                }
+            }
+
             let llvm_ty_str -> String = get_llvm_type_str(c, target_type_id);
             let ptr_reg -> String = next_reg(c);
             c.output_file.write(c.indent + ptr_reg + " = alloca " + llvm_ty_str + "\n");
@@ -1095,8 +1135,21 @@ func compile_block(c -> Compiler, node -> BlockNode) -> CompileResult {
 
 func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
     let target_type_id -> Int = resolve_type(c, node.type_node);
+
+    if (target_type_id == TYPE_AUTO) {
+        if (node.value is null) {
+            WhitelangExceptions.throw_type_error(node.pos, "Cannot infer 'Auto' type without an initializer.");
+        }
+        target_type_id = get_expr_type(c, node.value);
+        if (target_type_id == 0 || target_type_id == TYPE_AUTO) {
+             WhitelangExceptions.throw_type_error(node.pos, "Failed to statically infer type for 'Auto'.");
+        }
+        if (target_type_id == TYPE_NULL || target_type_id == TYPE_NULLPTR || target_type_id == TYPE_VOID) {
+             WhitelangExceptions.throw_type_error(node.pos, "Cannot infer 'Auto' as null or Void.");
+        }
+    }
+
     let llvm_ty_str -> String = get_llvm_type_str(c, target_type_id);
-    
     let var_name -> String = node.name_tok.value;
 
     if (c.scope_depth == 0) {
@@ -1114,13 +1167,13 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
             }
             else if (val_node.type == NODE_NULLPTR) {
                 if (is_pointer_type(c, target_type_id) == false) {
-                    WhitelangExceptions.throw_type_error(node.pos, "Global 'nullptr' can only be assigned to pointer types.");
+                    WhitelangExceptions.throw_invalid_syntax(node.pos, "Global 'nullptr' can only be assigned to pointer types.");
                 }
                 init_val_str = "null";
             }
             else if (val_node.type == NODE_NULL) {
                 if (is_pointer_type(c, target_type_id) == true) {
-                WhitelangExceptions.throw_type_error(node.pos, "Global 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
+                WhitelangExceptions.throw_invalid_syntax(node.pos, "Global 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
                 }
                 if (target_type_id == TYPE_INT || target_type_id == TYPE_FLOAT || target_type_id == TYPE_BOOL) {
                 WhitelangExceptions.throw_type_error(node.pos, "Primitive types cannot be null.");
@@ -1140,7 +1193,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 if (n.value == 1) { init_val_str = "1"; } else { init_val_str = "0"; }
                 if (target_type_id != TYPE_BOOL) { WhitelangExceptions.throw_type_error(node.pos, "Type mismatch. "); }
             } else {
-                WhitelangExceptions.throw_type_error(node.pos, "Global variable initialization must be a constant literal. ");
+                WhitelangExceptions.throw_invalid_syntax(node.pos, "Global variable initialisation must be a constant literal. ");
             }
         }
         
@@ -1152,13 +1205,43 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
     let ptr_reg -> String = node.alloc_reg;
     let origin_id -> Int = target_type_id;
 
-    if (node.value is !null) {
+    if (node.value is null) {
+        let s_info -> StructInfo = c.struct_id_map.get("" + target_type_id);
+        let is_valid_struct -> Bool = false;
+        
+        if (s_info is !null) {
+            if (c.array_info_map.get("" + target_type_id) is null && 
+                c.vector_base_map.get("" + target_type_id) is null && 
+                c.func_ret_map.get("" + target_type_id) is null) {
+                is_valid_struct = true;
+            }
+        }
+
+        if (is_valid_struct) {
+            let fake_args -> Vector(Struct) = [];
+            let fake_call -> CallNode = CallNode(type=16, callee=null, args=fake_args, pos=node.pos);
+            let val_res -> CompileResult = null;
+            
+            if (s_info.is_class) {
+                val_res = compile_class_init(c, s_info, fake_call);
+            } else {
+                val_res = compile_struct_init(c, s_info, fake_call);
+            }
+            
+            if (c.scope_depth > 0) {
+                emit_retain(c, val_res.reg, target_type_id);
+            }
+            c.output_file.write(c.indent + "store " + llvm_ty_str + " " + val_res.reg + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
+        } else {
+            WhitelangExceptions.throw_missing_initializer(node.pos, "Local variable '" + var_name + "' must be initialised immediately upon declaration.");
+        }
+    } else {
         let is_array_init -> Bool = false;
         let val_base -> BaseNode = node.value;
         let target_arr -> ArrayInfo = c.array_info_map.get("" + target_type_id);
         if (target_arr is !null && val_base.type == NODE_VECTOR_LIT) {
             if (target_arr.size == -1) {
-                WhitelangExceptions.throw_type_error(node.pos, "Cannot initialize Array(Type) slice directly from a literal.");
+                WhitelangExceptions.throw_type_error(node.pos, "Cannot initialise Array(Type) slice directly from a literal.");
             }
 
             is_array_init = true;
@@ -1188,34 +1271,6 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
             }
 
             c.output_file.write(c.indent + "store " + llvm_ty_str + " " + val_res.reg + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
-        }
-    }
-    else {
-        if (target_type_id == TYPE_GENERIC_STRUCT || target_type_id == TYPE_GENERIC_CLASS) {
-            WhitelangExceptions.throw_missing_initializer(node.pos, "Variable of generic type 'Struct' or 'Class' must be initialized explicitly.");
-        }
-
-        let s_info -> StructInfo = c.struct_id_map.get("" + target_type_id);
-        if (s_info is !null) {
-            let fake_call -> CallNode = CallNode(type=16, callee=null, args=null, pos=node.pos);
-            let init_res -> CompileResult = null;
-
-            if (s_info.is_class) {
-                init_res = compile_class_init(c, s_info, fake_call);
-            } else {
-                init_res = compile_struct_init(c, s_info, fake_call);
-            }
-            
-            if (c.scope_depth > 0) {
-                emit_retain(c, init_res.reg, target_type_id);
-            }
-
-            c.output_file.write(c.indent + "store " + llvm_ty_str + " " + init_res.reg + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
-        } else {
-            let zero -> String = "0";
-            if (target_type_id == TYPE_STRING || target_type_id >= 100 || target_type_id == TYPE_GENERIC_STRUCT || target_type_id == TYPE_GENERIC_FUNCTION) { zero = "null"; }
-            if (target_type_id == TYPE_FLOAT) { zero = "0.0"; }
-            c.output_file.write(c.indent + "store " + llvm_ty_str + " " + zero + ", " + llvm_ty_str + "* " + ptr_reg + "\n");
         }
     }
 
@@ -2141,7 +2196,7 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
         let p_name -> String = node.parent_tok.value;
         parent_info = c.struct_table.get(p_name);
         if (parent_info is null || !parent_info.is_class) {
-            WhitelangExceptions.throw_type_error(node.pos, "Parent class '" + p_name + "' is not defined or is not a class.");
+            WhitelangExceptions.throw_name_error(node.pos, "Parent class '" + p_name + "' is not defined or is not a class.");
         }
         info.parent_id = parent_info.type_id;
     }
@@ -2864,6 +2919,26 @@ func compile_length_method(c -> Compiler, obj_node -> Struct, call_node -> CallN
 func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResult {
     check_out_index(c, node.target, node.index_node, node.pos);
     let target_res -> CompileResult = compile_node(c, node.target);
+
+    let s_info -> StructInfo = c.struct_id_map.get("" + target_res.type);
+    if (s_info is !null && s_info.is_class) {
+        let has_get -> Bool = false;
+        let v_len -> Int = 0; if (s_info.vtable is !null) { v_len = s_info.vtable.length(); }
+        let m_idx -> Int = 0;
+        while (m_idx < v_len) {
+            let m -> FuncInfo = s_info.vtable[m_idx];
+            if (m.base_name == "get") { has_get = true; break; }
+            m_idx += 1;
+        }
+
+        if has_get {
+            let fake_args -> Vector(Struct) = [];
+            fake_args.append(ArgNode(val=node.index_node, name=null));
+            let fake_call -> CallNode = CallNode(type=16, callee=null, args=fake_args, pos=node.pos);
+            return compile_class_method_call(c, s_info, target_res, "get", fake_call);
+        }
+    }
+
     let index_res -> CompileResult = compile_node(c, node.index_node);
     
     // idx type
@@ -2986,6 +3061,28 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
 func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResult {
     check_out_index(c, node.target, node.index_node, node.pos);
     let target_res -> CompileResult = compile_node(c, node.target);
+
+    let s_info -> StructInfo = c.struct_id_map.get("" + target_res.type);
+    if (s_info is !null && s_info.is_class) {
+        let has_put -> Bool = false;
+        let v_len -> Int = 0; if (s_info.vtable is !null) { v_len = s_info.vtable.length(); }
+        let m_idx -> Int = 0;
+        while (m_idx < v_len) {
+            let m -> FuncInfo = s_info.vtable[m_idx];
+            if (m.base_name == "put") { has_put = true; break; }
+            m_idx += 1;
+        }
+
+        if has_put {
+            let fake_args -> Vector(Struct) = [];
+            fake_args.append(ArgNode(val=node.index_node, name=null));
+            fake_args.append(ArgNode(val=node.value, name=null));
+            let fake_call -> CallNode = CallNode(type=16, callee=null, args=fake_args, pos=node.pos);
+            compile_class_method_call(c, s_info, target_res, "put", fake_call);
+            return void_result();
+        }
+    }
+
     let index_res -> CompileResult = compile_node(c, node.index_node);
     
     if (index_res.type != TYPE_INT) {
@@ -3470,6 +3567,11 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         else if (op_type == TOK_MOD) { 
             if (target_type == TYPE_BYTE) { op_code = "urem"; } else { op_code = "srem"; }
         }
+        else if (op_type == TOK_BIT_AND) { op_code = "and"; }
+        else if (op_type == TOK_BIT_OR) { op_code = "or"; }
+        else if (op_type == TOK_BIT_XOR) { op_code = "xor"; }
+        else if (op_type == TOK_LSHIFT) { op_code = "shl"; }
+        else if (op_type == TOK_RSHIFT) { op_code = "ashr"; }
     }
 
     if (op_type == TOK_DIV || op_type == TOK_MOD) {
@@ -3693,7 +3795,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
         let cmp_reg -> String = next_reg(c);
         let cond -> String = "eq";
-        if (base.type == 33) { cond = "ne"; } // NODE_IS_NOT
+        if (base.type == NODE_IS_NOT) { cond = "ne"; }
         
         c.output_file.write(c.indent + cmp_reg + " = icmp " + cond + " i8* " + l_reg + ", " + r_reg + "\n");
         return CompileResult(reg=cmp_reg, type=TYPE_BOOL);
@@ -4364,7 +4466,22 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             }
             c.output_file.write(c.indent + res_reg + " = xor i1 " + operand.reg + ", 1\n");
             return CompileResult(reg=res_reg, type=TYPE_BOOL);
-        } else {
+        } 
+        else if (op_type == TOK_BIT_NOT) {
+            if (operand.type == TYPE_INT) {
+                c.output_file.write(c.indent + res_reg + " = xor i32 " + operand.reg + ", -1\n");
+                return CompileResult(reg=res_reg, type=TYPE_INT);
+            } else if (operand.type == TYPE_LONG) {
+                c.output_file.write(c.indent + res_reg + " = xor i64 " + operand.reg + ", -1\n");
+                return CompileResult(reg=res_reg, type=TYPE_LONG);
+            } else if (operand.type == TYPE_BYTE) {
+                c.output_file.write(c.indent + res_reg + " = xor i8 " + operand.reg + ", -1\n");
+                return CompileResult(reg=res_reg, type=TYPE_BYTE);
+            } else {
+                WhitelangExceptions.throw_type_error(u.pos, "Operator '~' requires an integer type (Byte, Int, Long).");
+            }
+        }
+        else {
             return operand;
         }
     }

@@ -5,12 +5,12 @@
 
 extern "C" {
     func fopen(filename -> String, mode -> String) -> ptr Void;
-    func fclose(stream -> ptr Void) -> Int;
-    func fread(p -> String, size -> Long, count -> Long, stream -> ptr Void) -> Long;
-    func fwrite(p -> String, size -> Long, count -> Long, stream -> ptr Void) -> Long;
-    func fseek(stream -> ptr Void, offset -> Long, origin -> Int) -> Int;
-    func ftell(stream -> ptr Void) -> Long;
-    func rewind(stream -> ptr Void) -> Void;
+    func fclose(ptr stream -> Void) -> Int;
+    func fread(p -> String, size -> Long, count -> Long, ptr stream -> Void) -> Long;
+    func fwrite(p -> String, size -> Long, count -> Long, ptr stream -> Void) -> Long;
+    func fseek(ptr stream -> Void, offset -> Long, origin -> Int) -> Int;
+    func ftell(ptr stream -> Void) -> Long;
+    func rewind(ptr stream -> Void) -> Void;
     func remove(filename -> String) -> Int;
 
     func wl_alloc_string(size -> Long) -> String;

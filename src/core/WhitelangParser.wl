@@ -90,7 +90,7 @@ func String_to_Int(s -> String) -> Int {
     return res;
 }
 
-func parse_return_type(p -> Parser) -> Struct {
+func parse_type_base(p -> Parser) -> Struct {
     // Support 'ptr' in type position (e.g. -> ptr Int) for compatibility
     if (p.current_tok.type == TOK_PTR) {
         let start_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -108,7 +108,7 @@ func parse_return_type(p -> Parser) -> Struct {
             }
         }
 
-        let base -> Struct = parse_return_type(p);
+        let base -> Struct = parse_type_base(p);
         return PointerTypeNode(type=NODE_PTR_TYPE, base_type=base, level=level, pos=start_pos);
     }
 
@@ -196,39 +196,6 @@ func parse_return_type(p -> Parser) -> Struct {
             let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             type_node = VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
         }
-
-        let sizes -> Vector(Struct) = [];
-        while (p.current_tok.type == TOK_LBRACKET) {
-            parser_advance(p); // skip '['
-
-            if (p.current_tok.type != TOK_INT) {
-                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected integer literal for array size.");
-            }
-            sizes.append(p.current_tok);
-            parser_advance(p);
-            
-            if (p.current_tok.type != TOK_RBRACKET) {
-                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ']' after array size.");
-            }
-            parser_advance(p); // skip ']'
-        }
-
-        let s_len -> Int = 0;
-        if (sizes is !null) { s_len = sizes.length(); }
-        let s_i -> Int = s_len - 1;
-        while (s_i >= 0) {
-            let s_tok -> Token = sizes[s_i];
-            type_node = ArrayTypeNode(
-                type=NODE_ARRAY_TYPE, 
-                base_type=type_node, 
-                size_tok=s_tok, 
-                pos=start_pos
-            );
-            s_i -= 1;
-        }
-
         return type_node;
     }
     
@@ -237,14 +204,55 @@ func parse_return_type(p -> Parser) -> Struct {
     return null;
 }
 
+func parse_return_type(p -> Parser) -> Struct {
+    let type_node -> Struct = parse_type_base(p);
+    if (type_node is null) { return null; }
+
+    let start_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+    let sizes -> Vector(Struct) = [];
+
+    while (p.current_tok.type == TOK_LBRACKET) {
+        parser_advance(p); // skip '['
+
+        if (p.current_tok.type != TOK_INT) {
+            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected integer literal for array size.");
+        }
+        sizes.append(p.current_tok);
+        parser_advance(p);
+        
+        if (p.current_tok.type != TOK_RBRACKET) {
+            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ']' after array size.");
+        }
+        parser_advance(p); // skip ']'
+    }
+
+    let s_len -> Int = 0;
+    if (sizes is !null) { s_len = sizes.length(); }
+    let s_i -> Int = s_len - 1;
+    while (s_i >= 0) {
+        let s_tok -> Token = sizes[s_i];
+        type_node = ArrayTypeNode(
+            type=NODE_ARRAY_TYPE, 
+            base_type=type_node, 
+            size_tok=s_tok, 
+            pos=start_pos
+        );
+        s_i -= 1;
+    }
+
+    return type_node;
+}
+
 // parse "ptr(opt *N) name -> Type"
 func parse_typed_identifier_param(p -> Parser) -> Struct {
-    let is_ptr -> Int = 0;
+    let is_ptr -> Bool = false;
     let level -> Int = 0;
     let start_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
 
     if (p.current_tok.type == TOK_PTR) {
-        is_ptr = 1;
+        is_ptr = true;
         level = 1;
         parser_advance(p); // skip ptr
 
@@ -275,7 +283,13 @@ func parse_typed_identifier_param(p -> Parser) -> Struct {
 
     let type_node -> Struct = parse_return_type(p);
 
-    if (is_ptr == 1) {
+    let t_base -> BaseNode = type_node;
+    if (t_base.type == NODE_PTR_TYPE) {
+        let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=name_tok.line, col=name_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        WhitelangExceptions.throw_invalid_syntax(err_pos, "Syntax Error: Cannot use '-> ptr Type' for variable or parameter declarations. Use 'ptr " + name_tok.value + " -> Type' instead.");
+    }
+
+    if is_ptr {
         type_node = PointerTypeNode(type=NODE_PTR_TYPE, base_type=type_node, level=level, pos=start_pos);
     }
 
@@ -369,6 +383,43 @@ func atom(p -> Parser) -> Struct {
         }
         parser_advance(p);
         return node;
+    }
+
+    if (tok.type == TOK_LBRACE) {
+        parser_advance(p); // skip '{'
+        let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        
+        let pairs -> Vector(Struct) = [];
+
+        if (p.current_tok.type != TOK_RBRACE) {
+            while (true) {
+                let key_node -> Struct = expression(p);
+                
+                if (p.current_tok.type != TOK_COLON) {
+                    let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ':' after map key.");
+                }
+                parser_advance(p); // skip ':'
+                
+                let val_node -> Struct = expression(p);
+                
+                pairs.append(MapPairNode(key=key_node, value=val_node));
+                
+                if (p.current_tok.type == TOK_COMMA) {
+                    parser_advance(p); // skip ','
+                } else {
+                    break;
+                }
+            }
+        }
+        
+        if (p.current_tok.type != TOK_RBRACE) {
+            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '}' to close map literal.");
+        }
+        parser_advance(p); // skip '}'
+        
+        return MapLitNode(type=NODE_MAP_LIT, pairs=pairs, pos=pos);
     }
 
     if (tok.type == TOK_LBRACKET) {
@@ -533,8 +584,8 @@ func unary_expr(p -> Parser) -> Struct {
         return DerefNode(type=NODE_DEREF, node=node, level=level, pos=pos);
     }
     
-    // -5, +3.14, !b
-    if (tok.type == TOK_PLUS || tok.type == TOK_SUB || tok.type == TOK_NOT) {
+    // -5, +3.14, !b, ~c
+    if (tok.type == TOK_PLUS || tok.type == TOK_SUB || tok.type == TOK_NOT || tok.type == TOK_BIT_NOT) {
         parser_advance(p);
         let node -> Struct = unary_expr(p); // recursive
         let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -558,8 +609,20 @@ func power(p -> Parser) -> Struct {
     return left;
 }
 
-func comp_expr(p -> Parser) -> Struct {
+func shift_expr(p -> Parser) -> Struct {
     let left -> Struct = arith_expr(p);
+    while (p.current_tok.type == TOK_LSHIFT || p.current_tok.type == TOK_RSHIFT) {
+        let op_tok -> Token = p.current_tok;
+        parser_advance(p);
+        let right -> Struct = arith_expr(p);
+        let pos -> Position = WhitelangExceptions.Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
+    }
+    return left;
+}
+
+func comp_expr(p -> Parser) -> Struct {
+    let left -> Struct = shift_expr(p);
 
     while (p.current_tok.type == TOK_EE  || p.current_tok.type == TOK_NE  || 
            p.current_tok.type == TOK_LT  || p.current_tok.type == TOK_GT  ||
@@ -579,14 +642,14 @@ func comp_expr(p -> Parser) -> Struct {
                 node_type = NODE_IS;
             }
             
-            let right -> Struct = arith_expr(p);
+            let right -> Struct = shift_expr(p);
             let pos -> Position = WhitelangExceptions.Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             left = BinOpNode(type=node_type, left=left, op_tok=op_tok, right=right, pos=pos);
             
             // continue loop
         } else {
             parser_advance(p);
-            let right -> Struct = arith_expr(p);
+            let right -> Struct = shift_expr(p);
             let pos -> Position = WhitelangExceptions.Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
         }
@@ -594,13 +657,48 @@ func comp_expr(p -> Parser) -> Struct {
     return left;
 }
 
-func logic_and(p -> Parser) -> Struct {
+func bitwise_and(p -> Parser) -> Struct {
     let left -> Struct = comp_expr(p);
-
-    while (p.current_tok.type == TOK_AND) {
+    while (p.current_tok.type == TOK_BIT_AND) {
         let op_tok -> Token = p.current_tok;
         parser_advance(p);
         let right -> Struct = comp_expr(p);
+        let pos -> Position = WhitelangExceptions.Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
+    }
+    return left;
+}
+
+func bitwise_xor(p -> Parser) -> Struct {
+    let left -> Struct = bitwise_and(p);
+    while (p.current_tok.type == TOK_BIT_XOR) {
+        let op_tok -> Token = p.current_tok;
+        parser_advance(p);
+        let right -> Struct = bitwise_and(p);
+        let pos -> Position = WhitelangExceptions.Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
+    }
+    return left;
+}
+
+func bitwise_or(p -> Parser) -> Struct {
+    let left -> Struct = bitwise_xor(p);
+    while (p.current_tok.type == TOK_BIT_OR) {
+        let op_tok -> Token = p.current_tok;
+        parser_advance(p);
+        let right -> Struct = bitwise_xor(p);
+        let pos -> Position = WhitelangExceptions.Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
+    }
+    return left;
+}
+
+func logic_and(p -> Parser) -> Struct {
+    let left -> Struct = bitwise_or(p);
+    while (p.current_tok.type == TOK_AND) {
+        let op_tok -> Token = p.current_tok;
+        parser_advance(p);
+        let right -> Struct = bitwise_or(p);
         let pos -> Position = WhitelangExceptions.Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
         left = BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
     }
@@ -655,7 +753,9 @@ func assignment(p -> Parser) -> Struct {
     let op_type -> Int = p.current_tok.type;
     if (op_type == TOK_PLUS_ASSIGN || op_type == TOK_SUB_ASSIGN || 
         op_type == TOK_MUL_ASSIGN || op_type == TOK_DIV_ASSIGN || 
-        op_type == TOK_MOD_ASSIGN || op_type == TOK_POW_ASSIGN) {
+        op_type == TOK_MOD_ASSIGN || op_type == TOK_POW_ASSIGN ||
+        op_type == TOK_BIT_AND_ASSIGN || op_type == TOK_BIT_OR_ASSIGN || 
+        op_type == TOK_BIT_XOR_ASSIGN || op_type == TOK_LSHIFT_ASSIGN || op_type == TOK_RSHIFT_ASSIGN) {
         
         let op_tok -> Token = p.current_tok;
         parser_advance(p);
@@ -668,6 +768,11 @@ func assignment(p -> Parser) -> Struct {
         if (op_type == TOK_DIV_ASSIGN)  { bin_op_type = TOK_DIV; }
         if (op_type == TOK_MOD_ASSIGN)  { bin_op_type = TOK_MOD; }
         if (op_type == TOK_POW_ASSIGN)  { bin_op_type = TOK_POW; }
+        if (op_type == TOK_BIT_AND_ASSIGN) { bin_op_type = TOK_BIT_AND; }
+        if (op_type == TOK_BIT_OR_ASSIGN)  { bin_op_type = TOK_BIT_OR; }
+        if (op_type == TOK_BIT_XOR_ASSIGN) { bin_op_type = TOK_BIT_XOR; }
+        if (op_type == TOK_LSHIFT_ASSIGN)  { bin_op_type = TOK_LSHIFT; }
+        if (op_type == TOK_RSHIFT_ASSIGN)  { bin_op_type = TOK_RSHIFT; }
         
         let bin_tok -> Token = Token(type=bin_op_type, value="compound_op", line=op_tok.line, col=op_tok.col);
         let pos -> Position = WhitelangExceptions.Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);

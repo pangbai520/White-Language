@@ -87,6 +87,18 @@ const TOK_SUPER         -> Int = 72; // super
 
 const TOK_COLON         -> Int = 73; // :
 
+const TOK_BIT_AND       -> Int = 74; // &
+const TOK_BIT_OR        -> Int = 75; // |
+const TOK_BIT_XOR       -> Int = 76; // ^
+const TOK_BIT_NOT       -> Int = 77; // ~
+const TOK_LSHIFT        -> Int = 78; // <<
+const TOK_RSHIFT        -> Int = 79; // >>
+const TOK_BIT_AND_ASSIGN-> Int = 80; // &=
+const TOK_BIT_OR_ASSIGN -> Int = 81; // |=
+const TOK_BIT_XOR_ASSIGN-> Int = 82; // ^=
+const TOK_LSHIFT_ASSIGN -> Int = 83; // <<=
+const TOK_RSHIFT_ASSIGN -> Int = 84; // >>=
+
 
 func get_token_name(type -> Int) -> String {
     if (type == TOK_INT) { return "INT"; }
@@ -165,6 +177,18 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_SUPER)      { return "super"; }
 
     if (type == TOK_COLON)  { return ":"; }
+
+    if (type == TOK_BIT_AND) { return "&"; }
+    if (type == TOK_BIT_OR) { return "|"; }
+    if (type == TOK_BIT_XOR) { return "^"; }
+    if (type == TOK_BIT_NOT) { return "~"; }
+    if (type == TOK_LSHIFT) { return "<<"; }
+    if (type == TOK_RSHIFT) { return ">>"; }
+    if (type == TOK_BIT_AND_ASSIGN) { return "&="; }
+    if (type == TOK_BIT_OR_ASSIGN) { return "|="; }
+    if (type == TOK_BIT_XOR_ASSIGN) { return "^="; }
+    if (type == TOK_LSHIFT_ASSIGN) { return "<<="; }
+    if (type == TOK_RSHIFT_ASSIGN) { return ">>="; }
 
     return "EOF";
 }
