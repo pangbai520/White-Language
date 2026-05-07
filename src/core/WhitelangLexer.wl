@@ -354,6 +354,12 @@ func get_next_token(l -> Lexer) -> Token {
             return WhitelangTokens.Token(type=TOK_BIT_NOT, value="~", line=char_line, col=char_col);
         }
 
+        // @
+        if (char == 64) {
+            lexer_advance(l);
+            return WhitelangTokens.Token(type=TOK_AT, value="@", line=char_line, col=char_col);
+        }
+
         // Single char tokens
         if (char == 40) { lexer_advance(l);  return WhitelangTokens.Token(type=TOK_LPAREN,   value="(", line=char_line, col=char_col); }
         if (char == 41) { lexer_advance(l);  return WhitelangTokens.Token(type=TOK_RPAREN,   value=")", line=char_line, col=char_col); }

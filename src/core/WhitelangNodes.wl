@@ -49,6 +49,7 @@ const NODE_ARRAY_TYPE     -> Int = 45;
 const NODE_SLICE_TYPE     -> Int = 46;
 const NODE_SLICE_ACCESS   -> Int = 47;
 const NODE_MAP_LIT        -> Int = 48;
+const NODE_ANNOTATION     -> Int = 49; // @XXX
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -107,6 +108,7 @@ struct VarDeclareNode(
     value        -> Struct, 
     is_const     -> Bool, 
     alloc_reg    -> String, 
+    annotations  -> Vector(Struct),
     pos          -> Position    // Error position
 )
 
@@ -198,6 +200,7 @@ struct FunctionDefNode(
     params   -> Vector(Struct), // ParamListNode
     ret_type_tok -> Struct,
     body     -> Struct,
+    annotations -> Vector(Struct),
     pos      -> Position
 )
 
@@ -219,6 +222,7 @@ struct StructDefNode(
     name_tok -> Token,
     fields   -> Vector(Struct),
     body     -> Struct,
+    annotations -> Vector(Struct),
     pos      -> Position
 )
 
@@ -332,7 +336,8 @@ struct ClassDefNode(
     name_tok -> Token,
     parent_tok -> Token,
     fields -> Vector(Struct),
-    methods -> Vector(Struct)
+    methods -> Vector(Struct),
+    annotations -> Vector(Struct)
 )
 
 struct MethodDefNode(
@@ -342,7 +347,8 @@ struct MethodDefNode(
     params -> Vector(Struct),
     return_type -> Struct,
     body -> Struct,
-    is_override -> Bool
+    is_override -> Bool,
+    annotations -> Vector(Struct)
 )
 
 struct SuperNode(
@@ -385,4 +391,11 @@ struct MapLitNode(
     type  -> Int, // NODE_MAP_LIT
     pairs -> Vector(Struct), // MapPairNode
     pos   -> Position
+)
+
+struct AnnotationNode(
+    type -> Int, // NODE_ANNOTATION
+    name -> String,
+    args -> Vector(Struct),
+    pos  -> Position
 )

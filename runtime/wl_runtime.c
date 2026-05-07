@@ -15,6 +15,14 @@ int is_windows() {
     #endif
 }
 
+int is_macos() {
+    #ifdef __APPLE__
+        return 1;
+    #else
+        return 0;
+    #endif
+}
+
 char* to_wl_str(const char* c_str) {
     if (c_str == NULL) return NULL;
     int len = strlen(c_str);

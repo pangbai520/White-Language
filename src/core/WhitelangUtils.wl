@@ -74,15 +74,16 @@ struct FieldInfo(
     offset    -> Int   // for getelementptr
 )
 struct StructInfo(
-    name      -> String,
-    type_id   -> Int,
-    fields    -> Vector(Struct),
-    llvm_name -> String,
-    init_body -> Struct,
-    is_class  -> Bool,
+    name        -> String,
+    type_id     -> Int,
+    fields      -> Vector(Struct),
+    llvm_name   -> String,
+    init_body   -> Struct,
+    is_class    -> Bool,
     vtable_name -> String,
     parent_id   -> Int,
-    vtable      -> Vector(Struct)
+    vtable      -> Vector(Struct),
+    annotations -> Vector(Struct)
 )
 
 struct ArrayInfo(
@@ -130,7 +131,8 @@ struct Compiler(
     expected_type -> Int,
     type_drop_list -> Vector(Struct),
     global_buffer -> String,
-    string_pool -> Dict
+    string_pool -> Dict,
+    is_shared -> Bool
 )
 
 
@@ -142,7 +144,7 @@ struct LoopScope(
 
 
 // compiler init & state utils
-func new_compiler(out_path -> String) -> Compiler {
+func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
     let f -> File = File(out_path, "w");
     // initialize empty scope
     let root_scope -> Scope = Scope(table=Dict(32), parent=null, gc_vars=[]);
@@ -180,7 +182,8 @@ func new_compiler(out_path -> String) -> Compiler {
         global_buffer = "",
         string_pool = Dict(128),
         array_info_map = Dict(32),
-        array_type_cache = Dict(32)
+        array_type_cache = Dict(32),
+        is_shared = is_shared
     );
 
     comp.type_drop_list.append(TypeListNode(type=TYPE_GENERIC_FUNCTION));
@@ -681,6 +684,55 @@ func get_func_sig_str(c -> Compiler, info -> FuncInfo) -> String {
     }
     
     return ret_str + " (" + args_str + ")*";
+}
+
+func has_attribute_annotation(anns -> Vector(Struct)) -> Bool {
+    if (anns is null) { return false; }
+    let len -> Int = anns.length();
+    let i -> Int = 0;
+    while (i < len) {
+        let a -> AnnotationNode = anns[i];
+        if (a.name == "Attribute") { return true; }
+        i += 1;
+    }
+    return false;
+}
+
+func analyze_annotations(c -> Compiler, anns -> Vector(Struct)) -> Dict {
+    let res -> Dict = Dict(16);
+    if (anns is null) { return res; }
+    
+    let len -> Int = anns.length();
+    let i -> Int = 0;
+    while (i < len) {
+        let ann_node -> AnnotationNode = anns[i];
+        let name -> String = ann_node.name;
+
+        if (name == "Attribute" || name == "ExportLib") {
+            res.put(name, ann_node);
+            i += 1;
+            continue;
+        }
+
+        let target_struct -> StructInfo = c.struct_table.get(name);
+        if (target_struct is null && c.current_package_prefix != "") {
+            target_struct = c.struct_table.get(c.current_package_prefix + name);
+        }
+
+        if (target_struct is null) {
+            WhitelangExceptions.throw_name_error(ann_node.pos, "Cannot find attribute '" + name + "'. Please define or import it first.");
+            return res;
+        }
+
+        if (target_struct.annotations is null || !has_attribute_annotation(target_struct.annotations)) {
+            WhitelangExceptions.throw_type_error(ann_node.pos, "Struct '" + name + "' is not a valid attribute. Missing @Attribute annotation.");
+            return res;
+        }
+        
+        res.put(name, ann_node);
+        i += 1;
+    }
+    return res;
 }
 
 

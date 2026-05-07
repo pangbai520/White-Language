@@ -188,6 +188,30 @@ class Dict {
         }
     }
 
+    method contains_key(key -> String) -> Bool {
+        if (self.size == 0) { return false; }
+
+        let hash -> Int = hash_string(key);
+        let mask -> Int = self.capacity - 1;
+        let idx  -> Int = hash & mask;
+
+        while true {
+            let curr_h -> Int = self.hashes[idx];
+            if (curr_h == 0) { 
+                return false; 
+            }
+
+            if (curr_h == hash) {
+                if (self.keys[idx] == key) {
+                    return true;
+                }
+            }
+
+            idx = (idx + 1) & mask;
+        }
+        return false;
+    }
+
     deinit() {
         // standard cleanup to avoid leaking memory
         if (self.keys is !nullptr) {

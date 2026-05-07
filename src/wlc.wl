@@ -15,6 +15,7 @@ import "core/WhitelangUtils.wl"
 extern func get_arg(ptr argv -> String, idx -> Int) -> String from "C";
 extern func system_call(cmd -> String) -> Int from "C";
 extern func is_windows() -> Int from "C";
+extern func is_macos() -> Int from "C";
 extern func wl_getenv(name -> String) -> String from "C";
 
 const EMIT_EXE  -> Int = 0;
@@ -36,7 +37,8 @@ struct CompilerConfig(
     verbose         -> Bool,
     dump_ast        -> Bool,
     dump_ir         -> Bool,
-    keep_temps      -> Bool
+    keep_temps      -> Bool,
+    is_shared       -> Bool
 )
 
 func print_usage() -> Void {
@@ -59,6 +61,7 @@ func print_usage() -> Void {
     builtin.print("  --dump-ast             Dump Abstract Syntax Tree to stdout");
     builtin.print("  --dump-ir              Dump LLVM IR to stdout");
     builtin.print("  --keep-temps           Do not delete intermediate LLVM IR files");
+    builtin.print("  --shared               Build a shared library (dll, so, dylib)");
     builtin.print("  -h, --help             Display this information");
 }
 
@@ -96,7 +99,8 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         verbose         = false,
         dump_ast        = false,
         dump_ir         = false,
-        keep_temps      = false
+        keep_temps      = false,
+        is_shared       = false
     );
 
     let i -> Int = 1;
@@ -113,6 +117,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         else if (arg == "--keep-temps") { cfg.keep_temps = true; }
         else if (arg == "-c") { cfg.is_compile_only = true; }
         else if (arg == "-S") { cfg.is_asm_only = true; }
+        else if (arg == "--shared") { cfg.is_shared = true; }
         else if (arg == "--emit-llvm") { cfg.is_emit_llvm = true; }
         else if (arg == "-g") { cfg.debug_info = true; }
         else if (arg == "-O0") { cfg.opt_level = "-O0"; }
@@ -199,6 +204,15 @@ func main(argc -> Int, ptr argv -> String) -> Int {
                 else { cfg.output_file = base_name + ".o"; }
             }
         }
+        else if (cfg.is_shared) {
+            if (is_windows() == 1) { 
+                cfg.output_file = base_name + ".dll"; 
+            } else if (is_macos() == 1) { 
+                cfg.output_file = "lib" + base_name + ".dylib";
+            } else { 
+                cfg.output_file = "lib" + base_name + ".so"; 
+            }
+        }
         else { // EXE
             if (is_windows() == 1) { cfg.output_file = base_name + ".exe"; }
             else { cfg.output_file = base_name; }
@@ -222,7 +236,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
 
     if (cfg.dump_ast) { builtin.print("[Debug] AST Dumped"); }
 
-    let compiler -> Compiler = new_compiler(ll_file);
+    let compiler -> Compiler = new_compiler(ll_file, cfg.is_shared);
     compiler.current_dir = get_dir_name(cfg.source_file);
     compile(compiler, ast);
 
@@ -307,6 +321,15 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         cmd += " -o \"" + cfg.output_file + "\"";
     }
     else {
+        if (cfg.is_shared) {
+            if (is_macos() == 1) {
+                cmd += " -dynamiclib";
+            } else {
+                cmd += " -shared";
+            }
+            if (is_windows() == 0) { cmd += " -fPIC"; }
+        }
+
         let wl_path -> String = wl_getenv("WL_PATH");
         if (wl_path is !null) {
             if (is_windows() == 1) {

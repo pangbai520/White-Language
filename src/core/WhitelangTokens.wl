@@ -99,6 +99,8 @@ const TOK_BIT_XOR_ASSIGN-> Int = 82; // ^=
 const TOK_LSHIFT_ASSIGN -> Int = 83; // <<=
 const TOK_RSHIFT_ASSIGN -> Int = 84; // >>=
 
+const TOK_AT            -> Int = 85; // @
+
 
 func get_token_name(type -> Int) -> String {
     if (type == TOK_INT) { return "INT"; }
@@ -189,6 +191,8 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_BIT_XOR_ASSIGN) { return "^="; }
     if (type == TOK_LSHIFT_ASSIGN) { return "<<="; }
     if (type == TOK_RSHIFT_ASSIGN) { return ">>="; }
+
+    if (type == TOK_AT) { return "@"; }
 
     return "EOF";
 }

@@ -31,21 +31,59 @@ func synchronize(p -> Parser) -> Void {
     }
 }
 
+func parse_annotations(p -> Parser) -> Vector(Struct) {
+    let anns -> Vector(Struct) = [];
+    while (p.current_tok.type == TOK_AT) {
+        let start_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        parser_advance(p); // skip '@'
+        
+        if (p.current_tok.type != TOK_IDENTIFIER) {
+            WhitelangExceptions.throw_invalid_syntax(start_pos, "Expected identifier after '@'.");
+        }
+        let name -> String = p.current_tok.value;
+        parser_advance(p); // skip identifier
+        
+        let args -> Vector(Struct) = [];
+        if (p.current_tok.type == TOK_LPAREN) {
+            parser_advance(p); // skip '('
+            args = parse_args(p);
+            if (p.current_tok.type != TOK_RPAREN) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ')' after annotation arguments.");
+            }
+            parser_advance(p); // skip ')'
+        }
+        
+        anns.append(AnnotationNode(type=NODE_ANNOTATION, name=name, args=args, pos=start_pos));
+    }
+    return anns;
+}
+
 func parse(p -> Parser) -> Struct {
     let stmts -> Vector(Struct) = [];
-    
+
     while (p.current_tok.type != TOK_EOF) {
         let stmt -> Struct = null;
+
+        let anns -> Vector(Struct) = [];
+        if (p.current_tok.type == TOK_AT) {
+            anns = parse_annotations(p);
+        }
+
         if (p.current_tok.type == TOK_FUNC) {
-            stmt = func_def(p);
+            stmt = func_def(p, anns);
         } else if (p.current_tok.type == TOK_STRUCT) {
-            stmt = parse_struct_def(p);
+            stmt = parse_struct_def(p, anns);
         } else if (p.current_tok.type == TOK_CLASS) {
-            stmt = parse_class_def(p);
+            stmt = parse_class_def(p, anns);
         } else if (p.current_tok.type == TOK_IMPORT) { 
+            if (anns.length() > 0) { 
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Annotations not allowed on imports."); 
+            }
             stmt = parse_import(p);
         } else if (p.current_tok.type == TOK_LET || p.current_tok.type == TOK_CONST) {
-            stmt = var_decl(p);
+            stmt = var_decl(p, anns);
             if (p.current_tok.type == TOK_SEMICOLON) {
                 parser_advance(p);
             } else {
@@ -53,6 +91,10 @@ func parse(p -> Parser) -> Struct {
                 WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ';' after global variable declaration.");
             }
         } else if (p.current_tok.type == TOK_EXTERN) {
+            if (anns.length() > 0) { 
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Annotations not allowed on extern block."); 
+            }
             stmt = parse_extern(p);
         } else {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -867,7 +909,7 @@ func arith_expr(p -> Parser) -> Struct {
     return left;
 }
 
-func var_decl_core(p -> Parser, is_const -> Bool) -> Struct {
+func var_decl_core(p -> Parser, is_const -> Bool, anns -> Vector(Struct)) -> Struct {
     let start_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
 
     let tid -> TypedIdent = parse_typed_identifier_param(p);
@@ -878,16 +920,16 @@ func var_decl_core(p -> Parser, is_const -> Bool) -> Struct {
         val_node = expression(p);
     }
     
-    return VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=val_node, is_const=is_const, alloc_reg = "", pos=start_pos);
+    return VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=val_node, is_const=is_const, alloc_reg = "", annotations=anns, pos=start_pos);
 }
 
-func var_decl(p -> Parser) -> Struct {
+func var_decl(p -> Parser, anns -> Vector(Struct)) -> Struct {
     let is_const -> Bool = false;
     if (p.current_tok.type == TOK_CONST) {
         is_const = true;
     }
     parser_advance(p); // skip 'let' or 'const'
-    return var_decl_core(p, is_const);
+    return var_decl_core(p, is_const, anns);
 }
 
 func parse_block(p -> Parser) -> Struct {
@@ -990,9 +1032,9 @@ func for_stmt(p -> Parser) -> Struct {
         init = null;
     } else {
         if (p.current_tok.type == TOK_LET) {
-            init = var_decl(p);
+            init = var_decl(p, []);
         } else if ((p.current_tok.type == TOK_IDENTIFIER && peek_type(p) == TOK_TYPE_ARROW) || (p.current_tok.type == TOK_PTR)) {
-            init = var_decl_core(p, false); 
+            init = var_decl_core(p, false, []);
         } else {
             init = expression(p);    // i = 0
         }
@@ -1032,15 +1074,29 @@ func for_stmt(p -> Parser) -> Struct {
 }
 
 func statement(p -> Parser) -> Struct {
-    if (p.current_tok.type == TOK_LET || p.current_tok.type == TOK_CONST) { return var_decl(p); }
+    let anns -> Vector(Struct) = [];
+    if (p.current_tok.type == TOK_AT) {
+        anns = parse_annotations(p);
+    }
+
+    if (p.current_tok.type == TOK_LET || p.current_tok.type == TOK_CONST) { 
+        return var_decl(p, anns); 
+    }
+    if (p.current_tok.type == TOK_FUNC) { 
+        return func_def(p, anns); 
+    }
+
+    if (anns.length() > 0) {
+        let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        WhitelangExceptions.throw_invalid_syntax(err_pos, "Annotations are only allowed on declarations (func, let, const, etc.).");
+    }
+
     if (p.current_tok.type == TOK_IF)  { return if_stmt(p); }
     if (p.current_tok.type == TOK_WHILE) { return while_stmt(p); }
     if (p.current_tok.type == TOK_LBRACE) { return parse_block(p); }
     if (p.current_tok.type == TOK_BREAK) { return break_stmt(p); }
     if (p.current_tok.type == TOK_CONTINUE) { return continue_stmt(p); }
     if (p.current_tok.type == TOK_FOR) { return for_stmt(p); }
-    if (p.current_tok.type == TOK_FUNC) { return func_def(p); }
-
     if (p.current_tok.type == TOK_RETURN) { return return_stmt(p); }
 
     return expression(p);
@@ -1072,7 +1128,7 @@ func parse_params(p -> Parser) -> Vector(Struct) {
     return params;
 }
 
-func func_def(p -> Parser) -> Struct {
+func func_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
     let func_tok -> Token = p.current_tok;
     parser_advance(p); // skip 'func'
     
@@ -1109,7 +1165,7 @@ func func_def(p -> Parser) -> Struct {
     let body -> Struct = parse_block(p);
     
     let pos -> Position = WhitelangExceptions.Position(idx=0, ln=func_tok.line, col=func_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-    return FunctionDefNode(type=NODE_FUNC_DEF, name_tok=name_tok, params=params, ret_type_tok=ret_type_node, body=body, pos=pos);
+    return FunctionDefNode(type=NODE_FUNC_DEF, name_tok=name_tok, params=params, ret_type_tok=ret_type_node, body=body, annotations=anns, pos=pos);
 }
 
 func return_stmt(p -> Parser) -> Struct {
@@ -1125,7 +1181,7 @@ func return_stmt(p -> Parser) -> Struct {
     return ReturnNode(type=NODE_RETURN, value=val, pos=pos);
 }
 
-func parse_struct_def(p -> Parser) -> Struct {
+func parse_struct_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
     let start_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
 
     parser_advance(p); // skip 'struct'
@@ -1155,7 +1211,7 @@ func parse_struct_def(p -> Parser) -> Struct {
     if (p.current_tok.type == TOK_LBRACE) {
         body = parse_block(p); // initialization
     }
-    return StructDefNode(type=NODE_STRUCT_DEF, name_tok=name_tok, fields=fields, body=body, pos=start_pos);
+    return StructDefNode(type=NODE_STRUCT_DEF, name_tok=name_tok, fields=fields, body=body, annotations=anns, pos=start_pos);
 }
 
 func parse_extern_func(p -> Parser) -> Struct {
@@ -1385,7 +1441,7 @@ func parse_import(p -> Parser) -> Struct {
     return ImportNode(type=NODE_IMPORT, path_tok=path_tok, symbols=symbols, alias_tok=alias_tok, pos=start_pos);
 }
 
-func parse_class_def(p -> Parser) -> Struct {
+func parse_class_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
     let pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
     parser_advance(p); // skip 'class'
 
@@ -1422,6 +1478,11 @@ func parse_class_def(p -> Parser) -> Struct {
     let methods -> Vector(Struct) = [];
 
     while (p.current_tok.type != TOK_RBRACE && p.current_tok.type != TOK_EOF) {
+        let member_anns -> Vector(Struct) = [];
+        if (p.current_tok.type == TOK_AT) {
+            member_anns = parse_annotations(p);
+        }
+
         if (p.current_tok.type == TOK_LET) {
             let f_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             parser_advance(p); // skip 'let'
@@ -1442,7 +1503,7 @@ func parse_class_def(p -> Parser) -> Struct {
             }
             parser_advance(p); // skip ';'
 
-            fields.append(VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=default_val, is_const=false, alloc_reg="", pos=f_pos));
+            fields.append(VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=default_val, is_const=false, alloc_reg="", annotations=member_anns, pos=f_pos));
             
         } else if (p.current_tok.type == TOK_METHOD) {
             let m_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -1474,7 +1535,7 @@ func parse_class_def(p -> Parser) -> Struct {
 
             let body -> Struct = parse_block(p); 
             
-            methods.append(MethodDefNode(type=NODE_METHOD_DEF, pos=m_pos, name_tok=m_name, params=params, return_type=ret_type, body=body, is_override=false));
+            methods.append(MethodDefNode(type=NODE_METHOD_DEF, pos=m_pos, name_tok=m_name, params=params, return_type=ret_type, body=body, is_override=false, annotations=member_anns));
 
         } else if (p.current_tok.type == TOK_IDENTIFIER && p.current_tok.value == "init") {
             let init_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -1505,7 +1566,7 @@ func parse_class_def(p -> Parser) -> Struct {
 
             let body -> Struct = parse_block(p); 
             
-            methods.append(MethodDefNode(type=NODE_METHOD_DEF, pos=init_pos, name_tok=init_name_tok, params=params, return_type=ret_type, body=body, is_override=false));
+            methods.append(MethodDefNode(type=NODE_METHOD_DEF, pos=init_pos, name_tok=init_name_tok, params=params, return_type=ret_type, body=body, is_override=false, annotations=member_anns));
 
         } else if (p.current_tok.type == TOK_IDENTIFIER && p.current_tok.value == "deinit") {
             let deinit_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -1535,7 +1596,7 @@ func parse_class_def(p -> Parser) -> Struct {
             }
 
             let body -> Struct = parse_block(p); 
-            methods.append(MethodDefNode(type=NODE_METHOD_DEF, pos=deinit_pos, name_tok=deinit_name_tok, params=params, return_type=ret_type, body=body, is_override=false));
+            methods.append(MethodDefNode(type=NODE_METHOD_DEF, pos=deinit_pos, name_tok=deinit_name_tok, params=params, return_type=ret_type, body=body, is_override=false, annotations=member_anns));
 
         } else {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -1549,5 +1610,5 @@ func parse_class_def(p -> Parser) -> Struct {
     }
     parser_advance(p); // skip '}'
 
-    return ClassDefNode(type=NODE_CLASS_DEF, pos=pos, name_tok=name_tok, parent_tok=parent_tok, fields=fields, methods=methods);
+    return ClassDefNode(type=NODE_CLASS_DEF, pos=pos, name_tok=name_tok, parent_tok=parent_tok, fields=fields, methods=methods, annotations=anns);
 }

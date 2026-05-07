@@ -500,7 +500,8 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 init_body=n.body, is_class=false, 
                 vtable_name="", 
                 parent_id=0, 
-                vtable=null
+                vtable=null,
+                annotations=n.annotations
             );
             c.struct_table.put(s_name, info);
             c.struct_id_map.put("" + new_id, info);
@@ -519,7 +520,8 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 is_class=true, 
                 vtable_name="@vtable." + c_name, 
                 parent_id=0, 
-                vtable=null
+                vtable=null,
+                annotations=c_node.annotations
             );
             c.struct_table.put(c_name, info);
             c.struct_id_map.put("" + new_id, info);
@@ -1331,6 +1333,8 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
     let var_name -> String = node.name_tok.value;
 
     if (c.scope_depth == 0) {
+        let active_anns -> Dict = analyze_annotations(c, node.annotations);
+
         let global_name -> String = "@" + var_name;
         let init_val_str -> String = "0";
         if (target_type_id == TYPE_STRING || target_type_id >= 100 || target_type_id == TYPE_GENERIC_STRUCT || target_type_id == TYPE_GENERIC_CLASS || target_type_id == TYPE_GENERIC_FUNCTION || target_type_id == TYPE_GENERIC_METHOD) { init_val_str = "null";}
@@ -1378,8 +1382,17 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 return void_result();
             }
         }
-        
-        c.output_file.write(global_name + " = global " + llvm_ty_str + " " + init_val_str + "\n");
+
+        let linkage -> String = "";
+        if (c.is_shared && is_windows() == 1) {
+            if (active_anns.get("ExportLib") is !null) {
+                linkage = "dllexport ";
+            } else {
+                linkage = "hidden ";
+            }
+        }
+
+        c.output_file.write(global_name + " = " + linkage + "global " + llvm_ty_str + " " + init_val_str + "\n");
         c.global_symbol_table.put(var_name, SymbolInfo(reg=global_name, type=target_type_id, origin_type=target_type_id, is_const=node.is_const));
         return void_result();
     }
@@ -1687,6 +1700,8 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
 
     c.current_ret_type = ret_type_id;
 
+    let active_anns -> Dict = analyze_annotations(c, node.annotations);
+
     let params_str -> String = "";
     let params -> Vector(Struct) = node.params;
     let p_len -> Int = 0;
@@ -1702,7 +1717,18 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         arg_idx += 1;
     }
 
-    c.output_file.write("define " + llvm_ret_type + " @" + func_name + "(" + params_str + ") {\n");
+    let linkage -> String = "";
+    if (c.is_shared) {
+        if (active_anns.get("ExportLib") is !null) {
+            if (is_windows() == 1) {
+                linkage = "dllexport ";
+            }
+        } else {
+            linkage = "hidden ";
+        }
+    }
+
+    c.output_file.write("define " + linkage + llvm_ret_type + " @" + func_name + "(" + params_str + ") {\n");
     c.output_file.write("entry:\n");
 
     let old_sym -> Scope = c.symbol_table;
@@ -2214,6 +2240,8 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
 func compile_struct_def(c -> Compiler, node -> StructDefNode) -> CompileResult {
     let struct_name -> String = node.name_tok.value;
 
+    analyze_annotations(c, node.annotations);
+
     // for dict.wl
     if (struct_name == "_Variant") {
         let v_info -> StructInfo = c.struct_table.get("_Variant");
@@ -2411,6 +2439,9 @@ func compile_class_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode)
 func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
     let class_name -> String = node.name_tok.value;
     let full_name -> String = "class." + class_name;
+
+    analyze_annotations(c, node.annotations);
+
     if (c.struct_table.get(full_name) is !null) {
         WhitelangExceptions.throw_import_error(node.pos, "Class '" + class_name + "' is already defined.");
         return void_result();
@@ -5260,7 +5291,12 @@ func compile_start(c -> Compiler) -> Void {
         type_id=variant_id, 
         fields=v_fields, 
         llvm_name="%struct.$Variant", 
-        init_body=null, is_class=false, vtable_name="", parent_id=0, vtable=null
+        init_body=null, 
+        is_class=false, 
+        vtable_name="", 
+        parent_id=0, 
+        vtable=null, 
+        annotations=null
     );
     c.struct_table.put("$Variant", variant_info);
     c.struct_id_map.put("" + variant_id, variant_info);
@@ -5281,7 +5317,7 @@ func compile(c -> Compiler, node -> Struct) -> Void {
 }
 
 func compile_end(c -> Compiler) -> Void {
-    if (!c.has_main) {
+    if (!c.has_main && !c.is_shared) {
         WhitelangExceptions.throw_missing_main_function();
         return;
     }
