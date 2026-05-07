@@ -686,6 +686,37 @@ func get_func_sig_str(c -> Compiler, info -> FuncInfo) -> String {
     return ret_str + " (" + args_str + ")*";
 }
 
+func mangle_wl_name(prefix -> String, base_name -> String, arg_types -> Vector(Struct)) -> String {
+    if (base_name == "main" && prefix == "") { return "main"; }
+    
+    let mangled -> String = "_WL";
+
+    if (prefix != "") {
+        let clean_prefix -> String = prefix.slice(0, prefix.length() - 1);
+        mangled += "" + clean_prefix.length() + clean_prefix;
+    }
+
+    mangled += "" + base_name.length() + base_name;
+
+    let len -> Int = 0; if (arg_types is !null) { len = arg_types.length(); }
+    if (len == 0) { return mangled + "v"; }
+    
+    let i -> Int = 0;
+    while (i < len) {
+        let t_node -> TypeListNode = arg_types[i];
+        let t_id -> Int = t_node.type;
+        if (t_id == TYPE_INT) { mangled += "i"; }
+        else if (t_id == TYPE_FLOAT) { mangled += "d"; }
+        else if (t_id == TYPE_BOOL) { mangled += "b"; }
+        else if (t_id == TYPE_BYTE) { mangled += "c"; }
+        else if (t_id == TYPE_LONG) { mangled += "l"; }
+        else if (t_id == TYPE_STRING) { mangled += "s"; }
+        else { mangled += "P"; } // Pointer/Struct/Class
+        i += 1;
+    }
+    return mangled;
+}
+
 func has_attribute_annotation(anns -> Vector(Struct)) -> Bool {
     if (anns is null) { return false; }
     let len -> Int = anns.length();

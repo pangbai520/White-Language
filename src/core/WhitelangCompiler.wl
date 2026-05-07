@@ -541,15 +541,6 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
         if (base.type == NODE_FUNC_DEF) {
             let f_node -> FunctionDefNode = stmts[i];
             let raw_name -> String = f_node.name_tok.value;
-            let func_name -> String = raw_name;
-            if (raw_name != "main") {
-                func_name = c.current_package_prefix + raw_name;
-            }
-            
-            if (c.func_table.get(func_name) is !null) {
-                WhitelangExceptions.throw_import_error(f_node.pos, "Function '" + func_name + "' is already defined.");
-                return;
-            }
             
             let ret_type_id -> Int = resolve_type(c, f_node.ret_type_tok);
             let arg_types -> Vector(Struct) = [];
@@ -564,9 +555,27 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                 arg_types.append(TypeListNode(type=p_id));
                 p_idx += 1;
             }
-            
-            let f_info -> FuncInfo = FuncInfo(name=func_name, base_name=raw_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=false);
-            c.func_table.put(func_name, f_info);
+
+            let active_anns -> Dict = analyze_annotations(c, f_node.annotations);
+            let func_key -> String = raw_name;
+            if (raw_name != "main") {
+                func_key = c.current_package_prefix + raw_name;
+            }
+
+            let llvm_func_name -> String = func_key;
+            if (active_anns.get("ExportLib") is !null || raw_name == "main") {
+                llvm_func_name = raw_name;
+            } else {
+                llvm_func_name = mangle_wl_name(c.current_package_prefix, raw_name, arg_types);
+            }
+
+            if (c.func_table.get(func_key) is !null) {
+                WhitelangExceptions.throw_name_error(f_node.pos, "Function '" + func_key + "' is already defined.");
+                return;
+            }
+
+            let f_info -> FuncInfo = FuncInfo(name=llvm_func_name, base_name=raw_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=false);
+            c.func_table.put(func_key, f_info);
 
         } else if (base.type == NODE_CLASS_DEF) {
             let c_node -> ClassDefNode = stmts[i];
@@ -581,12 +590,6 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
             while (m_idx < m_len) {
                 let m_node -> MethodDefNode = m_vec[m_idx];
                 let m_raw_name -> String = m_node.name_tok.value;
-                let m_name -> String = c.current_package_prefix + c_name + "_" + m_raw_name; 
-                
-                if (c.func_table.get(m_name) is !null) {
-                    WhitelangExceptions.throw_import_error(m_node.pos, "Method '" + m_name + "' is already defined.");
-                    return;
-                }
 
                 let ret_id -> Int = resolve_type(c, m_node.return_type);
                 let arg_types -> Vector(Struct) = [];
@@ -602,9 +605,17 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                     arg_types.append(TypeListNode(type=p_type));
                     p_idx += 1;
                 }
+
+                let m_key -> String = c.current_package_prefix + c_name + "_" + m_raw_name;
+                let m_llvm_name -> String = mangle_wl_name(c.current_package_prefix + c_name + ".", m_raw_name, arg_types);
                 
-                let f_info -> FuncInfo = FuncInfo(name=m_name, base_name=m_raw_name, ret_type=ret_id, arg_types=arg_types, is_varargs=false);
-                c.func_table.put(m_name, f_info);
+                if (c.func_table.get(m_key) is !null) {
+                    WhitelangExceptions.throw_name_error(m_node.pos, "Method '" + m_key + "' is already defined.");
+                    return;
+                }
+
+                let f_info -> FuncInfo = FuncInfo(name=m_llvm_name, base_name=m_raw_name, ret_type=ret_id, arg_types=arg_types, is_varargs=false);
+                c.func_table.put(m_key, f_info);
                 m_idx += 1;
             }
         }
@@ -1728,7 +1739,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         }
     }
 
-    c.output_file.write("define " + linkage + llvm_ret_type + " @" + func_name + "(" + params_str + ") {\n");
+    c.output_file.write("define " + linkage + llvm_ret_type + " @" + f_info.name + "(" + params_str + ") {\n");
     c.output_file.write("entry:\n");
 
     let old_sym -> Scope = c.symbol_table;
@@ -1826,7 +1837,7 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
         arg_idx += 1;
     }
 
-    c.output_file.write("define " + llvm_ret_type + " @" + m_name + "(" + params_str + ") {\n");
+    c.output_file.write("define " + llvm_ret_type + " @" + f_info.name + "(" + params_str + ") {\n");
     c.output_file.write("entry:\n");
 
     let old_sym -> Scope = c.symbol_table;
@@ -2423,7 +2434,7 @@ func compile_class_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode)
             arg_idx += 1;
         }
 
-        c.output_file.write(c.indent + "call void @" + init_name + "(" + args_str + ")\n");
+        c.output_file.write(c.indent + "call void @" + init_func.name + "(" + args_str + ")\n");
     } else {
         let args -> Vector(Struct) = n_call.args;
         let a_len -> Int = 0; if (args is !null) { a_len = args.length(); }
@@ -3441,7 +3452,7 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
     if (target_res.type == TYPE_STRING) {
         let is_magic_func -> Bool = false;
         if (c.curr_func is !null) {
-            if (c.curr_func.name == "builtin.string_slice") {
+            if (c.curr_func.base_name == "string_slice") {
                 is_magic_func = true;
             }
         }
@@ -3511,7 +3522,12 @@ func compile_slice_access(c -> Compiler, node -> SliceAccessNode) -> CompileResu
     
     if (target_res.type == TYPE_STRING) {
         let call_reg -> String = next_reg(c);
-        c.output_file.write(c.indent + call_reg + " = call i8* @builtin.string_slice(i8* " + target_res.reg + ", i32 " + start_res.reg + ", i32 " + end_res.reg + ")\n");
+
+        let slice_info -> FuncInfo = c.func_table.get("builtin.string_slice");
+        let slice_llvm -> String = "builtin.string_slice";
+        if (slice_info is !null) { slice_llvm = slice_info.name; }
+        
+        c.output_file.write(c.indent + call_reg + " = call i8* @" + slice_llvm + "(i8* " + target_res.reg + ", i32 " + start_res.reg + ", i32 " + end_res.reg + ")\n");
         return CompileResult(reg=call_reg, type=TYPE_STRING, origin_type=0);
     }
 
@@ -4007,7 +4023,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             if (f_info is !null) {
                 let specific_type_id -> Int = get_func_type_id(c, f_info.ret_type);
                 let sig -> String = get_func_sig_str(c, f_info);
-                let func_ptr -> String = "@" + name;
+                let func_ptr -> String = "@" + f_info.name;
                 
                 let cast_reg -> String = next_reg(c);
                 c.output_file.write(c.indent + cast_reg + " = bitcast " + sig + " " + func_ptr + " to i8*\n");
@@ -4159,7 +4175,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             if (f_info is !null) {
                 let specific_type_id -> Int = get_func_type_id(c, f_info.ret_type);
                 let sig -> String = get_func_sig_str(c, f_info);
-                let func_ptr -> String = "@" + var_name;
+                let func_ptr -> String = "@" + f_info.name;
                 
                 let cast_reg -> String = next_reg(c);
                 c.output_file.write(c.indent + cast_reg + " = bitcast " + sig + " " + func_ptr + " to i8*\n");
@@ -4293,11 +4309,11 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
                 let llvm_ret_type -> String = get_llvm_type_str(c, f_info.ret_type);
                 if (f_info.ret_type == TYPE_VOID) {
-                    c.output_file.write(c.indent + "call " + llvm_ret_type + " @" + full_m_name + "(" + args_str + ")\n");
+                    c.output_file.write(c.indent + "call " + llvm_ret_type + " @" + f_info.name + "(" + args_str + ")\n");
                     return CompileResult(reg="", type=TYPE_VOID, origin_type=0);
                 } else {
                     let call_res -> String = next_reg(c);
-                    c.output_file.write(c.indent + call_res + " = call " + llvm_ret_type + " @" + full_m_name + "(" + args_str + ")\n");
+                    c.output_file.write(c.indent + call_res + " = call " + llvm_ret_type + " @" + f_info.name + "(" + args_str + ")\n");
                     return CompileResult(reg=call_res, type=f_info.ret_type, origin_type=0);
                 }
             }
@@ -4377,11 +4393,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         }
 
         if is_direct {
-            let target_func_name -> String = func_name;
-            let check_built -> FuncInfo = c.func_table.get(func_name);
-            if (check_built is !null) { target_func_name = check_built.name; }
-
-            if (target_func_name == "builtin.print") {
+            if (func_name == "builtin.print") {
                 let args -> Vector(Struct) = n_call.args;
                 let a_len -> Int = 0;
                 if (args is !null) { a_len = args.length(); }
@@ -5207,11 +5219,11 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
     let ret_ty_str -> String = get_llvm_type_str(c, f_info.ret_type);
     let call_reg -> String = "";
     if (f_info.ret_type == TYPE_VOID) {
-        c.output_file.write(c.indent + "call void @" + real_func_name + "(" + args_str + ")\n");
+        c.output_file.write(c.indent + "call void @" + f_info.name + "(" + args_str + ")\n");
         return void_result();
     } else {
         call_reg = next_reg(c);
-        c.output_file.write(c.indent + call_reg + " = call " + ret_ty_str + " @" + real_func_name + "(" + args_str + ")\n");
+        c.output_file.write(c.indent + call_reg + " = call " + ret_ty_str + " @" + f_info.name + "(" + args_str + ")\n");
         return CompileResult(reg=call_reg, type=f_info.ret_type);
     }
 }
