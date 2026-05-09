@@ -1,14 +1,14 @@
 // core/WhitelangCompiler.wl
 import "builtin"
-import "file_io"
-import "dict"
-import "WhitelangTokens.wl"
-import "WhitelangNodes.wl"
-import "WhitelangExceptions.wl"
-import "WhitelangUtils.wl"
 
+import "WhitelangNodes.wl"
+import "WhitelangUtils.wl"
+import "WhitelangTokens.wl"
 import "WhitelangLexer.wl"
+import "WhitelangExceptions.wl"
 import "WhitelangParser.wl"
+import "dict"
+import "file_io"
 
 
 extern func is_windows() -> Int from "C";
@@ -155,7 +155,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         let is_null_ptr -> String = next_reg(c);
         c.output_file.write(c.indent + is_null_ptr + " = icmp eq " + variant_llvm + "* " + val_res.reg + ", null\n");
         
-        if (can_be_null) {
+        if can_be_null {
             c.output_file.write(c.indent + "br i1 " + is_null_ptr + ", label %" + null_return_label + ", label %" + read_box_label + "\n");
         } else {
             c.output_file.write(c.indent + "br i1 " + is_null_ptr + ", label %" + fail_label + ", label %" + read_box_label + "\n");
@@ -170,7 +170,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         let is_zero_tag -> String = next_reg(c);
         c.output_file.write(c.indent + is_zero_tag + " = icmp eq i32 " + type_id_reg + ", 0\n");
         
-        if (can_be_null) {
+        if can_be_null {
             c.output_file.write(c.indent + "br i1 " + is_zero_tag + ", label %" + null_return_label + ", label %" + check_match_label + "\n");
         } else {
             c.output_file.write(c.indent + "br i1 " + is_zero_tag + ", label %" + fail_label + ", label %" + check_match_label + "\n");
@@ -214,7 +214,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         }
         c.output_file.write(c.indent + "br label %" + merge_label + "\n");
 
-        if (can_be_null) {
+        if can_be_null {
             c.output_file.write("\n" + null_return_label + ":\n");
             c.output_file.write(c.indent + "br label %" + merge_label + "\n");
         }
@@ -223,7 +223,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         let final_val_reg -> String = next_reg(c);
         let exp_ty_str -> String = get_llvm_type_str(c, expected_type);
         
-        if (can_be_null) {
+        if can_be_null {
             let zero_val -> String = "0";
             if (expected_type == TYPE_FLOAT) {
                 zero_val = "0.0";
@@ -477,16 +477,25 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
         let base -> BaseNode = stmts[i];
         if (base.type == NODE_STRUCT_DEF) {
             let n -> StructDefNode = stmts[i];
-            let s_name -> String = n.name_tok.value;
+            let raw_name -> String = n.name_tok.value;
+            let s_name -> String = c.current_package_prefix + raw_name;
 
             // for dict.wl
-            if (s_name == "_Variant") {
-                let existing -> StructInfo = c.struct_table.get("_Variant");
-                if (existing is null) {
+            let active_anns -> Dict = analyze_annotations(c, n.annotations);
+            if (active_anns.get("CompilerIntrinsic") is !null) {
+                if (c.current_package_prefix != "dict." && c.current_package_prefix != "") {
+                    WhitelangExceptions.throw_invalid_syntax(n.pos, "Security Error: @CompilerIntrinsic is restricted to compiler internal libraries.");
+                    return; 
+                }
+
+                if (raw_name == "Variant") {
                     let intrinsic_info -> StructInfo = c.struct_table.get("$Variant");
-                    c.struct_table.put("_Variant", intrinsic_info);
+                    c.struct_table.put(s_name, intrinsic_info); 
                     i += 1;
                     continue; 
+                } else {
+                    WhitelangExceptions.throw_invalid_syntax(n.pos, "Compiler Error: Unknown intrinsic struct '" + raw_name + "'.");
+                    return;
                 }
             }
 
@@ -508,7 +517,8 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             
         } else if (base.type == NODE_CLASS_DEF) {
             let c_node -> ClassDefNode = stmts[i];
-            let c_name -> String = c_node.name_tok.value;
+            let raw_name -> String = c_node.name_tok.value;
+            let c_name -> String = c.current_package_prefix + raw_name;
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
             let info -> StructInfo = StructInfo(
@@ -579,7 +589,8 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
 
         } else if (base.type == NODE_CLASS_DEF) {
             let c_node -> ClassDefNode = stmts[i];
-            let c_name -> String = c_node.name_tok.value;
+            let raw_name -> String = c_node.name_tok.value;
+            let c_name -> String = c.current_package_prefix + raw_name;
             let m_vec -> Vector(Struct) = c_node.methods;
             let m_len -> Int = 0; if (m_vec is !null) { m_len = m_vec.length(); }
 
@@ -606,8 +617,8 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                     p_idx += 1;
                 }
 
-                let m_key -> String = c.current_package_prefix + c_name + "_" + m_raw_name;
-                let m_llvm_name -> String = mangle_wl_name(c.current_package_prefix + c_name + ".", m_raw_name, arg_types);
+                let m_key -> String = c_name + "_" + m_raw_name;
+                let m_llvm_name -> String = mangle_wl_name(c_name + ".", m_raw_name, arg_types);
                 
                 if (c.func_table.get(m_key) is !null) {
                     WhitelangExceptions.throw_name_error(m_node.pos, "Method '" + m_key + "' is already defined.");
@@ -1186,22 +1197,36 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
         }
     }
 
+    let module_name -> String = "";
+    if (node.alias_tok is !null) {
+        module_name = node.alias_tok.value;
+    } else {
+        let len -> Int = raw_path.length();
+        let end_idx -> Int = len;
+        if (raw_path.ends_with(".wl")) {
+            end_idx = len - 3;
+        }
+        let start_idx -> Int = 0;
+        let i -> Int = len - 1;
+        while (i >= 0) {
+            let ch -> Int = raw_path[i];
+            if (ch == 47 || ch == 92) {
+                start_idx = i + 1;
+                break;
+            }
+            i -= 1;
+        }
+        module_name = raw_path.slice(start_idx, end_idx);
+    }
+
     let import_prefix -> String = "";
     if is_pkg {
-        let pkg_mod_name -> String = raw_path;
-        if (node.alias_tok is !null) {
-            pkg_mod_name = node.alias_tok.value;
-        }
-        import_prefix = pkg_mod_name + ".";
+        import_prefix = module_name + ".";
     } else {
-        if (node.alias_tok is !null) {
-            import_prefix = node.alias_tok.value + ".";
+        if (raw_path == "builtin" || raw_path == "builtin.wl") {
+            import_prefix = ""; 
         } else {
-            if (c.current_package_prefix != "") {
-                import_prefix = c.current_package_prefix;
-            } else {
-                import_prefix = ""; 
-            }
+            import_prefix = module_name + ".";
         }
     }
 
@@ -1214,45 +1239,29 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
 
     let marker -> StringConstant = StringConstant(id=0, value="imported");
     if is_pkg {
-        let pkg_mod_name -> String = raw_path;
-        if (node.alias_tok is !null) {
-            pkg_mod_name = node.alias_tok.value;
-        }
         let pkg_val -> StringConstant = StringConstant(id=0, value=raw_path);
-        c.loaded_packages.put(pkg_mod_name, pkg_val);
+        c.loaded_packages.put(module_name, pkg_val);
     } else {
-        let file_mod_name -> String = "";
-        if (node.alias_tok is !null) {
-            file_mod_name = node.alias_tok.value;
-        } else {
-            let len -> Int = raw_path.length();
-            let end_idx -> Int = len;
-            if (raw_path.ends_with(".wl")) {
-                end_idx = len - 3;
-            }
-            let start_idx -> Int = 0;
-            let i -> Int = len - 1;
-            while (i >= 0) {
-                let ch -> Int = raw_path[i];
-                if (ch == 47 || ch == 92) {
-                    start_idx = i + 1;
-                    break;
-                }
-                i -= 1;
-            }
-            file_mod_name = raw_path.slice(start_idx, end_idx);
-        }
         let file_val -> StringConstant = StringConstant(id=0, value=import_prefix);
-        c.loaded_files.put(file_mod_name, file_val);
+        c.loaded_files.put(module_name, file_val);
     }
 
     c.imported_modules.put(final_path, marker);
-    
+
     let old_prefix -> String = c.current_package_prefix;
     let old_dir -> String = c.current_dir;
 
     c.current_dir = get_dir_name(final_path);
     c.current_package_prefix = import_prefix;
+
+    let backup_visible -> Dict = c.current_file_visible_prefixes;
+    let backup_types   -> Dict = c.current_file_type_aliases;
+    let backup_funcs   -> Dict = c.current_file_func_aliases;
+    let backup_globals -> Dict = c.current_file_global_aliases;
+    c.current_file_visible_prefixes = Dict(32);
+    c.current_file_type_aliases     = Dict(32);
+    c.current_file_func_aliases     = Dict(32);
+    c.current_file_global_aliases   = Dict(32);
 
     let f -> File = File(final_path, "rb");
     if (f is null) { WhitelangExceptions.throw_import_error(node.pos, "Failed to open: " + final_path); }
@@ -1260,10 +1269,15 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     f.close();
 
     let lexer -> Lexer = WhitelangLexer.new_lexer(final_path, source);
-    let parser -> Parser = WhitelangParser.Parser(lexer=lexer, current_tok=get_next_token(lexer));
+    let parser -> Parser = WhitelangParser.Parser(lexer=lexer, current_tok=WhitelangLexer.get_next_token(lexer));
     let mod_ast -> Struct = WhitelangParser.parse(parser);
 
     compile_ast(c, mod_ast);
+
+    c.current_file_visible_prefixes = backup_visible;
+    c.current_file_type_aliases     = backup_types;
+    c.current_file_func_aliases     = backup_funcs;
+    c.current_file_global_aliases   = backup_globals;
 
     c.current_package_prefix = old_prefix;
     c.current_dir = old_dir;
@@ -1346,7 +1360,17 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
     if (c.scope_depth == 0) {
         let active_anns -> Dict = analyze_annotations(c, node.annotations);
 
-        let global_name -> String = "@" + var_name;
+        let full_var_name -> String = var_name;
+        if (c.current_package_prefix != "") {
+            full_var_name = c.current_package_prefix + var_name;
+        }
+
+        let global_name -> String = "@" + full_var_name;
+
+        if (active_anns.get("ExportLib") is !null) {
+            global_name = "@" + var_name; 
+        }
+
         let init_val_str -> String = "0";
         if (target_type_id == TYPE_STRING || target_type_id >= 100 || target_type_id == TYPE_GENERIC_STRUCT || target_type_id == TYPE_GENERIC_CLASS || target_type_id == TYPE_GENERIC_FUNCTION || target_type_id == TYPE_GENERIC_METHOD) { init_val_str = "null";}
         
@@ -1404,7 +1428,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         }
 
         c.output_file.write(global_name + " = " + linkage + "global " + llvm_ty_str + " " + init_val_str + "\n");
-        c.global_symbol_table.put(var_name, SymbolInfo(reg=global_name, type=target_type_id, origin_type=target_type_id, is_const=node.is_const));
+        c.global_symbol_table.put(full_var_name, SymbolInfo(reg=global_name, type=target_type_id, origin_type=target_type_id, is_const=node.is_const));
         return void_result();
     }
 
@@ -1423,7 +1447,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
             }
         }
 
-        if (is_valid_struct) {
+        if is_valid_struct {
             let fake_args -> Vector(Struct) = [];
             let fake_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=fake_args, pos=node.pos);
             let val_res -> CompileResult = null;
@@ -1810,7 +1834,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
 
 func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNode) -> CompileResult {
     let raw_name -> String = node.name_tok.value;
-    let m_name -> String = c.current_package_prefix + class_name + "_" + raw_name;
+    let m_name -> String = class_name + "_" + raw_name;
     
     let f_info -> FuncInfo = c.func_table.get(m_name);
     let ret_type_id -> Int = f_info.ret_type;
@@ -1921,7 +1945,10 @@ func compile_class_method_call(c -> Compiler, s_info -> StructInfo, obj_res -> C
         m_idx += 1;
     }
     
-    if (!found) { WhitelangExceptions.throw_name_error(n_call.pos, "Method '" + method_name + "' not found in class '" + s_info.name + "'."); }
+    if (!found) { 
+        WhitelangExceptions.throw_name_error(n_call.pos, "Method '" + method_name + "' not found in class '" + s_info.name + "'.");
+        return void_result();
+    }
     
     let sig -> String = get_func_sig_str(c, f_info); 
     let class_llvm_ty -> String = s_info.llvm_name;
@@ -2249,16 +2276,13 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
 }
 
 func compile_struct_def(c -> Compiler, node -> StructDefNode) -> CompileResult {
-    let struct_name -> String = node.name_tok.value;
-
-    analyze_annotations(c, node.annotations);
+    let raw_name -> String = node.name_tok.value;
+    let struct_name -> String = c.current_package_prefix + raw_name;
 
     // for dict.wl
-    if (struct_name == "_Variant") {
-        let v_info -> StructInfo = c.struct_table.get("_Variant");
-        if (v_info is !null && v_info.name == "$Variant") {
-            return void_result();
-        }
+    let active_anns -> Dict = analyze_annotations(c, node.annotations);
+    if (active_anns.get("CompilerIntrinsic") is !null) {
+        return void_result();
     }
 
     let full_name -> String = "struct." + struct_name;
@@ -2401,7 +2425,7 @@ func compile_class_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode)
         f_idx += 1;
     }
 
-    let init_name -> String = c.current_package_prefix + s_info.name + "_$init";
+    let init_name -> String = s_info.name + "_$init";
     let init_func -> FuncInfo = c.func_table.get(init_name);
     
     if (init_func is !null) {
@@ -2448,7 +2472,8 @@ func compile_class_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode)
 }
 
 func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
-    let class_name -> String = node.name_tok.value;
+    let raw_name -> String = node.name_tok.value;
+    let class_name -> String = c.current_package_prefix + raw_name;
     let full_name -> String = "class." + class_name;
 
     analyze_annotations(c, node.annotations);
@@ -2461,9 +2486,15 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
     let info -> StructInfo = c.struct_table.get(class_name);
 
     let parent_info -> StructInfo = null;
+    let parent_info -> StructInfo = null;
     if (node.parent_tok is !null) {
         let p_name -> String = node.parent_tok.value;
         parent_info = c.struct_table.get(p_name);
+
+        if (parent_info is null && c.current_package_prefix != "") {
+            parent_info = c.struct_table.get(c.current_package_prefix + p_name);
+        }
+
         if (parent_info is null || !parent_info.is_class) {
             WhitelangExceptions.throw_name_error(node.pos, "Parent class '" + p_name + "' is not defined or is not a class.");
             return void_result();
@@ -2530,8 +2561,13 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
         let raw_m_name -> String = m_node.name_tok.value;
         
         if (raw_m_name != "$init") {
-            let m_name -> String = c.current_package_prefix + class_name + "_" + raw_m_name;
+            let m_name -> String = class_name + "_" + raw_m_name;
             let f_info -> FuncInfo = c.func_table.get(m_name);
+
+            if (f_info is null) {
+                WhitelangExceptions.throw_name_error(m_node.pos, "Compiler internal error: Method '" + m_name + "' was not properly registered.");
+                return void_result();
+            }
             
             let vt_len -> Int = vtable_vec.length();
             let vt_i -> Int = 0;
@@ -2583,6 +2619,49 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
 }
 
 func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResult {
+    let obj_base -> BaseNode = node.obj;
+
+    if (obj_base.type == NODE_VAR_ACCESS) {
+        let v_node -> VarAccessNode = node.obj;
+        let pkg_name -> String = v_node.name_tok.value;
+        let is_module -> Bool = false;
+        let full_name -> String = "";
+        
+        if (find_symbol(c, pkg_name) is null) {
+            let pkg_marker -> StringConstant = c.loaded_packages.get(pkg_name);
+            if (pkg_marker is !null) {
+                full_name = pkg_marker.value + "." + node.field_name;
+                is_module = true;
+            } else {
+                let file_marker -> StringConstant = c.loaded_files.get(pkg_name);
+                if (file_marker is !null) {
+                    full_name = file_marker.value + node.field_name;
+                    is_module = true;
+                } else {
+                    full_name = pkg_name + "." + node.field_name;
+                    if (c.global_symbol_table.get(full_name) is !null) {
+                        is_module = true;
+                    }
+                }
+            }
+        }
+
+        if is_module {
+            if (node.field_name.starts_with("__")) {
+                WhitelangExceptions.throw_name_error(node.pos, "Undefined module variable '" + full_name + "'.");
+                return void_result();
+            }
+
+            let g_info -> SymbolInfo = c.global_symbol_table.get(full_name);
+            if (g_info is !null) {
+                let llvm_ty_str -> String = get_llvm_type_str(c, g_info.type);
+                let val_reg -> String = next_reg(c);
+                c.output_file.write(c.indent + val_reg + " = load " + llvm_ty_str + ", " + llvm_ty_str + "* " + g_info.reg + "\n");
+                return CompileResult(reg=val_reg, type=g_info.type, origin_type=g_info.origin_type);
+            }
+        }
+    }
+
     let obj_res -> CompileResult = compile_node(c, node.obj);
 
     if (is_pointer_type(c, obj_res.type)) {
@@ -2731,6 +2810,69 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
 
 func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResult {
     let obj_base -> BaseNode = node.obj;
+
+    if (obj_base.type == NODE_VAR_ACCESS) {
+        let v_node -> VarAccessNode = node.obj;
+        let pkg_name -> String = v_node.name_tok.value;
+        let is_module -> Bool = false;
+        let full_name -> String = "";
+        
+        if (find_symbol(c, pkg_name) is null) {
+            let pkg_marker -> StringConstant = c.loaded_packages.get(pkg_name);
+            if (pkg_marker is !null) {
+                full_name = pkg_marker.value + "." + node.field_name;
+                is_module = true;
+            } else {
+                let file_marker -> StringConstant = c.loaded_files.get(pkg_name);
+                if (file_marker is !null) {
+                    full_name = file_marker.value + node.field_name;
+                    is_module = true;
+                } else {
+                    full_name = pkg_name + "." + node.field_name;
+                    if (c.global_symbol_table.get(full_name) is !null) {
+                        is_module = true;
+                    }
+                }
+            }
+        }
+        
+        if is_module {
+            let g_info -> SymbolInfo = c.global_symbol_table.get(full_name);
+            if (node.field_name.starts_with("__")) {
+                WhitelangExceptions.throw_name_error(node.pos, "Undefined module variable '" + full_name + "'.");
+                return void_result();
+            }
+            if (g_info is null) {
+                WhitelangExceptions.throw_name_error(node.pos, "Undefined module variable '" + full_name + "'.");
+                return void_result();
+            }
+            if (g_info.is_const) {
+                WhitelangExceptions.throw_type_error(node.pos, "Cannot assign to constant module variable '" + full_name + "'.");
+                return void_result();
+            }
+            
+            c.expected_type = g_info.type;
+            let val_res -> CompileResult = compile_node(c, node.value);
+            c.expected_type = 0;
+            
+            val_res = emit_implicit_cast(c, val_res, g_info.type, node.pos);
+            
+            let f_ptr -> String = g_info.reg;
+
+            if (is_ref_type(c, g_info.type)) {
+                emit_retain(c, val_res.reg, g_info.type);
+                let old_val_reg -> String = next_reg(c);
+                let ty_str -> String = get_llvm_type_str(c, g_info.type);
+                c.output_file.write(c.indent + old_val_reg + " = load " + ty_str + ", " + ty_str + "* " + f_ptr + "\n");
+                emit_release(c, old_val_reg, g_info.type);
+            }
+            
+            let store_ty -> String = get_llvm_type_str(c, g_info.type);
+            c.output_file.write(c.indent + "store " + store_ty + " " + val_res.reg + ", " + store_ty + "* " + f_ptr + "\n");
+            return val_res;
+        }
+    }
+
     if (obj_base.type == NODE_CALL || obj_base.type == NODE_VECTOR_LIT || obj_base.type == NODE_STRING) {
         WhitelangExceptions.throw_invalid_syntax(node.pos, "Cannot assign to a field of a temporary right-value object. Assign it to a variable first.");
         return void_result();
@@ -3523,10 +3665,15 @@ func compile_slice_access(c -> Compiler, node -> SliceAccessNode) -> CompileResu
     if (target_res.type == TYPE_STRING) {
         let call_reg -> String = next_reg(c);
 
-        let slice_info -> FuncInfo = c.func_table.get("builtin.string_slice");
-        let slice_llvm -> String = "builtin.string_slice";
+        let real_func_name -> String = "string_slice";
+        if (c.func_table.get("string_slice") is !null) { real_func_name = "string_slice"; }
+        else if (c.func_table.get("string.string_slice") is !null) { real_func_name = "string.string_slice"; }
+        else if (c.func_table.get("builtin.string_slice") is !null) { real_func_name = "builtin.string_slice"; }
+
+        let slice_info -> FuncInfo = c.func_table.get(real_func_name);
+        let slice_llvm -> String = "string_slice";
         if (slice_info is !null) { slice_llvm = slice_info.name; }
-        
+
         c.output_file.write(c.indent + call_reg + " = call i8* @" + slice_llvm + "(i8* " + target_res.reg + ", i32 " + start_res.reg + ", i32 " + end_res.reg + ")\n");
         return CompileResult(reg=call_reg, type=TYPE_STRING, origin_type=0);
     }
@@ -4020,6 +4167,9 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         
         if (info is null) {
             let f_info -> FuncInfo = c.func_table.get(name);
+            if (f_info is null && c.current_package_prefix != "") {
+                f_info = c.func_table.get(c.current_package_prefix + name);
+            }
             if (f_info is !null) {
                 let specific_type_id -> Int = get_func_type_id(c, f_info.ret_type);
                 let sig -> String = get_func_sig_str(c, f_info);
@@ -4172,6 +4322,10 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         let info -> SymbolInfo = find_symbol(c, var_name);
         if (info is null) {
             let f_info -> FuncInfo = c.func_table.get(var_name);
+            if (f_info is null && c.current_package_prefix != "") {
+                f_info = c.func_table.get(c.current_package_prefix + var_name);
+                if (f_info is !null) { var_name = c.current_package_prefix + var_name; }
+            }
             if (f_info is !null) {
                 let specific_type_id -> Int = get_func_type_id(c, f_info.ret_type);
                 let sig -> String = get_func_sig_str(c, f_info);
@@ -4375,7 +4529,36 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         }
 
         if (func_name != "") {
-            if (is_package_call) {
+            if (!is_package_call) {
+                let found_local -> Bool = false;
+                let local_name -> String = func_name;
+                if (c.current_package_prefix != "") {
+                    local_name = c.current_package_prefix + func_name;
+                }
+                
+                if (c.struct_table.get(local_name) is !null || c.func_table.get(local_name) is !null) {
+                    func_name = local_name;
+                    found_local = true;
+                }
+
+                if (!found_local) {
+                    let mapped_type -> String = c.current_file_type_aliases.get(func_name);
+                    if (mapped_type is !null) {
+                        func_name = mapped_type;
+                    } else {
+                        let mapped_func -> String = c.current_file_func_aliases.get(func_name);
+                        if (mapped_func is !null) {
+                            func_name = mapped_func;
+                        }
+                    }
+                }
+            }
+            if is_package_call {
+                let f_acc -> FieldAccessNode = n_call.callee;
+                if (f_acc.field_name.starts_with("__")) {
+                    WhitelangExceptions.throw_name_error(n_call.pos, "Function '" + func_name + "' is not defined.");
+                    return void_result();
+                }
                 is_direct = true;
             } else {
                 let s_check -> StructInfo = c.struct_table.get(func_name);
@@ -4384,7 +4567,6 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 } else {
                     let f_check -> FuncInfo = c.func_table.get(func_name);
                     let v_check -> SymbolInfo = find_symbol(c, func_name);
-                    
                     if (f_check is !null && v_check is null) {
                         is_direct = true;
                     }
@@ -4393,7 +4575,11 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         }
 
         if is_direct {
-            if (func_name == "builtin.print") {
+            let target_func_name -> String = func_name;
+            let check_built -> FuncInfo = c.func_table.get(func_name);
+            if (check_built is !null) { target_func_name = check_built.base_name; }
+
+            if (target_func_name == "print" || target_func_name == "builtin.print") {
                 let args -> Vector(Struct) = n_call.args;
                 let a_len -> Int = 0;
                 if (args is !null) { a_len = args.length(); }
@@ -4896,13 +5082,13 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
     if (type_id >= 100) {
         let s_info -> StructInfo = c.struct_id_map.get("" + type_id);
         if (s_info is !null) {
-            if (s_info.name == "$Variant" || s_info.name == "_Variant") {
+            if (s_info.name == "$Variant") {
                 compile_print_variant_internal(c, reg, s_info, pos);
                 return;
             }
             compile_print_struct_internal(c, reg, s_info, pos);
             return;
-        } 
+        }
         
         let v_info -> SymbolInfo = c.vector_base_map.get("" + type_id);
         if (v_info is !null) {
@@ -4915,7 +5101,7 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
             compile_print_array_internal(c, reg, arr_info, pos);
             return;
         }
-    } 
+    }
 }
 
 func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> StructInfo, pos -> Position) -> Void {
@@ -5182,13 +5368,17 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
 func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -> String, call_node -> CallNode) -> CompileResult {
     let target_func -> String = "string_" + method_name;
     let real_func_name -> String = "";
-    
+
     if (c.func_table.get(target_func) is !null) {
         real_func_name = target_func;
+    } else if (c.func_table.get("string." + target_func) is !null) {
+        real_func_name = "string." + target_func;
     } else if (c.func_table.get("builtin." + target_func) is !null) {
         real_func_name = "builtin." + target_func;
+    } else if (c.current_package_prefix != "" && c.func_table.get(c.current_package_prefix + target_func) is !null) {
+        real_func_name = c.current_package_prefix + target_func;
     }
-    
+
     if (real_func_name == "") {
         return null;
     }
@@ -5321,8 +5511,18 @@ func compile(c -> Compiler, node -> Struct) -> Void {
 
     let fake_path -> Token = Token(type=TOK_STR_LIT, value="dict", line=0, col=0);
     let fake_pos -> Position = WhitelangExceptions.Position(idx=0, ln=0, col=0, text="", fn="<prelude>");
-    let fake_import -> ImportNode = ImportNode(type=NODE_IMPORT, path_tok=fake_path, symbols=null, alias_tok=null, pos=fake_pos);
+    let star_tok -> Token = Token(type=TOK_MUL, value="*", line=0, col=0);
+    let star_sym -> ImportSymbolNode = ImportSymbolNode(name_tok=star_tok, alias_tok=null);
+    let fake_syms -> Vector(Struct) = [];
+    fake_syms.append(star_sym);
+
+    let fake_import -> ImportNode = ImportNode(type=NODE_IMPORT, path_tok=fake_path, symbols=fake_syms, alias_tok=null, pos=fake_pos);
     compile_import(c, fake_import);
+
+    if (c.struct_table.get("dict.Variant") is null) {
+        WhitelangExceptions.throw_import_error(fake_pos, "Missing required intrinsic item '@CompilerIntrinsic struct Variant'. The standard library 'dict.wl' may be corrupted or missing.");
+        return;
+    }
 
     compile_ast(c, node);
     compile_end(c);

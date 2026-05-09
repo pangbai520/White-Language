@@ -1,10 +1,10 @@
 // core/WhitelangParser.wl
 import "builtin"
-import "WhitelangLexer.wl"
+
 import "WhitelangTokens.wl"
 import "WhitelangNodes.wl"
 import "WhitelangExceptions.wl"
-
+import "WhitelangLexer.wl"
 
 struct Parser(
     lexer -> Lexer,
@@ -98,7 +98,7 @@ func parse(p -> Parser) -> Struct {
             stmt = parse_extern(p);
         } else {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-            WhitelangExceptions.throw_invalid_syntax(err_pos, "Top level code must be function definitions or global variables. Found: " + get_token_name(p.current_tok.type));
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Top level code must be function definitions or global variables. Found: " + WhitelangTokens.get_token_name(p.current_tok.type));
             synchronize(p);
             continue;
         }
@@ -255,6 +255,17 @@ func parse_type_base(p -> Parser) -> Struct {
             parser_advance(p);
             let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             type_node = VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
+
+            if (p.current_tok.type == TOK_DOT) {
+                parser_advance(p); // skip '.'
+                if (p.current_tok.type != TOK_IDENTIFIER) {
+                    let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected type name after '.'.");
+                }
+                let type_name -> String = p.current_tok.value;
+                parser_advance(p); // skip type_name
+                type_node = FieldAccessNode(type=NODE_FIELD_ACCESS, obj=type_node, field_name=type_name, pos=pos);
+            }
         }
         return type_node;
     }
@@ -518,7 +529,7 @@ func atom(p -> Parser) -> Struct {
     }
 
     let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-    WhitelangExceptions.throw_invalid_syntax(err_pos, "Unexpected token: " + get_token_name(tok.type));
+    WhitelangExceptions.throw_invalid_syntax(err_pos, "Unexpected token: " + WhitelangTokens.get_token_name(tok.type));
     return null;
 }
 
@@ -1373,11 +1384,25 @@ func parse_import(p -> Parser) -> Struct {
     let start_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
     parser_advance(p); // skip 'import'
 
-    
     let symbols -> Vector(Struct) = [];
     let path_tok -> Token = null;
+
+    // import * from "..."
+    if (p.current_tok.type == TOK_MUL) {
+        let star_tok -> Token = p.current_tok;
+        parser_advance(p); // skip '*'
+
+        symbols.append(ImportSymbolNode(name_tok=star_tok, alias_tok=null));
+        
+        if (p.current_tok.type != TOK_FROM) {
+            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected 'from' after '*'.");
+        }
+        parser_advance(p); // skip 'from'
+    }
+
     // import A, B from "..."
-    if (p.current_tok.type == TOK_IDENTIFIER) {
+    else if (p.current_tok.type == TOK_IDENTIFIER) {
         let parsing -> Bool = true;
         while (parsing) {
             if (p.current_tok.type != TOK_IDENTIFIER) {

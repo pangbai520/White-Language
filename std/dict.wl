@@ -8,7 +8,8 @@ extern "C" {
     func strcmp(s1 -> String, s2 -> String) -> Int;
 }
 
-struct _Variant(
+@CompilerIntrinsic
+struct Variant(
     // compiler internal implementation
 )
 
@@ -16,7 +17,7 @@ func hash_string(key -> String) -> Int {
     let hash -> Int = 5381;
     let i -> Int = 0;
     let len -> Int = key.length();
-    
+
     while (i < len) {
         let c -> Int = key[i];
         if (c == 0) { break; }
@@ -26,16 +27,16 @@ func hash_string(key -> String) -> Int {
 
     if (hash < 0) { hash = ~hash; }
     if (hash < 2) { hash += 2; }
-    
+
     return hash;
 }
 
 class Dict {
     let ptr keys      -> String = nullptr; 
-    let ptr values    -> _Variant = nullptr; 
+    let ptr values    -> Variant = nullptr; 
     // this array stores the hashes but also tracks state (0 = empty, 1 = deleted)
     let ptr hashes    -> Int    = nullptr; 
-    
+
     let capacity      -> Int = 0;
     let size          -> Int = 0;
     let tombstones    -> Int = 0;
@@ -49,17 +50,17 @@ class Dict {
         self.capacity = actual_cap;
         self.size = 0;
         self.tombstones = 0;
-        
+
         // 8 bytes for keys (ptrs), 16 for variants, 4 for hashes
         self.keys   = calloc(actual_cap, 8); 
         self.values = calloc(actual_cap, 16); 
         self.hashes = calloc(actual_cap, 4); 
     }
 
-    method _resize() -> Void {
+    method __resize() -> Void {
         let old_cap -> Int = self.capacity;
         let ptr old_keys -> String   = self.keys;
-        let ptr old_vals -> _Variant = self.values;
+        let ptr old_vals -> Variant = self.values;
         let ptr old_hashes -> Int    = self.hashes;
 
         // standard x2 growth strategy
@@ -67,7 +68,7 @@ class Dict {
         self.keys   = calloc(self.capacity, 8);
         self.values = calloc(self.capacity, 16);
         self.hashes = calloc(self.capacity, 4);
-        
+
         self.size = 0;
         self.tombstones = 0; 
 
@@ -85,10 +86,10 @@ class Dict {
         free(old_hashes);
     }
 
-    method put(key -> String, val -> _Variant) -> Void {
+    method put(key -> String, val -> Variant) -> Void {
         // if we're 75% full (counting dead slots), we need to grow
         if ((self.size + self.tombstones) * 3 >= self.capacity << 1) {
-            self._resize();
+            self.__resize();
         }
 
         let hash -> Int = hash_string(key);
@@ -99,7 +100,7 @@ class Dict {
 
         while (true) {
             let curr_h -> Int = self.hashes[idx];
-            
+
             // found a fresh spot
             if (curr_h == 0) { 
                 // if we passed a tombstone earlier, reuse that slot instead of wasting space
@@ -113,7 +114,7 @@ class Dict {
                 self.size++;
                 return;
             }
-            
+
             // keep track of the first dead slot we see in case we need to insert
             if (curr_h == 1) { 
                 if (first_tombstone == -1) {
@@ -127,34 +128,34 @@ class Dict {
                     return;
                 }
             }
-            
+
             // collision or tombstone: keep walking
             idx = (idx + 1) & mask;
         }
     }
 
-    method get(key -> String) -> _Variant {
+    method get(key -> String) -> Variant {
         if (self.size == 0) { return null; } // 0 means empty
 
         let hash -> Int = hash_string(key);
         let mask -> Int = self.capacity - 1;
         let idx  -> Int = hash & mask;
 
-        while (true) {
+        while true {
             let curr_h -> Int = self.hashes[idx];
-            
+
             // if we hit an empty slot, the key definitely isn't here
             if (curr_h == 0) { 
                 return null; 
             }
-            
+
             // quick hash check, then confirm with a proper string compare
             if (curr_h == hash) {
                 if (self.keys[idx] == key) {
                     return self.values[idx];
                 }
             }
-            
+
             // don't stop on tombstones (1), the item might be further down the line
             idx = (idx + 1) & mask;
         }
@@ -170,15 +171,15 @@ class Dict {
 
         while true {
             let curr_h -> Int = self.hashes[idx];
-            
+
             if (curr_h == 0) { return; } // nothing to delete
-            
+
             if (curr_h == hash) {
                 if (self.keys[idx] == key) {
                     // turn this into a "tombstone" so we don't break the probe chain
                     self.hashes[idx] = 1; 
                     self.keys[idx] = "";  // clear the ref
-                    self.values[idx] = _Variant(type_id=0, payload=0);
+                    self.values[idx] = Variant(type_id=0, payload=0);
                     self.size--;
                     self.tombstones++;
                     return;
@@ -227,10 +228,4 @@ class Dict {
             self.hashes = nullptr;
         }
     }
-}
-
-// internal hook for the compiler's 'in' operator
-func _compiler_helper_IN(self -> Dict, key -> String) -> Bool {
-    let val -> _Variant = self.get(key);
-    return val.type_id != 0;
 }

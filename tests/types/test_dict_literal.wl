@@ -4,7 +4,7 @@
 import "builtin"
 import "dict"
 
-struct _Variant(hp -> Int) {
+struct Variant(hp -> Int) {
     this.hp = 100; 
 }
 
@@ -24,13 +24,13 @@ func global_heal() -> Int {
 
 func main() -> Int {
     // prepare complex objects and bound closures for boxing
-    let h -> _Variant = _Variant(hp=888);
+    let h -> Variant = Variant(hp=888);
     let w -> Weapon = Weapon(d=500);
     let m_ptr -> Method(Int) = w.attack;
     let f_ptr -> Function(Int) = global_heal;
 
     // trigger compile_map_lit to box diverse types into the Map structure
-    // handles automatic __wl_variant wrapping for all supported data types
+    // handles automatic Variant wrapping for all supported data types
     let map -> Dict = {
         "type_int": 42,
         "type_float": 3.1415,
@@ -52,7 +52,7 @@ func main() -> Int {
     let prim_ok -> Bool = (r_int == 42 && r_float == 3.1415 && r_bool == true && r_str == "WhiteLang_String");
 
     // check memory layout and pointer stability for composites
-    let r_struct -> _Variant = map["type_struct"];
+    let r_struct -> Variant = map["type_struct"];
     let r_class -> Weapon = map["type_class"];
     let comp_ok -> Bool = (r_struct.hp == 888 && r_class.damage == 500);
 

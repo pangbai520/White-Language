@@ -5,7 +5,7 @@ import "builtin/print"
 
 func main() -> Int {
     // print(520);
-    print("\nPASS: Standard library module resolution");
+    print.print("\nPASS: Standard library module resolution");
     
     return 0;
 }

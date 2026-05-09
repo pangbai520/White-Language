@@ -1,5 +1,6 @@
 // core/WhitelangLexer.wl
 import "builtin"
+
 import "WhitelangTokens.wl"
 import "WhitelangExceptions.wl"
 
@@ -33,7 +34,7 @@ func new_lexer(fn -> String, text -> String) -> Lexer {
 }
 
 func lexer_advance(l -> Lexer) -> Void {
-    advance_pos(l.pos, l.current_char);
+    WhitelangExceptions.advance_pos(l.pos, l.current_char);
     if (l.pos.idx < l.text.length()) {
         l.current_char = l.text[l.pos.idx];
     } else {

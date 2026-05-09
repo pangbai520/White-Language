@@ -1,6 +1,6 @@
 // src/wlc.wl
 import "builtin"
-import "file_io"
+import File from "file_io"
 
 // Core components
 import "core/WhitelangTokens.wl"
@@ -17,12 +17,6 @@ extern func system_call(cmd -> String) -> Int from "C";
 extern func is_windows() -> Int from "C";
 extern func is_macos() -> Int from "C";
 extern func wl_getenv(name -> String) -> String from "C";
-
-const EMIT_EXE  -> Int = 0;
-const EMIT_OBJ  -> Int = 1;
-const EMIT_ASM  -> Int = 2;
-const EMIT_LLVM -> Int = 3;
-const EMIT_BC   -> Int = 4;
 
 struct CompilerConfig(
     source_file     -> String,
@@ -228,17 +222,17 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     let source -> String = f_in.read_all();
     f_in.close();
 
-    let lexer -> Lexer = new_lexer(cfg.source_file, source);
-    let parser -> Parser = Parser(lexer=lexer, current_tok=get_next_token(lexer));
-    let ast -> Struct = parse(parser);
+    let lexer -> Lexer = WhitelangLexer.new_lexer(cfg.source_file, source);
+    let parser -> Parser = WhitelangParser.Parser(lexer=lexer, current_tok=WhitelangLexer.get_next_token(lexer));
+    let ast -> Struct = WhitelangParser.parse(parser);
 
     WhitelangExceptions.check_errors_and_abort();
 
     if (cfg.dump_ast) { builtin.print("[Debug] AST Dumped"); }
 
-    let compiler -> Compiler = new_compiler(ll_file, cfg.is_shared);
-    compiler.current_dir = get_dir_name(cfg.source_file);
-    compile(compiler, ast);
+    let compiler -> Compiler = WhitelangUtils.new_compiler(ll_file, cfg.is_shared);
+    compiler.current_dir = WhitelangUtils.get_dir_name(cfg.source_file);
+    WhitelangCompiler.compile(compiler, ast);
 
     WhitelangExceptions.check_errors_and_abort();
 

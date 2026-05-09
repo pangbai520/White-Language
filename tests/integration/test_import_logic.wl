@@ -6,7 +6,7 @@ import "builtin"
 
 func main() -> Int {
     // cross-module function call
-    let sum -> Int = add_int(2, 3);
+    let sum -> Int = module_add.add_int(2, 3);
     
     // slice method
     let text -> String = "WhiteLang";

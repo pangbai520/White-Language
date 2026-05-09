@@ -1,11 +1,11 @@
 // core/WhitelangUtils.wl
 import "builtin"
-import "file_io"
-import "dict"
-import "WhitelangTokens.wl"
+
 import "WhitelangNodes.wl"
 import "WhitelangExceptions.wl"
-
+import "WhitelangTokens.wl"
+import "file_io"
+import "dict"
 
 extern func wl_getenv(name -> String) -> String from "C";
 
@@ -127,6 +127,10 @@ struct Compiler(
     loaded_packages -> Dict,
     loaded_files -> Dict,
     current_dir -> String,
+    current_file_visible_prefixes -> Dict,
+    current_file_type_aliases     -> Dict,
+    current_file_func_aliases     -> Dict,
+    current_file_global_aliases   -> Dict,
     curr_func -> FuncInfo,
     expected_type -> Int,
     type_drop_list -> Vector(Struct),
@@ -172,6 +176,10 @@ func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
         func_ret_map=Dict(32),
         declared_externs=Dict(32),
         imported_modules=Dict(32),
+        current_file_visible_prefixes = Dict(32),
+        current_file_type_aliases = Dict(32),
+        current_file_func_aliases = Dict(32),
+        current_file_global_aliases = Dict(32),
         current_package_prefix = "",
         loaded_packages = Dict(32),
         loaded_files = Dict(32),
@@ -216,6 +224,20 @@ func find_symbol(c -> Compiler, name -> String) -> SymbolInfo {
         curr = curr.parent;
     }
 
+    if (c.current_package_prefix != "") {
+        let fallback -> SymbolInfo = c.global_symbol_table.get(c.current_package_prefix + name);
+        if (fallback is !null) { return fallback; }
+    }
+
+    let g_info -> SymbolInfo = c.global_symbol_table.get(name);
+    if (g_info is !null) { return g_info; }
+
+    let mapped_global -> String = c.current_file_global_aliases.get(name);
+    if (mapped_global is !null) {
+        let alias_info -> SymbolInfo = c.global_symbol_table.get(mapped_global);
+        if (alias_info is !null) { return alias_info; }
+    }
+
     return c.global_symbol_table.get(name);
 }
 
@@ -243,45 +265,102 @@ func get_field_by_index(s_info -> StructInfo, index -> Int) -> FieldInfo {
 }
 
 func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) -> Void {
+    if (prefix != "") {
+        let bare_prefix -> String = prefix.slice(0, prefix.length() - 1);
+        c.current_file_visible_prefixes.put(bare_prefix, "1");
+    }
+
     let symbols -> Vector(Struct) = node.symbols;
     let s_len -> Int = 0; if (symbols is !null) { s_len = symbols.length(); }
     let i -> Int = 0;
+    
     while (i < s_len) {
         let curr_sym -> ImportSymbolNode = symbols[i];
+
+        if (curr_sym.name_tok.type == TOK_MUL) {
+            if (prefix == "") {
+                i += 1;
+                continue;
+            }
+            
+            let p_len -> Int = prefix.length();
+
+            let f_cap -> Int = c.func_table.capacity;
+            let k -> Int = 0;
+            while (k < f_cap) {
+                if (c.func_table.hashes[k] >= 2) { 
+                    let f_key -> String = c.func_table.keys[k];
+                    if (f_key.starts_with(prefix)) {
+                        let bare_name -> String = f_key.slice(p_len, f_key.length());
+                        if (!bare_name.starts_with("__")) {
+                            c.current_file_func_aliases.put(bare_name, f_key);
+                        }
+                    }
+                }
+                k += 1;
+            }
+
+            let s_cap -> Int = c.struct_table.capacity;
+            k = 0;
+            while (k < s_cap) {
+                if (c.struct_table.hashes[k] >= 2) {
+                    let s_key -> String = c.struct_table.keys[k];
+                    if (s_key.starts_with(prefix)) {
+                        let bare_name -> String = s_key.slice(p_len, s_key.length());
+                        if (!bare_name.starts_with("__")) {
+                            c.current_file_type_aliases.put(bare_name, s_key);
+                        }
+                    }
+                }
+                k += 1;
+            }
+
+            let g_cap -> Int = c.global_symbol_table.capacity;
+            k = 0;
+            while (k < g_cap) {
+                if (c.global_symbol_table.hashes[k] >= 2) {
+                    let g_key -> String = c.global_symbol_table.keys[k];
+                    if (g_key.starts_with(prefix)) {
+                        let bare_name -> String = g_key.slice(p_len, g_key.length());
+                        if (!bare_name.starts_with("__")) {
+                            c.current_file_global_aliases.put(bare_name, g_key);
+                        }
+                    }
+                }
+                k += 1;
+            }
+
+            i += 1;
+            continue;
+        }
+
         let orig_name -> String = curr_sym.name_tok.value;
+
+        if (orig_name.starts_with("__")) {
+            WhitelangExceptions.throw_import_error(node.pos, "Cannot import '" + orig_name + "': symbol not found in module.");
+            return;
+        }
+
         let target_name -> String = orig_name;
-        
+
         if (curr_sym.alias_tok is !null) {
             let a_tok -> Token = curr_sym.alias_tok;
             target_name = a_tok.value;
         }
 
         let lookup_name -> String = prefix + orig_name;
-        if (target_name != lookup_name) {
-            if (c.func_table.get(target_name) is !null ||
-                c.struct_table.get(target_name) is !null ||
-                c.global_symbol_table.get(target_name) is !null) {
-                WhitelangExceptions.throw_import_error(node.pos, "Name '" + target_name + "' is already defined. Use 'as' to alias it.");
-            }
-        }
-
         let found -> Bool = false;
 
-        let f_info -> FuncInfo = c.func_table.get(lookup_name);
-        if (f_info is !null) {
-            c.func_table.put(target_name, f_info);
+        if (c.func_table.get(lookup_name) is !null) {
+            c.current_file_func_aliases.put(target_name, lookup_name);
             found = true;
         }
-
-        let s_info -> StructInfo = c.struct_table.get(lookup_name);
-        if (s_info is !null) {
-            c.struct_table.put(target_name, s_info);
+        if (c.struct_table.get(lookup_name) is !null) {
+            c.current_file_type_aliases.put(target_name, lookup_name);
             found = true;
         }
-
-        let g_info -> SymbolInfo = c.global_symbol_table.get(lookup_name);
-        if (g_info is !null) {
-            c.global_symbol_table.put(target_name, g_info);
+        if (c.global_symbol_table.get(lookup_name) is !null) {
+            c.current_file_global_aliases.put(target_name, lookup_name);
             found = true;
         }
 
@@ -654,11 +733,43 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         if (name == "Class") { return TYPE_GENERIC_CLASS; }
         if (name == "Method") { return TYPE_GENERIC_METHOD; }
         if (name == "Auto") { return TYPE_AUTO; }
-        
-        let s_info -> StructInfo = c.struct_table.get(name);
-        if (s_info is !null) { return s_info.type_id; }
-        
+
+        let internal_info -> StructInfo = c.struct_table.get(c.current_package_prefix + name);
+        if (internal_info is !null) { return internal_info.type_id; }
+
+        let full_name -> String = c.current_file_type_aliases.get(name);
+        if (full_name is !null) {
+            let s_info -> StructInfo = c.struct_table.get(full_name);
+            if (s_info is !null) { return s_info.type_id; }
+        }
+
         WhitelangExceptions.throw_type_error(v.pos, "Unknown type: " + name);
+    }
+
+    if (base.type == NODE_FIELD_ACCESS) {
+        let f_acc -> FieldAccessNode = node;
+        let obj_base -> BaseNode = f_acc.obj;
+        if (obj_base.type == NODE_VAR_ACCESS) {
+            let pkg_node -> VarAccessNode = f_acc.obj;
+            let pkg_name -> String = pkg_node.name_tok.value;
+            let type_name -> String = f_acc.field_name;
+
+            let full_name -> String = "";
+            let pkg_marker -> StringConstant = c.loaded_packages.get(pkg_name);
+            if (pkg_marker is !null) {
+                full_name = pkg_marker.value + "." + type_name;
+            } else if (c.loaded_files.get(pkg_name) is !null) {
+                let file_marker -> StringConstant = c.loaded_files.get(pkg_name);
+                full_name = file_marker.value + type_name;
+            } else {
+                full_name = pkg_name + "." + type_name; 
+            }
+
+            let s_info -> StructInfo = c.struct_table.get(full_name);
+            if (s_info is !null) { return s_info.type_id; }
+            
+            WhitelangExceptions.throw_type_error(f_acc.pos, "Unknown module type: " + full_name);
+        }
     }
     
     return TYPE_VOID;
@@ -739,7 +850,7 @@ func analyze_annotations(c -> Compiler, anns -> Vector(Struct)) -> Dict {
         let ann_node -> AnnotationNode = anns[i];
         let name -> String = ann_node.name;
 
-        if (name == "Attribute" || name == "ExportLib") {
+        if (name == "Attribute" || name == "ExportLib" || name == "CompilerIntrinsic") {
             res.put(name, ann_node);
             i += 1;
             continue;

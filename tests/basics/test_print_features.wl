@@ -25,7 +25,7 @@ func main() -> Int {
     builtin.print("");
 
     // validate UTF-8 encoding and Unicode symbol rendering (Windows WriteConsoleW)
-    builtin.print("--- Unicode / Chinese Test ---");
+    builtin.print("--- Unicode / Language Test ---");
     builtin.print("你好，WhiteLanguage！");
     builtin.print("こんにちは，WhiteLanguage！");
     builtin.print("မင်္ဂလာပါ，WhiteLanguage！");

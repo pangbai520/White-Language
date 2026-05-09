@@ -6,7 +6,7 @@ import "fixtures/module_add.wl"
 
 func main() -> Int {
     // add_int should be available in the current scope from module_add.wl
-    let sum -> Int = add_int(1, 2);
+    let sum -> Int = module_add.add_int(1, 2);
     
     if (sum == 3) {
         builtin.print("PASS: Package scope symbol visibility");
