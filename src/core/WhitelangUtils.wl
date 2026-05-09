@@ -1,11 +1,11 @@
 // core/WhitelangUtils.wl
 import "builtin"
 
-import "WhitelangNodes.wl"
-import "WhitelangExceptions.wl"
-import "WhitelangTokens.wl"
-import "file_io"
-import "dict"
+import * from "WhitelangNodes.wl"
+import Position from "WhitelangExceptions.wl"
+import Token from "WhitelangTokens.wl"
+import File from "file_io"
+import Dict from "dict"
 
 extern func wl_getenv(name -> String) -> String from "C";
 
@@ -277,7 +277,7 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
     while (i < s_len) {
         let curr_sym -> ImportSymbolNode = symbols[i];
 
-        if (curr_sym.name_tok.type == TOK_MUL) {
+        if (curr_sym.name_tok.type == WhitelangTokens.TOK_MUL) {
             if (prefix == "") {
                 i += 1;
                 continue;

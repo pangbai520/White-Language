@@ -9,13 +9,13 @@ White Language (suffix: `.wl`) is a statically-typed, self-hosted system program
 Built from the ground up and fully bootstrapped (the White Language Compiler `wlc` is written entirely in White Language), it balances C-like memory control with modern syntax and object-oriented safety.
 
 ## Key Features
-* **Self-Hosted & Independent**: The compiler has successfully passed the bootstrapping milestone. White Language compiles White Language.
-* **Object-Oriented Programming**: Simple and predictable class inheritance (`class Sub(Parent)`). Supports method overriding, `super` calls, and dynamic dispatch via VTables.
-* **Predictable Memory & RAII**: Employs Automatic Reference Counting (ARC) combined with deterministic destructors (`deinit()`). System resources (files, sockets) are automatically and safely cleaned up via RTTI-routed destructor chaining when objects leave scope—no garbage collector pauses.
-* **Modern Compiler Architecture**: Under the hood, `wlc` operates on a completely flat, `Vector`-driven Abstract Syntax Tree (AST), ensuring fast compilation times and rock-solid memory safety during the compilation phase.
-* **Seamless C Interoperability (FFI)**: Bind to C functions effortlessly with the `extern "C"` syntax. No complex wrappers or boilerplate required.
-* **First-class Pointers**: While ARC and OOP handle high-level data, you still have full access to raw memory manipulation using pointers when ultimate performance or hardware interaction is demanded.
-* **CLI**: Comes with a standard, Unix-philosophy CLI interface (supporting `-c`, `-S`, `--emit-llvm`, `-O3`, and custom `--ldflags`), making it perfectly suited for modern build systems.
+* **Bootstrapped Compiler**: The compiler is fully self-hosted. White Language is written in White Language and compiled by its own previous generation.
+* **OOP with VTable Dispatch**: Supports class inheritance (`class Sub(Parent)`), method overriding, and `super` calls. Dynamic dispatch is handled via internal VTables.
+* **First-Class Functions & Types**: Functions, methods, and classes are first-class citizens. You can assign them to variables or pass them as arguments using intuitive syntax without dealing with function pointers.
+* **Predictable ARC & Destructors**: Uses Automatic Reference Counting (ARC) for memory management. Objects are reclaimed immediately when their reference count drops to zero, with support for `deinit()` destructors to handle custom cleanup logic.
+* **Namespace Isolation & Modern Module System**: Features a strict module system with `import *` support and compile-time privacy. Symbols starting with `__` are strictly private to their module, ensuring clean namespace management.
+* **Seamless C FFI**: Directly call C functions using `extern "C"` blocks. It maps White Language types to C calling conventions with zero boilerplate.
+* **Developer CLI**: A straightforward compiler driver supporting various build stages (`-c`, `-S`), LLVM IR emission (`--emit-llvm`), and optimization levels (`-O3`).
 
 ## A Taste of White Language
 
@@ -23,63 +23,77 @@ Here is a real example showing VTable polymorphism, `super` dispatch, and automa
 
 ```rust
 import "builtin"
+import "dict" // this will auto-imported by compiler, but listed here for clarity
 
-class Resource {
-    let name -> String = "Unknown";
-    
-    init(n -> String) { 
-        self.name = n; 
-        builtin.print("Acquired: " + self.name);
-    }
-    
-    method work() -> Void {
-        builtin.print("Resource is working...");
+// struct definition
+struct Point(x -> Int, y -> Int) {
+    this.x = 0;
+    this.y = 0;
+}
+
+// classes and inheritance
+class Entity {
+    let name -> String = "Base";
+
+    init(n -> String) {
+        self.name = n;
     }
 
-    // Automatically invoked by ARC when ref-count hits 0
-    deinit() { 
-        builtin.print("Destroyed: " + self.name); 
+    method identify() -> Void {
+        builtin.print("I am " + self.name);
+    }
+
+    deinit() {
+        builtin.print("Entity " + self.name + " destroyed");
     }
 }
 
-class Network(Resource) {
-    let ip -> String = "";
-    
-    init(n -> String, ip -> String) {
-        super.init(n); // Static dispatch to parent constructor
-        self.ip = ip;
+class Player(Entity) {
+    let score -> Int = 0;
+
+    init(n -> String, s -> Int) {
+        super.init(n);
+        self.score = s;
     }
-    
-    // Override parent method
-    method work() -> Void {
-        builtin.print("Pinging " + self.ip + "...");
+
+    // overriding
+    method identify() -> Void {
+        builtin.print("Player: " + self.name + " | Score: " + self.score);
     }
-    
-    deinit() {
-        builtin.print("Disconnecting " + self.ip + "...");
-        super.deinit(); // Destructor chaining
-    }
+}
+
+func global_add(a -> Int, b -> Int) -> Int {
+    return a + b;
 }
 
 func main() -> Int {
-    if (true) {
-        // Implicit upcasting: Network -> Resource
-        let res -> Resource = Network("MainServer", "10.0.0.1"); 
-        
-        // Dynamic Dispatch via VTable! Triggers Network's work()
-        res.work(); 
-        
-    } // <-- ARC kicks in here! Automatically routes to Network's deinit()
-    
+    // first-class functions
+    let math_func -> Function(Int) = global_add;
+    let result -> Int = math_func(10, 20);
+
+    // collections (Arrays, Vectors, Dicts)
+    let static_arr -> Int[3] = [1, 2, 3];
+    let dynamic_vec -> Vector(String) = ["White", "Language"];
+    dynamic_vec.append("2026");
+    let my_map -> Dict = {
+        "lang": "White Language", 
+        "ver": "latest", 
+        "is_fast": true
+    };
+
+    // OOP and first-class methods
+    let p -> Player = Player("CC", 999);
+    let id_method -> Method(Void) = p.identify;
+    id_method(); // triggers player's identify
     return 0;
 }
 ```
 
 ## Why White Language?
 
-* **Versus C**: White Language eliminates the need for header files, manual `malloc`/`free`, and manual VTable structs. You get modern OOP and deterministic RAII out-of-the-box, making it vastly safer while retaining the ability to drop down to raw pointers.
-* **Versus Rust**: White Language avoids the steep learning curve of the borrow checker. You get deterministic memory management via ARC and traditional object-oriented inheritance without spending hours fighting the compiler over lifetimes, making prototyping much faster.
-* **Versus Python/Scripting**: White Language offers the clean syntax, but it is strictly statically typed and compiled ahead-of-time (AOT) to native machine code. It catches errors at compile-time and executes orders of magnitude faster.
+* **Versus C**: You get built-in OOP, a modern module system, and ARC memory management while maintaining the ability to use raw pointers. No more header files or manual `malloc`/`free` for every single object.
+* **Versus Rust**: No borrow checker. White Language provides deterministic destruction via ARC and traditional inheritance, offering a significantly flatter learning curve for developers who prefer familiar OOP patterns.
+* **Versus Scripting Languages**: White Language provides static type safety and compiles to native machine code via AOT (Ahead-of-Time) and runs significantly faster than interpreted languages like Python.
 
 ## Limitations & Known Issues
 
@@ -96,9 +110,7 @@ White Language is a passion project and a work in progress. If you are consideri
 
 ## Tooling & Ecosystem
 
-We believe a language is only as good as its tooling. White Language comes with first-class developer experience tools out of the box:
-
-* **VS Code Extension (LSP)**: We provide a dedicated VS Code extension powered by **Langium**. It offers real-time syntax highlighting, semantic validation, autocomplete, and error diagnostics directly in your editor.
+* **VS Code Extension**: A dedicated extension providing syntax highlighting and basic diagnostics, leveraging the **Langium**-based grammar for accurate parsing.
 * **Official Website & Binaries**: Prefer not to build from source? Our official portal is now live! You can download pre-compiled, native executable binaries for Windows, macOS, and Linux directly from our website.
 
 ## Building and Bootstrapping
@@ -129,7 +141,7 @@ Test the newly built compiler:
 ./wlc_new
 ```
 
-You should see the `White Language Compiler (v0.2.3)` output.
+You should see the `White Language Compiler (v0.2.4)` output.
 
 ## License
 

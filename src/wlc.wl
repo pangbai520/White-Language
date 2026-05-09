@@ -36,7 +36,7 @@ struct CompilerConfig(
 )
 
 func print_usage() -> Void {
-    builtin.print("White Language Compiler (v0.2.3)");
+    builtin.print("White Language Compiler (v0.2.4)");
     builtin.print("Usage: wlc <source.wl> [extra_files...] [options]");
     builtin.print("");
     builtin.print("Arguments:");
@@ -183,7 +183,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     }
 
     if (!cfg.keep_temps && !cfg.is_emit_llvm) {
-        CLEAN_TMP_LL = ll_file;
+        WhitelangExceptions.CLEAN_TMP_LL = ll_file;
     }
 
     if (cfg.output_file.length() == 0) {
@@ -222,15 +222,15 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     let source -> String = f_in.read_all();
     f_in.close();
 
-    let lexer -> Lexer = WhitelangLexer.new_lexer(cfg.source_file, source);
-    let parser -> Parser = WhitelangParser.Parser(lexer=lexer, current_tok=WhitelangLexer.get_next_token(lexer));
+    let lexer -> WhitelangLexer.Lexer = WhitelangLexer.new_lexer(cfg.source_file, source);
+    let parser -> WhitelangParser.Parser = WhitelangParser.Parser(lexer=lexer, current_tok=WhitelangLexer.get_next_token(lexer));
     let ast -> Struct = WhitelangParser.parse(parser);
 
     WhitelangExceptions.check_errors_and_abort();
 
     if (cfg.dump_ast) { builtin.print("[Debug] AST Dumped"); }
 
-    let compiler -> Compiler = WhitelangUtils.new_compiler(ll_file, cfg.is_shared);
+    let compiler -> WhitelangUtils.Compiler = WhitelangUtils.new_compiler(ll_file, cfg.is_shared);
     compiler.current_dir = WhitelangUtils.get_dir_name(cfg.source_file);
     WhitelangCompiler.compile(compiler, ast);
 
@@ -354,7 +354,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     if (!cfg.keep_temps && cfg.output_file != ll_file) {
         if (cfg.verbose) { builtin.print("Cleaning up: " + ll_file); }
         file_io.remove_file(ll_file);
-        CLEAN_TMP_LL = "";
+        WhitelangExceptions.CLEAN_TMP_LL = "";
     }
 
     if (ret != 0) {

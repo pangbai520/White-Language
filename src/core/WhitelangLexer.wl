@@ -1,8 +1,8 @@
 // core/WhitelangLexer.wl
 import "builtin"
 
-import "WhitelangTokens.wl"
-import "WhitelangExceptions.wl"
+import * from "WhitelangTokens.wl"
+import Position from "WhitelangExceptions.wl"
 
 struct Lexer(
     text -> String,

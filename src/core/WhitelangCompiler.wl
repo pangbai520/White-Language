@@ -1,14 +1,14 @@
 // core/WhitelangCompiler.wl
 import "builtin"
 
-import "WhitelangNodes.wl"
-import "WhitelangUtils.wl"
-import "WhitelangTokens.wl"
-import "WhitelangLexer.wl"
-import "WhitelangExceptions.wl"
-import "WhitelangParser.wl"
-import "dict"
-import "file_io"
+import * from "WhitelangNodes.wl"
+import * from "WhitelangUtils.wl"
+import * from "WhitelangTokens.wl"
+import Lexer from "WhitelangLexer.wl"
+import Position from "WhitelangExceptions.wl"
+import Parser from "WhitelangParser.wl"
+import Dict from "dict"
+import File from "file_io"
 
 
 extern func is_windows() -> Int from "C";
@@ -1928,6 +1928,22 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
 }
 
 func compile_class_method_call(c -> Compiler, s_info -> StructInfo, obj_res -> CompileResult, method_name -> String, n_call -> CallNode) -> CompileResult {
+    if (method_name.starts_with("__")) {
+        let class_prefix -> String = "";
+        let dot_idx -> Int = s_info.name.length() - 1;
+        while (dot_idx >= 0) {
+            if (s_info.name[dot_idx] == 46) { // '.'
+                class_prefix = s_info.name.slice(0, dot_idx + 1);
+                break;
+            }
+            dot_idx -= 1;
+        }
+        if (c.current_package_prefix != class_prefix) {
+            WhitelangExceptions.throw_name_error(n_call.pos, "Method '" + method_name + "' is private to class '" + s_info.name + "'.");
+            return void_result();
+        }
+    }
+
     let vtable_vec -> Vector(Struct) = s_info.vtable;
     let v_len -> Int = 0; if (vtable_vec is !null) { v_len = vtable_vec.length(); }
     
@@ -2735,6 +2751,22 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
         WhitelangExceptions.throw_type_error(node.pos, "Cannot access field on non-struct type (or generic Struct/Class without origin inference).");
         return void_result();
     }
+
+    if (node.field_name.starts_with("__")) {
+        let class_prefix -> String = "";
+        let dot_idx -> Int = s_info.name.length() - 1;
+        while (dot_idx >= 0) {
+            if (s_info.name[dot_idx] == 46) {
+                class_prefix = s_info.name.slice(0, dot_idx + 1);
+                break;
+            }
+            dot_idx -= 1;
+        }
+        if (c.current_package_prefix != class_prefix) {
+            WhitelangExceptions.throw_name_error(node.pos, "Member '" + node.field_name + "' is private to '" + s_info.name + "'.");
+            return void_result();
+        }
+    }
     
     let field -> FieldInfo = find_field(s_info, node.field_name);
     
@@ -2896,6 +2928,22 @@ func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResu
     if (s_info is null) {
         WhitelangExceptions.throw_type_error(node.pos, "Cannot assign field to non-struct type.");
         return void_result();
+    }
+
+    if (node.field_name.starts_with("__")) {
+        let class_prefix -> String = "";
+        let dot_idx -> Int = s_info.name.length() - 1;
+        while (dot_idx >= 0) {
+            if (s_info.name[dot_idx] == 46) {
+                class_prefix = s_info.name.slice(0, dot_idx + 1);
+                break;
+            }
+            dot_idx -= 1;
+        }
+        if (c.current_package_prefix != class_prefix) {
+            WhitelangExceptions.throw_name_error(node.pos, "Member '" + node.field_name + "' is private to '" + s_info.name + "'.");
+            return void_result();
+        }
     }
 
     let field -> FieldInfo = find_field(s_info, node.field_name);

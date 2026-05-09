@@ -1,10 +1,10 @@
 // core/WhitelangParser.wl
 import "builtin"
 
-import "WhitelangTokens.wl"
-import "WhitelangNodes.wl"
-import "WhitelangExceptions.wl"
-import "WhitelangLexer.wl"
+import * from "WhitelangTokens.wl"
+import * from "WhitelangNodes.wl"
+import Position from "WhitelangExceptions.wl"
+import Lexer from "WhitelangLexer.wl"
 
 struct Parser(
     lexer -> Lexer,
