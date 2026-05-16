@@ -24,6 +24,7 @@ const TYPE_BYTE  -> Int = 10;
 const TYPE_GENERIC_CLASS -> Int = 11;
 const TYPE_GENERIC_METHOD -> Int = 12;
 const TYPE_AUTO -> Int = 13;
+const TYPE_CHAR -> Int = 14;
 const TYPE_NULLPTR -> Int = 99;
 
 
@@ -382,6 +383,7 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_BOOL)  { return "i1"; }
     if (type_id == TYPE_VOID)  { return "void"; }
     if (type_id == TYPE_STRING){ return "i8*"; }
+    if (type_id == TYPE_CHAR)  { return "i32"; }
     if (type_id == TYPE_GENERIC_STRUCT) { return "i8*"; }
     if (type_id == TYPE_GENERIC_FUNCTION) { return "i8*"; }
     if (type_id == TYPE_GENERIC_CLASS) { return "i8*"; }
@@ -428,6 +430,7 @@ func get_type_name(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_BOOL)  { return "Bool"; }
     if (type_id == TYPE_VOID)  { return "Void"; }
     if (type_id == TYPE_STRING) { return "String"; }
+    if (type_id == TYPE_CHAR)   { return "Char"; }
     if (type_id == TYPE_NULL)   { return "null"; }
     if (type_id == TYPE_NULLPTR){ return "nullptr"; }
     if (type_id == TYPE_GENERIC_STRUCT) { return "Struct"; }
@@ -550,9 +553,15 @@ func get_vector_type_id(c -> Compiler, base_id -> Int) -> Int {
 func get_expr_type(c -> Compiler, node -> Struct) -> Int {
     if (node is null) { return 0; }
     let base -> BaseNode = node;
-    
+
+    if (base.type == NODE_INT) { 
+        let n -> IntNode = node;
+        let raw_val -> String = n.tok.value;
+        if (raw_val.ends_with("L") || raw_val.ends_with("l")) { return TYPE_LONG; }
+        return TYPE_INT; 
+    }
     if (base.type == NODE_STRING) { return TYPE_STRING; }
-    if (base.type == NODE_INT) { return TYPE_INT; }
+    if (base.type == NODE_CHAR) { return TYPE_CHAR; }
     if (base.type == NODE_FLOAT) { return TYPE_FLOAT; }
     if (base.type == NODE_BOOL) { return TYPE_BOOL; }
     
@@ -600,6 +609,37 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
             if (f_info is !null) { return f_info.ret_type; }
         }
         return 0;
+    }
+
+    if (base.type == NODE_BINOP) {
+        let b -> BinOpNode = node;
+        let op -> Int = b.op_tok.type;
+
+        if (op == WhitelangTokens.TOK_EE || op == WhitelangTokens.TOK_NE || op == WhitelangTokens.TOK_LT || 
+            op == WhitelangTokens.TOK_GT || op == WhitelangTokens.TOK_LTE || op == WhitelangTokens.TOK_GTE || 
+            op == WhitelangTokens.TOK_AND || op == WhitelangTokens.TOK_OR || op == WhitelangTokens.TOK_IS) {
+            return TYPE_BOOL;
+        }
+
+        let left_ty -> Int = get_expr_type(c, b.left);
+        let right_ty -> Int = get_expr_type(c, b.right);
+
+        if (left_ty == TYPE_STRING || right_ty == TYPE_STRING) { return TYPE_STRING; }
+        if (left_ty == TYPE_CHAR && right_ty == TYPE_CHAR && op == WhitelangTokens.TOK_PLUS) { return TYPE_STRING; }
+
+        if (left_ty == TYPE_FLOAT || right_ty == TYPE_FLOAT) { return TYPE_FLOAT; }
+        if (left_ty == TYPE_LONG || right_ty == TYPE_LONG) { return TYPE_LONG; }
+        if (left_ty == TYPE_INT || right_ty == TYPE_INT) { return TYPE_INT; }
+        
+        return left_ty;
+    }
+
+    if (base.type == NODE_UNARYOP) {
+        let u -> UnaryOpNode = node;
+        let op -> Int = u.op_tok.type;
+        if (op == WhitelangTokens.TOK_NOT) { return TYPE_BOOL; }
+
+        return get_expr_type(c, u.node); 
     }
 
     return 0;
@@ -667,15 +707,8 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         let arr_node -> ArrayTypeNode = node;
         let base_id -> Int = resolve_type(c, arr_node.base_type);
 
-        let size_str -> String = arr_node.size_tok.value;
-        let size -> Int = 0;
-        let s_i -> Int = 0;
-        while (s_i < size_str.length()) {
-            let ch -> Int = size_str[s_i];
-            size = size * 10 + (ch - 48);
-            s_i += 1;
-        }
-        
+        let size -> Int = string_to_int(arr_node.size_tok.value);
+
         let cache_key -> String = "arr_" + base_id + "_" + size;
         let cached -> SymbolInfo = c.array_type_cache.get(cache_key);
         
@@ -727,6 +760,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         if (name == "Float") { return TYPE_FLOAT; }
         if (name == "Bool") { return TYPE_BOOL; }
         if (name == "String") { return TYPE_STRING; }
+        if (name == "Char") { return TYPE_CHAR; }
         if (name == "Void") { return TYPE_VOID; }
         if (name == "Struct") { return TYPE_GENERIC_STRUCT; }
         if (name == "Function") { return TYPE_GENERIC_FUNCTION; }
@@ -875,6 +909,63 @@ func analyze_annotations(c -> Compiler, anns -> Vector(Struct)) -> Dict {
         i += 1;
     }
     return res;
+}
+
+func string_to_int(val_str -> String) -> Int {
+    let len -> Int = val_str.length();
+    if (len == 0) { return 0; }
+    
+    let start -> Int = 0;
+    let is_neg -> Bool = false;
+    
+    if (val_str[0] == 45) { // '-'
+        start = 1;
+        is_neg = true;
+    }
+
+    let end -> Int = len;
+    let last_char -> Int = val_str[len - 1];
+    if (last_char == 76 || last_char == 108) {
+        end = len - 1;
+    }
+
+    let base_val -> Int = 10;
+    if (end - start >= 2 && val_str[start] == 48) { 
+        let second_char -> Int = val_str[start + 1];
+        if (second_char == 120 || second_char == 88) { // 0x
+            base_val = 16;
+            start += 2;
+        } else if (second_char == 98 || second_char == 66) { // 0b
+            base_val = 2;
+            start += 2;
+        } else if (second_char == 111 || second_char == 79) { // 0o
+            base_val = 8;
+            start += 2;
+        }
+    }
+
+    let val -> Int = 0;
+    let j -> Int = start;
+    while (j < end) {
+        let code -> Int = val_str[j];
+        if (code == 95) { // ignore '_' (1_000_000)
+            j += 1;
+            continue;
+        }
+
+        let digit -> Int = -1;
+        if (code >= 48 && code <= 57) { digit = code - 48; }
+        else if (code >= 97 && code <= 102) { digit = code - 87; } // a-f -> 10-15
+        else if (code >= 65 && code <= 70) { digit = code - 55; } // A-F -> 10-15
+        
+        if (digit >= 0 && digit < base_val) {
+            val = val * base_val + digit;
+        }
+        j += 1;
+    }
+    
+    if is_neg { return 0 - val; }
+    return val;
 }
 
 
@@ -1120,29 +1211,7 @@ func check_out_index(c -> Compiler, target_node -> Struct, index_node -> Struct,
     if (base_idx.type == NODE_INT) {
         let i_node -> IntNode = index_node;
         let val_str -> String = i_node.tok.value;
-
-        let idx_val -> Int = 0;
-        let start -> Int = 0;
-        let is_neg -> Bool = false;
-
-        if (val_str.length() > 0 && val_str[0] == 45) { // '-'
-            start = 1;
-            is_neg = true;
-        }
-
-        let j -> Int = start;
-        while (j < val_str.length()) {
-            let code -> Int = val_str[j];
-            if (code >= 48 && code <= 57) {
-                idx_val *= 10;
-                idx_val += (code - 48);
-            }
-            j += 1;
-        }
-        
-        if is_neg { 
-            idx_val = -idx_val; 
-        }
+        let idx_val -> Int = string_to_int(i_node.tok.value);
 
         if (idx_val < 0) {
             WhitelangExceptions.throw_index_error(pos, "Negative index " + val_str + " is not supported yet.");

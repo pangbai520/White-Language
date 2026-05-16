@@ -50,6 +50,7 @@ const NODE_SLICE_TYPE     -> Int = 46;
 const NODE_SLICE_ACCESS   -> Int = 47;
 const NODE_MAP_LIT        -> Int = 48;
 const NODE_ANNOTATION     -> Int = 49; // @XXX
+const NODE_CHAR           -> Int = 50;
 
 
 struct BaseNode(type -> Int) // Used to read node type
@@ -398,4 +399,10 @@ struct AnnotationNode(
     name -> String,
     args -> Vector(Struct),
     pos  -> Position
+)
+
+struct CharNode(
+    type -> Int, // NODE_CHAR
+    tok -> Token,
+    pos -> Position
 )

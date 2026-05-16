@@ -43,7 +43,7 @@ const TOK_RBRACE        -> Int = 37; // }
 
 const TOK_WHILE         -> Int = 38; // while
 const TOK_BREAK         -> Int = 39; // break
-const TOK_CONTINUE      -> Int = 40; // continue    but why am i writing so many useless comments O.O
+const TOK_CONTINUE      -> Int = 40; // continue
 const TOK_FOR           -> Int = 41;
 
 const TOK_COMMA         -> Int = 42;
@@ -100,6 +100,9 @@ const TOK_LSHIFT_ASSIGN -> Int = 83; // <<=
 const TOK_RSHIFT_ASSIGN -> Int = 84; // >>=
 
 const TOK_AT            -> Int = 85; // @
+
+const TOK_T_CHAR        -> Int = 86;
+const TOK_CHAR_LIT      -> Int = 87;
 
 
 func get_token_name(type -> Int) -> String {

@@ -73,15 +73,107 @@ func promote_to_int(c -> Compiler, res -> CompileResult) -> CompileResult {
     c.output_file.write(c.indent + zext_reg + " = zext i8 " + res.reg + " to i32\n");
     return CompileResult(reg=zext_reg, type=TYPE_INT);
 }
-func promote_to_byte(c -> Compiler, res -> CompileResult) -> CompileResult {
-    if (res.type == TYPE_BYTE) { return res; }
-    if (res.type == TYPE_INT) {
-        let trunc_reg -> String = next_reg(c);
-        c.output_file.write(c.indent + trunc_reg + " = trunc i32 " + res.reg + " to i8\n");
-        return CompileResult(reg=trunc_reg, type=TYPE_BYTE, origin_type=res.origin_type);
+
+
+func eval_const_int(c -> Compiler, node -> Struct, pos -> Position) -> Int {
+    if (node is null) { return 0; }
+    let base -> BaseNode = node;
+    
+    if (base.type == NODE_INT) {
+        let n -> IntNode = node;
+        return string_to_int(n.tok.value);
     }
-    return res;
+    if (base.type == NODE_UNARYOP) {
+        let u -> UnaryOpNode = node;
+        let op_str -> String = u.op_tok.value;
+        let val -> Int = eval_const_int(c, u.node, pos);
+        if (op_str == "-") { return 0 - val; }
+        if (op_str == "~") { return val ^ -1; }
+        WhitelangExceptions.throw_type_error(pos, "Invalid unary operator for const integer.");
+        return 0;
+    }
+    if (base.type == NODE_BINOP) {
+        let b -> BinOpNode = node;
+        let op_str -> String = b.op_tok.value;
+        let left -> Int = eval_const_int(c, b.left, pos);
+        let right -> Int = eval_const_int(c, b.right, pos);
+        
+        if (op_str == "+") { return left + right; }
+        if (op_str == "-") { return left - right; }
+        if (op_str == "*") { return left * right; }
+        if (op_str == "/") { 
+            if (right == 0) { WhitelangExceptions.throw_zero_division_error(pos, "Compile-time division by zero."); return 0; }
+            return left / right; 
+        }
+        if (op_str == "%") { 
+            if (right == 0) { WhitelangExceptions.throw_zero_division_error(pos, "Compile-time modulo by zero."); return 0; }
+            return left % right; 
+        }
+        if (op_str == "<<") { return left << right; }
+        if (op_str == ">>") { return left >> right; }
+        if (op_str == "&") { return left & right; }
+        if (op_str == "|") { return left | right; }
+        if (op_str == "^") { return left ^ right; }
+        
+        WhitelangExceptions.throw_type_error(pos, "Invalid binary operator for const integer.");
+        return 0;
+    }
+    WhitelangExceptions.throw_invalid_syntax(pos, "Expression is not a compile-time constant integer.");
+    return 0;
 }
+
+func eval_const_bool(c -> Compiler, node -> Struct, pos -> Position) -> Int {
+    if (node is null) { return 0; }
+    let base -> BaseNode = node;
+
+    if (base.type == NODE_BOOL) {
+        let b -> BooleanNode = node;
+        return b.value;
+    }
+    if (base.type == NODE_UNARYOP) {
+        let u -> UnaryOpNode = node;
+        let op_str -> String = u.op_tok.value;
+        if (op_str == "!") {
+            let val -> Int = eval_const_bool(c, u.node, pos);
+            if (val == 1) { return 0; } else { return 1; }
+        }
+        WhitelangExceptions.throw_type_error(pos, "Invalid unary operator for const boolean.");
+        return 0;
+    }
+    if (base.type == NODE_BINOP) {
+        let b -> BinOpNode = node;
+        let op_str -> String = b.op_tok.value;
+
+        if (op_str == "&&") {
+            let left -> Int = eval_const_bool(c, b.left, pos);
+            let right -> Int = eval_const_bool(c, b.right, pos);
+            if (left == 1 && right == 1) { return 1; } else { return 0; }
+        }
+        if (op_str == "||") {
+            let left -> Int = eval_const_bool(c, b.left, pos);
+            let right -> Int = eval_const_bool(c, b.right, pos);
+            if (left == 1 || right == 1) { return 1; } else { return 0; }
+        }
+
+        if (op_str == "==" || op_str == "!=" || op_str == "<" || op_str == ">" || op_str == "<=" || op_str == ">=") {
+            let left -> Int = eval_const_int(c, b.left, pos);
+            let right -> Int = eval_const_int(c, b.right, pos);
+            if (op_str == "==") { if (left == right) { return 1; } else { return 0; } }
+            if (op_str == "!=") { if (left != right) { return 1; } else { return 0; } }
+            if (op_str == "<") { if (left < right) { return 1; } else { return 0; } }
+            if (op_str == ">") { if (left > right) { return 1; } else { return 0; } }
+            if (op_str == "<=") { if (left <= right) { return 1; } else { return 0; } }
+            if (op_str == ">=") { if (left >= right) { return 1; } else { return 0; } }
+        }
+
+        WhitelangExceptions.throw_type_error(pos, "Invalid binary operator for const boolean.");
+        return 0;
+    }
+
+    WhitelangExceptions.throw_invalid_syntax(pos, "Expression is not a compile-time constant boolean.");
+    return 0;
+}
+
 
 func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -> Int, pos -> Position) -> CompileResult {
     if (val_res is null || val_res.reg == "") {
@@ -115,7 +207,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         c.output_file.write(c.indent + payload_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + box_ptr + ", i32 0, i32 1\n");
         
         let payload_i64 -> String = next_reg(c);
-        if (val_res.type == TYPE_INT || val_res.type == TYPE_BOOL || val_res.type == TYPE_BYTE) {
+        if (val_res.type == TYPE_INT || val_res.type == TYPE_BOOL || val_res.type == TYPE_BYTE || val_res.type == TYPE_CHAR) {
             
             let prim_ty -> String = get_llvm_type_str(c, val_res.type);
             c.output_file.write(c.indent + payload_i64 + " = zext " + prim_ty + " " + val_res.reg + " to i64\n");
@@ -201,7 +293,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         c.output_file.write(c.indent + payload_i64 + " = load i64, i64* " + payload_ptr + "\n");
         
         let unboxed_reg -> String = next_reg(c);
-        if (expected_type == TYPE_INT || expected_type == TYPE_BOOL || expected_type == TYPE_BYTE) {
+        if (expected_type == TYPE_INT || expected_type == TYPE_BOOL || expected_type == TYPE_BYTE || expected_type == TYPE_CHAR) {
             let prim_ty -> String = get_llvm_type_str(c, expected_type);
             c.output_file.write(c.indent + unboxed_reg + " = trunc i64 " + payload_i64 + " to " + prim_ty + "\n");
         } else if (expected_type == TYPE_LONG) {
@@ -251,14 +343,13 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
             WhitelangExceptions.throw_type_error(pos, "Keyword 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
             return CompileResult(reg="0", type=expected_type, origin_type=expected_type);
         }
-        if (expected_type == TYPE_INT || expected_type == TYPE_FLOAT || expected_type == TYPE_BOOL || expected_type == TYPE_BYTE || expected_type == TYPE_LONG) {
+        if (expected_type == TYPE_INT || expected_type == TYPE_FLOAT || expected_type == TYPE_BOOL || expected_type == TYPE_BYTE || expected_type == TYPE_LONG || expected_type == TYPE_CHAR) {
             WhitelangExceptions.throw_type_error(pos, "Primitive types cannot be null.");
             return CompileResult(reg="0", type=expected_type, origin_type=expected_type);
         }
         return CompileResult(reg="null", type=expected_type, origin_type=expected_type);
     }
 
-    if (expected_type == TYPE_BYTE && val_res.type == TYPE_INT) { return promote_to_byte(c, val_res); }
     if (expected_type == TYPE_INT && val_res.type == TYPE_BYTE) { return promote_to_int(c, val_res); }
     if (expected_type == TYPE_LONG && val_res.type == TYPE_INT) { return promote_to_long(c, val_res); }
     if (expected_type == TYPE_FLOAT && val_res.type == TYPE_INT) { return promote_to_float(c, val_res); }
@@ -457,6 +548,20 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
         c.output_file.write(c.indent + src_reg + " = select i1 " + res.reg + ", i8* " + ptr_true + ", i8* " + ptr_false + "\n");
         
         c.output_file.write(c.indent + "call i8* @strcpy(i8* " + buf_ptr + ", i8* " + src_reg + ")\n");
+        return CompileResult(reg=buf_ptr, type=TYPE_STRING);
+    }
+
+    if (res.type == TYPE_CHAR) {
+        let buf_ptr -> String = emit_alloc_obj(c, "2", "" + TYPE_STRING, "i8*");
+        let char_i8 -> String = next_reg(c);
+
+        c.output_file.write(c.indent + char_i8 + " = trunc i32 " + res.reg + " to i8\n");
+        c.output_file.write(c.indent + "store i8 " + char_i8 + ", i8* " + buf_ptr + "\n");
+
+        let next_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + next_ptr + " = getelementptr inbounds i8, i8* " + buf_ptr + ", i32 1\n");
+        c.output_file.write(c.indent + "store i8 0, i8* " + next_ptr + "\n");
+        
         return CompileResult(reg=buf_ptr, type=TYPE_STRING);
     }
 
@@ -766,10 +871,6 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
             let target_type_id -> Int = resolve_type(c, v_node.type_node);
 
             if (target_type_id == TYPE_AUTO) {
-                if (v_node.value is null) {
-                    WhitelangExceptions.throw_invalid_syntax(v_node.pos, "Cannot infer 'Auto' type without an initializer.");
-                    return;
-                }
                 target_type_id = get_expr_type(c, v_node.value);
                 if (target_type_id == 0 || target_type_id == TYPE_AUTO) {
                     WhitelangExceptions.throw_type_error(v_node.pos, "Failed to statically infer type for 'Auto'. Please specify type explicitly.");
@@ -1306,12 +1407,6 @@ func compile_block(c -> Compiler, node -> BlockNode) -> CompileResult {
     let terminated -> Bool = false;
     while (i < len) {
         let stmt -> BaseNode = stmts[i];
-        if (stmt.type == NODE_RETURN) { terminated = true; }
-        if (stmt.type == NODE_BREAK) { terminated = true;
-        }
-        if (stmt.type == NODE_CONTINUE) { terminated = true;
-        }
-
         last_res = compile_node(c, stmts[i]);
         if (stmt.type == NODE_RETURN || stmt.type == NODE_BREAK || stmt.type == NODE_CONTINUE) { 
             terminated = true;
@@ -1339,10 +1434,6 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
     let target_type_id -> Int = resolve_type(c, node.type_node);
 
     if (target_type_id == TYPE_AUTO) {
-        if (node.value is null) {
-            WhitelangExceptions.throw_type_error(node.pos, "Cannot infer 'Auto' type without an initializer.");
-            return void_result();
-        }
         target_type_id = get_expr_type(c, node.value);
         if (target_type_id == 0 || target_type_id == TYPE_AUTO) {
             WhitelangExceptions.throw_type_error(node.pos, "Failed to statically infer type for 'Auto'.");
@@ -1390,30 +1481,38 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 init_val_str = "null";
             }
             else if (val_node.type == NODE_NULL) {
-                if (is_pointer_type(c, target_type_id) == true) {
-                WhitelangExceptions.throw_invalid_syntax(node.pos, "Global 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
-                return void_result();
+                    if (is_pointer_type(c, target_type_id) == true) {
+                    WhitelangExceptions.throw_invalid_syntax(node.pos, "Global 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
+                    return void_result();
                 }
-                if (target_type_id == TYPE_INT || target_type_id == TYPE_FLOAT || target_type_id == TYPE_BOOL) {
-                WhitelangExceptions.throw_type_error(node.pos, "Primitive types cannot be null.");
-                return void_result();
+                    if (target_type_id == TYPE_INT || target_type_id == TYPE_FLOAT || target_type_id == TYPE_BOOL || target_type_id == TYPE_CHAR) {
+                    WhitelangExceptions.throw_type_error(node.pos, "Primitive types cannot be null.");
+                    return void_result();
                 }
                 init_val_str = "null";
             }
-            else if (val_node.type == NODE_INT) {
-                let n -> IntNode = node.value;
-                init_val_str = n.tok.value;
-                if (target_type_id == TYPE_FLOAT) { WhitelangExceptions.throw_type_error(node.pos, "Type mismatch (Int -> Float). "); }
-            } else if (val_node.type == NODE_FLOAT) {
+            else if (target_type_id == TYPE_INT || target_type_id == TYPE_LONG || target_type_id == TYPE_BYTE) {
+                let folded_val -> Int = eval_const_int(c, val_node, node.pos);
+                init_val_str = "" + folded_val;
+            }
+            else if (target_type_id == TYPE_CHAR) {
+                if (val_node.type != NODE_CHAR) {
+                    WhitelangExceptions.throw_type_error(node.pos, "Type mismatch. Expected Char literal for Char type.");
+                    return void_result();
+                }
+                let cn -> CharNode = node.value;
+                init_val_str = "" + string_to_int(cn.tok.value);
+            }
+            else if (target_type_id == TYPE_BOOL) {
+                let folded_val -> Int = eval_const_bool(c, val_node, node.pos);
+                if (folded_val == 1) { init_val_str = "1"; } else { init_val_str = "0"; }
+            }
+            else if (val_node.type == NODE_FLOAT) {
                 let n -> FloatNode = node.value;
                 init_val_str = n.tok.value;
                 if (target_type_id != TYPE_FLOAT) { WhitelangExceptions.throw_type_error(node.pos, "Type mismatch (Float -> Int). "); }
-            } else if (val_node.type == NODE_BOOL) {
-                let n -> BooleanNode = node.value;
-                if (n.value == 1) { init_val_str = "1"; } else { init_val_str = "0"; }
-                if (target_type_id != TYPE_BOOL) { WhitelangExceptions.throw_type_error(node.pos, "Type mismatch. "); }
             } else {
-                WhitelangExceptions.throw_invalid_syntax(node.pos, "Global variable initialisation must be a constant literal. ");
+                WhitelangExceptions.throw_invalid_syntax(node.pos, "Global variable initialisation must be a compile-time constant expression. ");
                 return void_result();
             }
         }
@@ -2262,7 +2361,7 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
                 WhitelangExceptions.throw_type_error(node.pos, "null cannot be returned for explicit pointer types. Use 'nullptr'.");
                 return void_result();
             }
-            if (c.current_ret_type == TYPE_INT || c.current_ret_type == TYPE_FLOAT || c.current_ret_type == TYPE_BOOL || c.current_ret_type == TYPE_BYTE) {
+            if (c.current_ret_type == TYPE_INT || c.current_ret_type == TYPE_FLOAT || c.current_ret_type == TYPE_BOOL || c.current_ret_type == TYPE_BYTE || c.current_ret_type == TYPE_LONG || c.current_ret_type == TYPE_CHAR) {
                 WhitelangExceptions.throw_type_error(node.pos, "Primitive types cannot be null.");
                 return void_result();
             }
@@ -2501,7 +2600,6 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
 
     let info -> StructInfo = c.struct_table.get(class_name);
 
-    let parent_info -> StructInfo = null;
     let parent_info -> StructInfo = null;
     if (node.parent_tok is !null) {
         let p_name -> String = node.parent_tok.value;
@@ -3405,7 +3503,10 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
         }
     }
 
+    let old_exp -> Int = c.expected_type;
+    c.expected_type = TYPE_INT;
     let index_res -> CompileResult = compile_node(c, node.index_node);
+    c.expected_type = old_exp;
     
     // idx type
     if (index_res.type != TYPE_INT) {
@@ -3551,7 +3652,10 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
         }
     }
 
+    let old_exp -> Int = c.expected_type;
+    c.expected_type = TYPE_INT;
     let index_res -> CompileResult = compile_node(c, node.index_node);
+    c.expected_type = old_exp;
     
     if (index_res.type != TYPE_INT) {
         WhitelangExceptions.throw_type_error(node.pos, "Index must be an Integer.");
@@ -3706,9 +3810,13 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
 }
 
 func compile_slice_access(c -> Compiler, node -> SliceAccessNode) -> CompileResult {
+    let old_exp -> Int = c.expected_type;
+    c.expected_type = 0;
     let target_res -> CompileResult = compile_node(c, node.target);
+    c.expected_type = TYPE_INT;
     let start_res -> CompileResult = compile_node(c, node.start_idx);
     let end_res -> CompileResult = compile_node(c, node.end_idx);
+    c.expected_type = old_exp;
     
     if (target_res.type == TYPE_STRING) {
         let call_reg -> String = next_reg(c);
@@ -3843,6 +3951,218 @@ func compile_map_lit(c -> Compiler, lit_node -> Struct) -> CompileResult {
     return CompileResult(reg=dict_res.reg, type=dict_info.type_id, origin_type=0);
 }
 
+func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> CompileResult {
+    if (node is null) { return null; }
+    let base -> BaseNode = node;
+
+    if (base.type == NODE_VAR_ACCESS) {
+        let v -> VarAccessNode = node;
+        let name -> String = v.name_tok.value;
+
+        let info -> SymbolInfo = find_symbol(c, name);
+        if (info is !null) {
+            return CompileResult(reg=info.reg, type=info.type, origin_type=info.origin_type);
+        }
+
+        let f_info -> FuncInfo = c.func_table.get(name);
+        if (f_info is null && c.current_package_prefix != "") {
+            f_info = c.func_table.get(c.current_package_prefix + name);
+        }
+        if (f_info is !null) {
+            let specific_type_id -> Int = get_func_type_id(c, f_info.ret_type);
+            let sig -> String = get_func_sig_str(c, f_info);
+            let func_ptr -> String = "@" + f_info.name;
+            let cast_reg -> String = next_reg(c);
+            c.output_file.write(c.indent + cast_reg + " = bitcast " + sig + " " + func_ptr + " to i8*\n");
+
+            let clo_payload -> String = emit_alloc_obj(c, "16", "8", "i8*");
+            let clo_func_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + clo_func_ptr + " = bitcast i8* " + clo_payload + " to i8**\n");
+            c.output_file.write(c.indent + "store i8* " + cast_reg + ", i8** " + clo_func_ptr + "\n");
+            let clo_env_ptr_i8 -> String = next_reg(c);
+            c.output_file.write(c.indent + clo_env_ptr_i8 + " = getelementptr inbounds i8, i8* " + clo_payload + ", i32 8\n");
+            let clo_env_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + clo_env_ptr + " = bitcast i8* " + clo_env_ptr_i8 + " to i8**\n");
+            c.output_file.write(c.indent + "store i8* null, i8** " + clo_env_ptr + "\n");
+            return CompileResult(reg=clo_payload, type=specific_type_id);
+        }
+        
+        WhitelangExceptions.throw_name_error(v.pos, "Unknown variable or function '" + name + "'.");
+        return null;
+    }
+
+    if (base.type == NODE_INDEX_ACCESS) {
+        let ia -> IndexAccessNode = node;
+        check_out_index(c, ia.target, ia.index_node, ia.pos);
+        let target_res -> CompileResult = compile_node(c, ia.target);
+        
+        let s_info -> StructInfo = c.struct_id_map.get("" + target_res.type);
+        if (s_info is !null && s_info.is_class) {
+            WhitelangExceptions.throw_invalid_syntax(ia.pos, "Cannot take ref of overloaded class index access.");
+            return null;
+        }
+
+        let index_res -> CompileResult = compile_node(c, ia.index_node);
+        if (index_res.type != TYPE_INT) {
+            WhitelangExceptions.throw_type_error(ia.pos, "Index must be an Integer.");
+            return null;
+        }
+
+        if (is_pointer_type(c, target_res.type)) {
+            let base_info -> SymbolInfo = c.ptr_base_map.get("" + target_res.type);
+            if (base_info is !null) {
+                let elem_type -> Int = base_info.type;
+                if (elem_type == TYPE_VOID) {
+                    WhitelangExceptions.throw_type_error(ia.pos, "Cannot index 'ptr Void'.");
+                    return null;
+                }
+                let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
+                let addr_reg -> String = next_reg(c);
+                c.output_file.write(c.indent + addr_reg + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + target_res.reg + ", i32 " + index_res.reg + "\n");
+                return CompileResult(reg=addr_reg, type=elem_type, origin_type=elem_type);
+            }
+        }
+
+        let arr_info -> ArrayInfo = c.array_info_map.get("" + target_res.type);
+        if (arr_info is !null) {
+            let elem_type -> Int = arr_info.base_type;
+            let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
+            let curr_len -> String = "";
+            let data_ptr -> String = "";
+            if (arr_info.size == -1) {
+                let len_i64 -> String = next_reg(c);
+                c.output_file.write(c.indent + len_i64 + " = extractvalue " + arr_info.llvm_name + " " + target_res.reg + ", 0\n");
+                curr_len = next_reg(c);
+                c.output_file.write(c.indent + curr_len + " = trunc i64 " + len_i64 + " to i32\n");
+                data_ptr = next_reg(c);
+                c.output_file.write(c.indent + data_ptr + " = extractvalue " + arr_info.llvm_name + " " + target_res.reg + ", 1\n");
+            } else {
+                curr_len = "" + arr_info.size;
+                data_ptr = next_reg(c);
+                c.output_file.write(c.indent + data_ptr + " = getelementptr inbounds " + arr_info.llvm_name + ", " + arr_info.llvm_name + "* " + target_res.reg + ", i32 0, i32 0\n");
+            }
+            emit_array_bounds_check(c, index_res.reg, curr_len, ia.pos);
+            let ptr_reg -> String = next_reg(c);
+            c.output_file.write(c.indent + ptr_reg + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i32 " + index_res.reg + "\n");
+            return CompileResult(reg=ptr_reg, type=elem_type, origin_type=elem_type);
+        }
+
+        if (target_res.type >= 100 && c.vector_base_map.get("" + target_res.type) is !null) {
+            let v_info -> SymbolInfo = c.vector_base_map.get("" + target_res.type);
+            let elem_type -> Int = v_info.type;
+            let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
+            let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+            emit_vector_bounds_check(c, target_res.reg, index_res.reg, struct_ty, ia.pos);
+            
+            let data_field_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + target_res.reg + ", i32 0, i32 2\n");
+            let data_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
+            
+            let idx_i64 -> String = next_reg(c);
+            c.output_file.write(c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
+            
+            let slot_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + idx_i64 + "\n");
+            return CompileResult(reg=slot_ptr, type=elem_type, origin_type=elem_type);
+        }
+        
+        WhitelangExceptions.throw_type_error(ia.pos, "Type does not support l-value indexing.");
+        return null;
+    }
+
+    if (base.type == NODE_FIELD_ACCESS) {
+        let f_acc -> FieldAccessNode = node;
+        let obj_res -> CompileResult = compile_node(c, f_acc.obj);
+        let struct_type_id -> Int = obj_res.type;
+        let struct_ptr_reg -> String = obj_res.reg;
+
+        if ((struct_type_id == TYPE_GENERIC_STRUCT || struct_type_id == TYPE_GENERIC_CLASS) && obj_res.origin_type >= 100) {
+            struct_type_id = obj_res.origin_type;
+            let s_info_temp -> StructInfo = c.struct_id_map.get("" + struct_type_id);
+            if (s_info_temp is !null) {
+                let cast_reg -> String = next_reg(c);
+                c.output_file.write(c.indent + cast_reg + " = bitcast i8* " + struct_ptr_reg + " to " + s_info_temp.llvm_name + "*\n");
+                struct_ptr_reg = cast_reg;
+            }
+        }
+
+        let s_info -> StructInfo = c.struct_id_map.get("" + struct_type_id);
+        if (s_info is null) {
+            WhitelangExceptions.throw_type_error(f_acc.pos, "Cannot access field on non-struct type.");
+            return null;
+        }
+
+        if (f_acc.field_name.starts_with("__")) {
+            let class_prefix -> String = "";
+            let dot_idx -> Int = s_info.name.length() - 1;
+            while (dot_idx >= 0) {
+                if (s_info.name[dot_idx] == 46) {
+                    class_prefix = s_info.name.slice(0, dot_idx + 1);
+                    break;
+                }
+                dot_idx -= 1;
+            }
+            if (c.current_package_prefix != class_prefix) {
+                WhitelangExceptions.throw_name_error(f_acc.pos, "Member '" + f_acc.field_name + "' is private to '" + s_info.name + "'.");
+                return null;
+            }
+        }
+
+        let field -> FieldInfo = find_field(s_info, f_acc.field_name);
+        if (field is null) {
+            WhitelangExceptions.throw_name_error(f_acc.pos, "Field '" + f_acc.field_name + "' not found.");
+            return null;
+        }
+
+        let f_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + struct_ptr_reg + ", i32 0, i32 " + field.offset + "\n");
+        return CompileResult(reg=f_ptr, type=field.type, origin_type=field.type);
+    }
+
+    if (base.type == NODE_DEREF) {
+        let d_node -> DerefNode = node;
+        let res -> CompileResult = compile_node(c, d_node.node);
+        let i -> Int = 0;
+        let curr_reg -> String = res.reg;
+        let curr_type -> Int = res.type;
+
+        while (i < d_node.level - 1) { 
+            if (curr_type == TYPE_NULL) {
+                WhitelangExceptions.throw_null_dereference_error(d_node.pos, "Cannot dereference 'nullptr'.");
+                return null;
+            }
+            let base_info -> SymbolInfo = c.ptr_base_map.get("" + curr_type);
+            if (base_info is null) { 
+                WhitelangExceptions.throw_type_error(d_node.pos, "Attempt to dereference non-pointer."); 
+                return null; 
+            }
+            let next_type -> Int = base_info.type;
+            if (next_type == TYPE_VOID) {
+                WhitelangExceptions.throw_type_error(d_node.pos, "Cannot dereference 'ptr Void'.");
+                return null;
+            }
+            let ty_str -> String = get_llvm_type_str(c, next_type);
+            let next_reg -> String = next_reg(c);
+            c.output_file.write(c.indent + next_reg + " = load " + ty_str + ", " + ty_str + "* " + curr_reg + "\n");
+            
+            curr_reg = next_reg;
+            curr_type = next_type;
+            i += 1;
+        }
+        
+        let base_info -> SymbolInfo = c.ptr_base_map.get("" + curr_type);
+        if (base_info is null) { 
+            WhitelangExceptions.throw_type_error(d_node.pos, "Attempt to take ref of non-pointer deref.");
+            return null;
+        }
+        return CompileResult(reg=curr_reg, type=base_info.type, origin_type=base_info.type);
+    }
+
+    WhitelangExceptions.throw_invalid_syntax(pos, "Cannot take ref of r-value.");
+    return null;
+}
+
 func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
     let left -> CompileResult = compile_node(c, node.left);
     let op_type -> Int = node.op_tok.type; 
@@ -3971,6 +4291,35 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         let res_reg -> String = next_reg(c);
         c.output_file.write(c.indent + res_reg + " = call double @llvm.pow.f64(double " + left.reg + ", double " + right.reg + ")\n");
         return CompileResult(reg=res_reg, type=TYPE_FLOAT);
+    }
+
+    if (left.type == TYPE_CHAR || right.type == TYPE_CHAR) {
+        if (left.type != right.type) {
+            WhitelangExceptions.throw_type_error(node.pos, "Cannot mix Char with other types in binary operations.");
+            return void_result();
+        }
+
+        let is_char_cmp -> Bool = false;
+        if (op_type == TOK_EE || op_type == TOK_NE || op_type == TOK_LT || op_type == TOK_GT || op_type == TOK_LTE || op_type == TOK_GTE) {
+            is_char_cmp = true;
+        }
+        
+        if (!is_char_cmp) {
+            WhitelangExceptions.throw_type_error(node.pos, "Char type only supports comparison operators (==, !=, <, >, <=, >=).");
+            return void_result();
+        }
+
+        let op_code -> String = "";
+        if (op_type == TOK_EE) { op_code = "icmp eq"; }
+        else if (op_type == TOK_NE) { op_code = "icmp ne"; }
+        else if (op_type == TOK_GT) { op_code = "icmp ugt"; }
+        else if (op_type == TOK_LT) { op_code = "icmp ult"; }
+        else if (op_type == TOK_GTE) { op_code = "icmp uge"; }
+        else if (op_type == TOK_LTE) { op_code = "icmp ule"; }
+
+        let res_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + res_reg + " = " + op_code + " i32 " + left.reg + ", " + right.reg + "\n");
+        return CompileResult(reg=res_reg, type=TYPE_BOOL);
     }
 
     let is_cmp -> Bool = false;
@@ -4201,53 +4550,12 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     // ref
     if (base.type == NODE_REF) {
         let r_node -> RefNode = node;
-        let target -> BaseNode = r_node.node;
-        
-        if (target.type != NODE_VAR_ACCESS) {
-            WhitelangExceptions.throw_invalid_syntax(r_node.pos, "Cannot take ref of r-value.");
-            return void_result();
-        }
-        
-        let v -> VarAccessNode = r_node.node;
-        let name -> String = v.name_tok.value;
 
-        let info -> SymbolInfo = find_symbol(c, name);
-        
-        if (info is null) {
-            let f_info -> FuncInfo = c.func_table.get(name);
-            if (f_info is null && c.current_package_prefix != "") {
-                f_info = c.func_table.get(c.current_package_prefix + name);
-            }
-            if (f_info is !null) {
-                let specific_type_id -> Int = get_func_type_id(c, f_info.ret_type);
-                let sig -> String = get_func_sig_str(c, f_info);
-                let func_ptr -> String = "@" + f_info.name;
-                
-                let cast_reg -> String = next_reg(c);
-                c.output_file.write(c.indent + cast_reg + " = bitcast " + sig + " " + func_ptr + " to i8*\n");
+        let lval -> CompileResult = compile_lvalue_ptr(c, r_node.node, r_node.pos);
+        if (lval is null) { return void_result(); }
 
-                let clo_payload -> String = emit_alloc_obj(c, "16", "8", "i8*");
-                
-                let clo_func_ptr -> String = next_reg(c);
-                c.output_file.write(c.indent + clo_func_ptr + " = bitcast i8* " + clo_payload + " to i8**\n");
-                c.output_file.write(c.indent + "store i8* " + cast_reg + ", i8** " + clo_func_ptr + "\n");
-                
-                let clo_env_ptr_i8 -> String = next_reg(c);
-                c.output_file.write(c.indent + clo_env_ptr_i8 + " = getelementptr inbounds i8, i8* " + clo_payload + ", i32 8\n");
-                let clo_env_ptr -> String = next_reg(c);
-                c.output_file.write(c.indent + clo_env_ptr + " = bitcast i8* " + clo_env_ptr_i8 + " to i8**\n");
-                c.output_file.write(c.indent + "store i8* null, i8** " + clo_env_ptr + "\n");
-
-                return CompileResult(reg=clo_payload, type=specific_type_id);
-            }
-            
-            WhitelangExceptions.throw_name_error(r_node.pos, "Unknown variable or function '" + name + "'.");
-            
-            return void_result();
-        }
-
-        let ptr_id -> Int = get_ptr_type_id(c, info.type);
-        return CompileResult(reg=info.reg, type=ptr_id);
+        let ptr_id -> Int = get_ptr_type_id(c, lval.type);
+        return CompileResult(reg=lval.reg, type=ptr_id);
     }
     // deref
     if (base.type == NODE_DEREF) {
@@ -4349,7 +4657,23 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
     if (base.type == NODE_INT) {
         let n -> IntNode = node;
-        return CompileResult(reg=n.tok.value, type=TYPE_INT); 
+        let raw_val -> String = n.tok.value;
+        let parsed_val -> Int = string_to_int(raw_val);
+        let t_id -> Int = TYPE_INT;
+        if (raw_val.ends_with("L") || raw_val.ends_with("l")) {
+            t_id = TYPE_LONG;
+        } else {
+            if (c.expected_type == TYPE_BYTE) {
+                t_id = TYPE_BYTE;
+            }
+        }
+
+        return CompileResult(reg="" + parsed_val, type=t_id); 
+    }
+    if (base.type == NODE_CHAR) {
+        let cn -> CharNode = node;
+        let char_val -> Int = string_to_int(cn.tok.value);
+        return CompileResult(reg="" + char_val, type=TYPE_CHAR);
     }
     if (base.type == NODE_FLOAT) {
         let n -> FloatNode = node;
@@ -5046,6 +5370,12 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             if (operand.type == TYPE_INT) {
                 c.output_file.write(c.indent + res_reg + " = sub i32 0, " + operand.reg + "\n");
                 return CompileResult(reg=res_reg, type=TYPE_INT);
+            } else if (operand.type == TYPE_LONG) {
+                c.output_file.write(c.indent + res_reg + " = sub i64 0, " + operand.reg + "\n");
+                return CompileResult(reg=res_reg, type=TYPE_LONG);
+            } else if (operand.type == TYPE_BYTE) {
+                c.output_file.write(c.indent + res_reg + " = sub i8 0, " + operand.reg + "\n");
+                return CompileResult(reg=res_reg, type=TYPE_BYTE);
             } else if (operand.type == TYPE_FLOAT) {
                 c.output_file.write(c.indent + res_reg + " = fneg double " + operand.reg + "\n");
                 return CompileResult(reg=res_reg, type=TYPE_FLOAT);
@@ -5088,6 +5418,11 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position, origin_id -> Int) -> Void {
     if (type_id == TYPE_STRING) {
         c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + reg + ")\n");
+        return;
+    }
+
+    if (type_id == TYPE_CHAR) {
+        c.output_file.write(c.indent + "call i32 @putchar(i32 " + reg + ")\n");
         return;
     }
 
@@ -5355,6 +5690,7 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
     let label_float -> String = "var_float_" + c.type_counter;
     let label_bool -> String = "var_bool_" + c.type_counter;
     let label_string -> String = "var_string_" + c.type_counter;
+    let label_char -> String = "var_char_" + c.type_counter;
     let label_default -> String = "var_default_" + c.type_counter;
     c.type_counter += 1;
 
@@ -5365,6 +5701,7 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
     c.output_file.write("    i32 " + TYPE_FLOAT + ", label %" + label_float + "\n");
     c.output_file.write("    i32 " + TYPE_BOOL + ", label %" + label_bool + "\n");
     c.output_file.write("    i32 " + TYPE_STRING + ", label %" + label_string + "\n");
+    c.output_file.write("    i32 " + TYPE_CHAR + ", label %" + label_char + "\n");
     c.output_file.write("  ]\n");
 
     // null
@@ -5403,6 +5740,13 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
     let unboxed_str -> String = next_reg(c);
     c.output_file.write(c.indent + unboxed_str + " = inttoptr i64 " + payload_i64 + " to i8*\n");
     compile_print(c, unboxed_str, TYPE_STRING, pos, 0);
+    c.output_file.write(c.indent + "br label %" + label_end + "\n");
+
+    // Char
+    c.output_file.write("\n" + label_char + ":\n");
+    let unboxed_char -> String = next_reg(c);
+    c.output_file.write(c.indent + unboxed_char + " = trunc i64 " + payload_i64 + " to i32\n");
+    compile_print(c, unboxed_char, TYPE_CHAR, pos, 0);
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
     // other object
@@ -5471,6 +5815,9 @@ func compile_start(c -> Compiler) -> Void {
     c.output_file.write("declare i32 @printf(i8*, ...)\n");
     c.declared_externs.put("printf", StringConstant(id=0, value=""));
 
+    c.output_file.write("declare i32 @putchar(i32)\n");
+    c.declared_externs.put("putchar", StringConstant(id=0, value=""));
+
     c.output_file.write("declare i32 @snprintf(i8*, i64, i8*, ...)\n");
     c.declared_externs.put("snprintf", StringConstant(id=0, value="")); 
 
@@ -5508,6 +5855,7 @@ func compile_start(c -> Compiler) -> Void {
     c.output_file.write("@.fmt_long = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n");
     c.output_file.write("@.fmt_float = private unnamed_addr constant [4 x i8] c\"%f\\0A\\00\"\n");
     c.output_file.write("@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n\n");
+    c.output_file.write("@.fmt_char = private unnamed_addr constant [3 x i8] c\"%c\\00\"\n");
     c.output_file.write("@.fmt_hex_ptr = private unnamed_addr constant [3 x i8] c\"%p\\00\"\n");
 
     c.output_file.write("@.fmt_int_simple = private unnamed_addr constant [3 x i8] c\"%d\\00\"\n");

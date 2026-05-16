@@ -137,13 +137,17 @@ func peek_type(p -> Parser) -> Int {
     return type;
 }
 
-func String_to_Int(s -> String) -> Int {
+func parse_decimal_int(p -> Parser, tok -> Token) -> Int {
+    let s -> String = tok.value;
     let res -> Int = 0;
     let i -> Int = 0;
     while (i < s.length()) {
         let code -> Int = s[i];
         if (code >= 48 && code <= 57) {
             res = res * 10 + (code - 48);
+        } else {
+            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Pointer or dereference level must be a pure decimal integer.");
         }
         i += 1;
     }
@@ -160,7 +164,7 @@ func parse_type_base(p -> Parser) -> Struct {
         if (p.current_tok.type == TOK_MUL) {
             parser_advance(p);
             if (p.current_tok.type == TOK_INT) {
-                level = String_to_Int(p.current_tok.value);
+                level = parse_decimal_int(p, p.current_tok);
                 parser_advance(p);
             } else {
                 let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -177,7 +181,7 @@ func parse_type_base(p -> Parser) -> Struct {
     let type_node -> Struct = null;
     let start_pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
 
-    if (tt == TOK_T_INT || tt == TOK_T_FLOAT || tt == TOK_T_STRING || tt == TOK_T_BOOL || tt == TOK_T_VOID || tt == TOK_IDENTIFIER) {
+    if (tt == TOK_T_INT || tt == TOK_T_FLOAT || tt == TOK_T_STRING || tt == TOK_T_BOOL || tt == TOK_T_VOID || tt == TOK_T_CHAR || tt == TOK_IDENTIFIER) {
         if (tok.value == "Function") {
             parser_advance(p); // skip Function
             if (p.current_tok.type == TOK_LPAREN) {
@@ -330,7 +334,7 @@ func parse_typed_identifier_param(p -> Parser) -> Struct {
         if (p.current_tok.type == TOK_MUL) {
             parser_advance(p);
             if (p.current_tok.type == TOK_INT) {
-                level = String_to_Int(p.current_tok.value);
+                level = parse_decimal_int(p, p.current_tok);
                 parser_advance(p);
             } else {
                 let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -396,6 +400,13 @@ func atom(p -> Parser) -> Struct {
         parser_advance(p);
         let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
         return BooleanNode(type=NODE_BOOL, tok=tok, value=0, pos=pos); 
+    }
+
+    // Char
+    if (tok.type == TOK_CHAR_LIT) {
+        parser_advance(p);
+        let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        return CharNode(type=NODE_CHAR, tok=tok, pos=pos);
     }
 
     // String
@@ -648,7 +659,7 @@ func unary_expr(p -> Parser) -> Struct {
         if (p.current_tok.type == TOK_MUL) {
             parser_advance(p);
             if (p.current_tok.type == TOK_INT) {
-                level = String_to_Int(p.current_tok.value);
+                level = parse_decimal_int(p, p.current_tok);
                 parser_advance(p);
             } else {
                 let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);

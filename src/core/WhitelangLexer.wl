@@ -86,6 +86,37 @@ func get_string(l -> Lexer) -> Token {
     return WhitelangTokens.Token(type=TOK_STR_LIT, value=result, line=start_ln, col=start_col);
 }
 
+func get_char_literal(l -> Lexer) -> Token {
+    let start_ln -> Int = l.pos.ln;
+    let start_col -> Int = l.pos.col;
+    
+    lexer_advance(l); // skip opening '
+    let char_val -> Int = 0;
+    
+    if (l.current_char == 92) { // '\'
+        lexer_advance(l);
+        if (l.current_char == 110) { char_val = 10; } // \n
+        else if (l.current_char == 116) { char_val = 9; } // \t
+        else if (l.current_char == 114) { char_val = 13; } // \r
+        else if (l.current_char == 48) { char_val = 0; } // \0
+        else if (l.current_char == 92) { char_val = 92; } // \\
+        else if (l.current_char == 39) { char_val = 39; } // \'
+        else { char_val = l.current_char; }
+        lexer_advance(l);
+    } else {
+        char_val = l.current_char;
+        lexer_advance(l);
+    }
+    
+    if (l.current_char == 39) {
+        lexer_advance(l); // skip closing '
+    } else {
+        WhitelangExceptions.throw_illegal_char(l.pos, "Unterminated char literal.");
+    }
+
+    return WhitelangTokens.Token(type=TOK_CHAR_LIT, value="" + char_val, line=start_ln, col=start_col);
+}
+
 
 func get_number(l -> Lexer) -> Token {
     let start_line -> Int = l.pos.ln;
@@ -93,12 +124,18 @@ func get_number(l -> Lexer) -> Token {
     let start_pos  -> Int = l.pos.idx;
     
     let dot_count -> Int = 0;
-    while (l.current_char != 0 && (is_digit(l.current_char) || l.current_char == 46)) {
-        if (l.current_char == 46) {
+    while (l.current_char != 0) {
+        if (l.current_char == 46) { // .
             if (dot_count == 1) { break; }
             dot_count = 1;
+            lexer_advance(l);
+            continue;
         }
-        lexer_advance(l);
+        if (is_digit(l.current_char) || is_alpha(l.current_char)) {
+            lexer_advance(l);
+        } else {
+            break;
+        }
     }
     
     let value -> String = l.text.slice(start_pos, l.pos.idx);
@@ -131,6 +168,7 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "Int") {return WhitelangTokens.Token(type=TOK_T_INT, value=value, line=start_line, col=start_col);}
     if (value == "Float") {return WhitelangTokens.Token(type=TOK_T_FLOAT, value=value, line=start_line, col=start_col);}
     if (value == "String") {return WhitelangTokens.Token(type=TOK_T_STRING, value=value, line=start_line, col=start_col);}
+    if (value == "Char") {return WhitelangTokens.Token(type=TOK_T_CHAR, value=value, line=start_line, col=start_col);}
     if (value == "Bool") {return WhitelangTokens.Token(type=TOK_T_BOOL, value=value, line=start_line, col=start_col);}
     if (value == "Void") {return WhitelangTokens.Token(type=TOK_T_VOID, value=value, line=start_line, col=start_col);}
     if (value == "true") {return WhitelangTokens.Token(type=TOK_TRUE, value=value, line=start_line, col=start_col);}
@@ -224,6 +262,9 @@ func get_next_token(l -> Lexer) -> Token {
 
         if (char == 34) {
             return get_string(l);
+        }
+        if (char == 39) {
+            return get_char_literal(l);
         }
 
         // . and ...
