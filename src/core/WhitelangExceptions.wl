@@ -82,7 +82,7 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
         let line_len -> Int = line_text.length();
         if (pos.col < line_len) {
             let ch -> Int = line_text[pos.col];
-            if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95) {
+            if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95 || (ch >= 48 && ch <= 57)) {
                 let cur -> Int = pos.col + 1;
                 while (cur < line_len) {
                     let c2 -> Int = line_text[cur];

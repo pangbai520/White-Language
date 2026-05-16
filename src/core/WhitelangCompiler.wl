@@ -81,7 +81,7 @@ func eval_const_int(c -> Compiler, node -> Struct, pos -> Position) -> Int {
     
     if (base.type == NODE_INT) {
         let n -> IntNode = node;
-        return string_to_int(n.tok.value);
+        return string_to_int(n.tok.value, n.pos);
     }
     if (base.type == NODE_UNARYOP) {
         let u -> UnaryOpNode = node;
@@ -121,7 +121,52 @@ func eval_const_int(c -> Compiler, node -> Struct, pos -> Position) -> Int {
     WhitelangExceptions.throw_invalid_syntax(pos, "Expression is not a compile-time constant integer.");
     return 0;
 }
-
+func eval_const_long(c -> Compiler, node -> Struct, pos -> Position) -> Long {
+    if (node is null) { return 0L; }
+    let base -> BaseNode = node;
+    
+    if (base.type == NODE_INT) {
+        let n -> IntNode = node;
+        return string_to_long(n.tok.value, n.pos);
+    }
+    if (base.type == NODE_UNARYOP) {
+        let u -> UnaryOpNode = node;
+        let op_str -> String = u.op_tok.value;
+        let val -> Long = eval_const_long(c, u.node, pos);
+        if (op_str == "-") { return 0L - val; }
+        if (op_str == "~") { return val ^ -1L; }
+        WhitelangExceptions.throw_type_error(pos, "Invalid unary operator for const integer.");
+        return 0L;
+    }
+    if (base.type == NODE_BINOP) {
+        let b -> BinOpNode = node;
+        let op_str -> String = b.op_tok.value;
+        let left -> Long = eval_const_long(c, b.left, pos);
+        let right -> Long = eval_const_long(c, b.right, pos);
+        
+        if (op_str == "+") { return left + right; }
+        if (op_str == "-") { return left - right; }
+        if (op_str == "*") { return left * right; }
+        if (op_str == "/") { 
+            if (right == 0L) { WhitelangExceptions.throw_zero_division_error(pos, "Compile-time division by zero."); return 0L; }
+            return left / right; 
+        }
+        if (op_str == "%") { 
+            if (right == 0L) { WhitelangExceptions.throw_zero_division_error(pos, "Compile-time modulo by zero."); return 0L; }
+            return left % right; 
+        }
+        if (op_str == "<<") { return left << right; }
+        if (op_str == ">>") { return left >> right; }
+        if (op_str == "&") { return left & right; }
+        if (op_str == "|") { return left | right; }
+        if (op_str == "^") { return left ^ right; }
+        
+        WhitelangExceptions.throw_type_error(pos, "Invalid binary operator for const integer.");
+        return 0L;
+    }
+    WhitelangExceptions.throw_invalid_syntax(pos, "Expression is not a compile-time constant integer.");
+    return 0L;
+}
 func eval_const_bool(c -> Compiler, node -> Struct, pos -> Position) -> Int {
     if (node is null) { return 0; }
     let base -> BaseNode = node;
@@ -156,8 +201,8 @@ func eval_const_bool(c -> Compiler, node -> Struct, pos -> Position) -> Int {
         }
 
         if (op_str == "==" || op_str == "!=" || op_str == "<" || op_str == ">" || op_str == "<=" || op_str == ">=") {
-            let left -> Int = eval_const_int(c, b.left, pos);
-            let right -> Int = eval_const_int(c, b.right, pos);
+            let left -> Long = eval_const_long(c, b.left, pos);
+            let right -> Long = eval_const_long(c, b.right, pos);
             if (op_str == "==") { if (left == right) { return 1; } else { return 0; } }
             if (op_str == "!=") { if (left != right) { return 1; } else { return 0; } }
             if (op_str == "<") { if (left < right) { return 1; } else { return 0; } }
@@ -926,7 +971,7 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
         let line_len -> Int = raw_line.length();
         if (pos.col < line_len) {
             let ch -> Int = raw_line[pos.col];
-            if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95) {
+            if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95 || (ch >= 48 && ch <= 57)) {
                 let cur -> Int = pos.col + 1;
                 while (cur < line_len) {
                     let c2 -> Int = raw_line[cur];
@@ -1492,7 +1537,13 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 init_val_str = "null";
             }
             else if (target_type_id == TYPE_INT || target_type_id == TYPE_LONG || target_type_id == TYPE_BYTE) {
-                let folded_val -> Int = eval_const_int(c, val_node, node.pos);
+                let expr_type -> Int = get_expr_type(c, val_node);
+                if (target_type_id != TYPE_LONG && expr_type == TYPE_LONG) {
+                    WhitelangExceptions.throw_type_error(node.pos, "Type mismatch. Expected " + get_type_name(c, target_type_id) + ", got Long.");
+                    return void_result();
+                }
+
+                let folded_val -> Long = eval_const_long(c, val_node, node.pos);
                 init_val_str = "" + folded_val;
             }
             else if (target_type_id == TYPE_CHAR) {
@@ -1501,7 +1552,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                     return void_result();
                 }
                 let cn -> CharNode = node.value;
-                init_val_str = "" + string_to_int(cn.tok.value);
+                init_val_str = "" + string_to_int(cn.tok.value, cn.pos);
             }
             else if (target_type_id == TYPE_BOOL) {
                 let folded_val -> Int = eval_const_bool(c, val_node, node.pos);
@@ -3817,7 +3868,7 @@ func compile_slice_access(c -> Compiler, node -> SliceAccessNode) -> CompileResu
     let start_res -> CompileResult = compile_node(c, node.start_idx);
     let end_res -> CompileResult = compile_node(c, node.end_idx);
     c.expected_type = old_exp;
-    
+
     if (target_res.type == TYPE_STRING) {
         let call_reg -> String = next_reg(c);
 
@@ -4658,7 +4709,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_INT) {
         let n -> IntNode = node;
         let raw_val -> String = n.tok.value;
-        let parsed_val -> Int = string_to_int(raw_val);
+        let parsed_val -> Long = string_to_long(raw_val, n.pos);
         let t_id -> Int = TYPE_INT;
         if (raw_val.ends_with("L") || raw_val.ends_with("l")) {
             t_id = TYPE_LONG;
@@ -4672,7 +4723,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     }
     if (base.type == NODE_CHAR) {
         let cn -> CharNode = node;
-        let char_val -> Int = string_to_int(cn.tok.value);
+        let char_val -> Int = string_to_int(cn.tok.value, cn.pos);
         return CompileResult(reg="" + char_val, type=TYPE_CHAR);
     }
     if (base.type == NODE_FLOAT) {

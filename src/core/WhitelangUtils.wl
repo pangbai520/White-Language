@@ -707,7 +707,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         let arr_node -> ArrayTypeNode = node;
         let base_id -> Int = resolve_type(c, arr_node.base_type);
 
-        let size -> Int = string_to_int(arr_node.size_tok.value);
+        let size -> Int = string_to_int(arr_node.size_tok.value, arr_node.pos);
 
         let cache_key -> String = "arr_" + base_id + "_" + size;
         let cached -> SymbolInfo = c.array_type_cache.get(cache_key);
@@ -911,9 +911,54 @@ func analyze_annotations(c -> Compiler, anns -> Vector(Struct)) -> Dict {
     return res;
 }
 
-func string_to_int(val_str -> String) -> Int {
+func string_to_int(val_str -> String, pos -> Position) -> Int {
     let len -> Int = val_str.length();
     if (len == 0) { return 0; }
+    let start -> Int = 0; let is_neg -> Bool = false;
+    if (val_str[0] == 45) { start = 1; is_neg = true; }
+    let end -> Int = len;
+    let last_char -> Int = val_str[len - 1];
+    if (last_char == 76 || last_char == 108) { end = len - 1; }
+
+    let base_val -> Int = 10;
+    if (end - start >= 2 && val_str[start] == 48) { 
+        let second_char -> Int = val_str[start + 1];
+        if (second_char == 120 || second_char == 88) { base_val = 16; start += 2; } 
+        else if (second_char == 98 || second_char == 66) { base_val = 2; start += 2; } 
+        else if (second_char == 111 || second_char == 79) { base_val = 8; start += 2; }
+    }
+
+    let val -> Int = 0; let j -> Int = start;
+    while (j < end) {
+        let code -> Int = val_str[j];
+        if (code == 95) { j += 1; continue; }
+        let digit -> Int = -1;
+        if (code >= 48 && code <= 57) { digit = code - 48; } 
+        else if (code >= 97 && code <= 102) { digit = code - 87; } 
+        else if (code >= 65 && code <= 70) { digit = code - 55; } 
+        
+        let is_valid -> Bool = false;
+        if (digit >= 0) {
+            if (base_val == 10 && digit < 10) { is_valid = true; }
+            else if (base_val == 16 && digit < 16) { is_valid = true; }
+            else if (base_val == 2 && digit < 2) { is_valid = true; }
+            else if (base_val == 8 && digit < 8) { is_valid = true; }
+        }
+        if is_valid {
+            val = val * base_val + digit;
+        } else {
+            WhitelangExceptions.throw_invalid_syntax(pos, "Invalid character in numeric literal '" + val_str + "'");
+            return 0;
+        }
+        j += 1;
+    }
+    if is_neg { return 0 - val; }
+    return val;
+}
+
+func string_to_long(val_str -> String, pos -> Position) -> Long {
+    let len -> Int = val_str.length();
+    if (len == 0) { return 0L; }
     
     let start -> Int = 0;
     let is_neg -> Bool = false;
@@ -929,42 +974,54 @@ func string_to_int(val_str -> String) -> Int {
         end = len - 1;
     }
 
-    let base_val -> Int = 10;
+    let base_val -> Long = 10L;
     if (end - start >= 2 && val_str[start] == 48) { 
         let second_char -> Int = val_str[start + 1];
         if (second_char == 120 || second_char == 88) { // 0x
-            base_val = 16;
+            base_val = 16L;
             start += 2;
         } else if (second_char == 98 || second_char == 66) { // 0b
-            base_val = 2;
+            base_val = 2L;
             start += 2;
         } else if (second_char == 111 || second_char == 79) { // 0o
-            base_val = 8;
+            base_val = 8L;
             start += 2;
         }
     }
 
-    let val -> Int = 0;
+    let val -> Long = 0L;
     let j -> Int = start;
     while (j < end) {
         let code -> Int = val_str[j];
-        if (code == 95) { // ignore '_' (1_000_000)
+        if (code == 95) { // ignore '_' 
             j += 1;
             continue;
         }
 
-        let digit -> Int = -1;
-        if (code >= 48 && code <= 57) { digit = code - 48; }
-        else if (code >= 97 && code <= 102) { digit = code - 87; } // a-f -> 10-15
-        else if (code >= 65 && code <= 70) { digit = code - 55; } // A-F -> 10-15
-        
-        if (digit >= 0 && digit < base_val) {
-            val = val * base_val + digit;
+        let digit -> Long = -1L;
+        if (code >= 48 && code <= 57) { digit = code - 48; } 
+        else if (code >= 97 && code <= 102) { digit = code - 87; } 
+        else if (code >= 65 && code <= 70) { digit = code - 55; } 
+
+        let is_valid -> Bool = false;
+        if (digit >= 0L) {
+            if (base_val == 10L && digit < 10L) { is_valid = true; }
+            else if (base_val == 16L && digit < 16L) { is_valid = true; }
+            else if (base_val == 2L && digit < 2L) { is_valid = true; }
+            else if (base_val == 8L && digit < 8L) { is_valid = true; }
         }
+
+        if is_valid {
+            val = val * base_val + digit;
+        } else {
+            WhitelangExceptions.throw_invalid_syntax(pos, "Invalid character in numeric literal '" + val_str + "'");
+            return 0L;
+        }
+        
         j += 1;
     }
     
-    if is_neg { return 0 - val; }
+    if is_neg { return 0L - val; }
     return val;
 }
 
@@ -1211,7 +1268,7 @@ func check_out_index(c -> Compiler, target_node -> Struct, index_node -> Struct,
     if (base_idx.type == NODE_INT) {
         let i_node -> IntNode = index_node;
         let val_str -> String = i_node.tok.value;
-        let idx_val -> Int = string_to_int(i_node.tok.value);
+        let idx_val -> Int = string_to_int(i_node.tok.value, i_node.pos);
 
         if (idx_val < 0) {
             WhitelangExceptions.throw_index_error(pos, "Negative index " + val_str + " is not supported yet.");
