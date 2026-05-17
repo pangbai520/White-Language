@@ -25,6 +25,7 @@ const TYPE_GENERIC_CLASS -> Int = 11;
 const TYPE_GENERIC_METHOD -> Int = 12;
 const TYPE_AUTO -> Int = 13;
 const TYPE_CHAR -> Int = 14;
+const TYPE_ANYPTR -> Int = 15;
 const TYPE_NULLPTR -> Int = 99;
 
 
@@ -389,6 +390,7 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_CLASS) { return "i8*"; }
     if (type_id == TYPE_GENERIC_METHOD) { return "i8*"; }
     if (type_id == TYPE_AUTO) { return "i8*"; }
+    if (type_id == TYPE_ANYPTR) { return "i8*"; }
 
     let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
     if (arr_info is !null) {
@@ -438,6 +440,7 @@ func get_type_name(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_CLASS) { return "Class"; }
     if (type_id == TYPE_GENERIC_METHOD) { return "Method"; }
     if (type_id == TYPE_AUTO) { return "Auto"; }
+    if (type_id == TYPE_ANYPTR) { return "AnyPtr"; }
 
     if (type_id >= 100) {
         let f_info -> SymbolInfo = c.func_ret_map.get("" + type_id);
@@ -470,7 +473,7 @@ func get_type_name(c -> Compiler, type_id -> Int) -> String {
 }
 
 func is_pointer_type(c -> Compiler, type_id -> Int) -> Bool {
-    if (type_id == TYPE_NULLPTR) { return true; } 
+    if (type_id == TYPE_NULLPTR || type_id == TYPE_ANYPTR) { return true; }
 
     if (type_id >= 100) {
         let key -> String = "" + type_id;
@@ -482,6 +485,7 @@ func is_pointer_type(c -> Compiler, type_id -> Int) -> Bool {
 }
 
 func is_void_ptr(c -> Compiler, type_id -> Int) -> Bool {
+    if (type_id == TYPE_ANYPTR) { return true; }
     if (type_id >= 100) {
         let base_info -> SymbolInfo = c.ptr_base_map.get("" + type_id);
         if (base_info is !null && base_info.type == TYPE_VOID) {
@@ -509,7 +513,50 @@ func is_ref_type(c -> Compiler, type_id -> Int) -> Bool {
     return false;
 }
 
+func is_integer_type(t -> Int) -> Bool {
+// Checks if the type is an integer (int, long, byte, char, etc)
+
+    return t == TYPE_INT || t == TYPE_LONG || t == TYPE_BYTE || t == TYPE_CHAR;
+}
+
+func is_numeric_type(t -> Int) -> Bool {
+// Checks if the type is a number (integer or float)
+
+    return is_integer_type(t) || t == TYPE_FLOAT;
+}
+
+func is_small_primitive_type(t -> Int) -> Bool {
+// // Checks if the type is smaller than 64 bits
+
+    return t == TYPE_INT || t == TYPE_BOOL || t == TYPE_BYTE || t == TYPE_CHAR;
+}
+
+func is_primitive_type(t -> Int) -> Bool {
+// Checks if the type is a non-nullable value type stored directly on the stack or in registers.
+
+    return is_numeric_type(t) || t == TYPE_BOOL;
+}
+
+func is_nullable_complex_type(t -> Int) -> Bool {
+// Checks if the type is a nullable reference type handled as an implicit pointer
+
+    return t == TYPE_STRING || t >= 100 || t == TYPE_GENERIC_STRUCT || t == TYPE_GENERIC_CLASS || t == TYPE_GENERIC_FUNCTION || t == TYPE_GENERIC_METHOD || t == TYPE_AUTO;
+}
+
+func is_nullable_reference_type(t -> Int) -> Bool {
+    return t == TYPE_STRING || 
+           t == TYPE_ANYPTR || 
+           t == TYPE_NULLPTR || 
+           t == TYPE_GENERIC_STRUCT || 
+           t == TYPE_GENERIC_CLASS || 
+           t == TYPE_GENERIC_FUNCTION || 
+           t == TYPE_GENERIC_METHOD || 
+           t == TYPE_AUTO || 
+           t >= 100;
+}
+
 func get_ptr_type_id(c -> Compiler, base_id -> Int) -> Int {
+    if (base_id == TYPE_VOID) { return TYPE_ANYPTR; }
     let key -> String = "ptr_" + base_id;
     let cached -> SymbolInfo = c.ptr_cache.get(key);
     if (cached is !null) { return cached.type; }
@@ -773,6 +820,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         if (name == "Class") { return TYPE_GENERIC_CLASS; }
         if (name == "Method") { return TYPE_GENERIC_METHOD; }
         if (name == "Auto") { return TYPE_AUTO; }
+        if (name == "AnyPtr") { return TYPE_ANYPTR; }
 
         let internal_info -> StructInfo = c.struct_table.get(c.current_package_prefix + name);
         if (internal_info is !null) { return internal_info.type_id; }

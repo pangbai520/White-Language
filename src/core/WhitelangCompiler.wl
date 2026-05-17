@@ -176,7 +176,7 @@ func eval_const_bool(c -> Compiler, node -> Struct, pos -> Position) -> Int {
 func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -> Int, pos -> Position) -> CompileResult {
     if (val_res is null || val_res.reg == "") {
         let dummy_reg -> String = "0";
-        if (expected_type == TYPE_STRING || expected_type >= 100 || is_pointer_type(c, expected_type)) {
+        if (is_nullable_complex_type(expected_type) || is_pointer_type(c, expected_type)) {
             dummy_reg = "null";
         } else if (expected_type == TYPE_FLOAT) {
             dummy_reg = "0.0";
@@ -205,8 +205,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         c.output_file.write(c.indent + payload_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + box_ptr + ", i32 0, i32 1\n");
         
         let payload_i64 -> String = next_reg(c);
-        if (val_res.type == TYPE_INT || val_res.type == TYPE_BOOL || val_res.type == TYPE_BYTE || val_res.type == TYPE_CHAR) {
-            
+        if (is_small_primitive_type(val_res.type)) {
             let prim_ty -> String = get_llvm_type_str(c, val_res.type);
             c.output_file.write(c.indent + payload_i64 + " = zext " + prim_ty + " " + val_res.reg + " to i64\n");
         } else if (val_res.type == TYPE_LONG) {
@@ -237,10 +236,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         let null_return_label -> String = "ret_null_" + c.type_counter;
         c.type_counter += 1;
 
-        let can_be_null -> Bool = false;
-        if (expected_type >= 100) { can_be_null = true; } 
-        if (expected_type == TYPE_STRING || expected_type == TYPE_GENERIC_STRUCT || expected_type == TYPE_GENERIC_CLASS || expected_type == TYPE_GENERIC_FUNCTION || expected_type == TYPE_GENERIC_METHOD) { can_be_null = true; }
-        if (is_pointer_type(c, expected_type)) { can_be_null = true; }
+        let can_be_null -> Bool = is_nullable_reference_type(expected_type);
 
         let is_null_ptr -> String = next_reg(c);
         c.output_file.write(c.indent + is_null_ptr + " = icmp eq " + variant_llvm + "* " + val_res.reg + ", null\n");
@@ -291,7 +287,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         c.output_file.write(c.indent + payload_i64 + " = load i64, i64* " + payload_ptr + "\n");
         
         let unboxed_reg -> String = next_reg(c);
-        if (expected_type == TYPE_INT || expected_type == TYPE_BOOL || expected_type == TYPE_BYTE || expected_type == TYPE_CHAR) {
+        if (is_small_primitive_type(expected_type)) {
             let prim_ty -> String = get_llvm_type_str(c, expected_type);
             c.output_file.write(c.indent + unboxed_reg + " = trunc i64 " + payload_i64 + " to " + prim_ty + "\n");
         } else if (expected_type == TYPE_LONG) {
@@ -317,7 +313,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
             let zero_val -> String = "0";
             if (expected_type == TYPE_FLOAT) {
                 zero_val = "0.0";
-            } else if (expected_type == TYPE_STRING || expected_type >= 100 || expected_type == TYPE_GENERIC_STRUCT || expected_type == TYPE_GENERIC_CLASS || expected_type == TYPE_GENERIC_FUNCTION || expected_type == TYPE_GENERIC_METHOD || expected_type == TYPE_AUTO || is_pointer_type(c, expected_type)) {
+            } else if (is_nullable_reference_type(expected_type)) {
                 zero_val = "null";
             }
             
@@ -341,7 +337,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
             WhitelangExceptions.throw_type_error(pos, "Keyword 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
             return CompileResult(reg="0", type=expected_type, origin_type=expected_type);
         }
-        if (expected_type == TYPE_INT || expected_type == TYPE_FLOAT || expected_type == TYPE_BOOL || expected_type == TYPE_BYTE || expected_type == TYPE_LONG || expected_type == TYPE_CHAR) {
+        if (is_primitive_type(expected_type)) {
             WhitelangExceptions.throw_type_error(pos, "Primitive types cannot be null.");
             return CompileResult(reg="0", type=expected_type, origin_type=expected_type);
         }
@@ -1462,8 +1458,8 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         }
 
         let init_val_str -> String = "0";
-        if (target_type_id == TYPE_STRING || target_type_id >= 100 || target_type_id == TYPE_GENERIC_STRUCT || target_type_id == TYPE_GENERIC_CLASS || target_type_id == TYPE_GENERIC_FUNCTION || target_type_id == TYPE_GENERIC_METHOD) { init_val_str = "null";}
-        
+        if (is_nullable_reference_type(target_type_id)) { init_val_str = "null"; }
+
         if (node.value is !null) {
             let val_node -> BaseNode = node.value;
             if (val_node.type == NODE_STRING) {
@@ -1484,7 +1480,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                     WhitelangExceptions.throw_invalid_syntax(node.pos, "Global 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
                     return void_result();
                 }
-                if (target_type_id == TYPE_INT || target_type_id == TYPE_FLOAT || target_type_id == TYPE_BOOL || target_type_id == TYPE_CHAR || target_type_id == TYPE_LONG || target_type_id == TYPE_BYTE) {
+                if (is_primitive_type(target_type_id)) {
                     WhitelangExceptions.throw_type_error(node.pos, "Primitive types cannot be null.");
                     return void_result();
                 }
@@ -1930,7 +1926,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         } else {
             let zero_val -> String = "0";
             if (ret_type_id == TYPE_FLOAT) { zero_val = "0.0"; }
-            else if (ret_type_id == TYPE_STRING || ret_type_id >= 100 || ret_type_id == TYPE_GENERIC_STRUCT || ret_type_id == TYPE_GENERIC_CLASS || ret_type_id == TYPE_GENERIC_FUNCTION || ret_type_id == TYPE_GENERIC_METHOD) { zero_val = "null"; }
+            else if (is_nullable_reference_type(ret_type_id)) { zero_val = "null"; }
             
             c.output_file.write(c.indent + "ret " + llvm_ret_type + " " + zero_val + "\n");
         }
@@ -2029,7 +2025,7 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
         } else {
             let zero_val -> String = "0";
             if (ret_type_id == TYPE_FLOAT) { zero_val = "0.0"; }
-            else if (ret_type_id == TYPE_STRING || ret_type_id >= 100 || ret_type_id == TYPE_GENERIC_STRUCT || ret_type_id == TYPE_GENERIC_FUNCTION) { zero_val = "null"; }
+            else if (is_nullable_reference_type(ret_type_id)) { zero_val = "null"; }
             c.output_file.write(c.indent + "ret " + llvm_ret_type + " " + zero_val + "\n");
         }
     }
@@ -2313,7 +2309,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     } else {
         let zero_val -> String = "0";
         if (ret_type_id == TYPE_FLOAT) { zero_val = "0.0"; }
-        else if (ret_type_id == TYPE_STRING || ret_type_id >= 100 || ret_type_id == TYPE_GENERIC_STRUCT || ret_type_id == TYPE_GENERIC_FUNCTION) { zero_val = "null"; }
+        else if (is_nullable_reference_type(ret_type_id)) { zero_val = "null"; }
         c.output_file.write("  ret " + ret_ty_str + " " + zero_val + "\n");
     }
     c.output_file.write("}\n\n");
@@ -2377,7 +2373,7 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
                 WhitelangExceptions.throw_type_error(node.pos, "null cannot be returned for explicit pointer types. Use 'nullptr'.");
                 return void_result();
             }
-            if (c.current_ret_type == TYPE_INT || c.current_ret_type == TYPE_FLOAT || c.current_ret_type == TYPE_BOOL || c.current_ret_type == TYPE_BYTE || c.current_ret_type == TYPE_LONG || c.current_ret_type == TYPE_CHAR) {
+            if (is_primitive_type(c.current_ret_type)) {
                 WhitelangExceptions.throw_type_error(node.pos, "Primitive types cannot be null.");
                 return void_result();
             }
@@ -2475,7 +2471,7 @@ func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode
         c.output_file.write(c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_ptr + ", i32 0, i32 " + f_curr.offset + "\n");
         let zero_val -> String = "0";
         if (f_curr.type == TYPE_FLOAT) { zero_val = "0.0"; }
-        else if (f_curr.type == TYPE_STRING || f_curr.type >= 100 || f_curr.type == TYPE_GENERIC_STRUCT || f_curr.type == TYPE_GENERIC_FUNCTION) { zero_val = "null"; }
+        else if (is_nullable_reference_type(f_curr.type)) { zero_val = "null"; }
         
         c.output_file.write(c.indent + "store " + f_curr.llvm_type + " " + zero_val + ", " + f_curr.llvm_type + "* " + f_ptr + "\n");
         
@@ -2549,7 +2545,7 @@ func compile_class_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode)
         } else {
             let zero_val -> String = "0";
             if (f_curr.type == TYPE_FLOAT) { zero_val = "0.0"; }
-            else if (f_curr.type == TYPE_STRING || f_curr.type >= 100 || f_curr.type == TYPE_GENERIC_STRUCT || f_curr.type == TYPE_GENERIC_FUNCTION) { zero_val = "null"; }
+            else if (is_nullable_reference_type(f_curr.type)) { zero_val = "null"; }
             
             c.output_file.write(c.indent + "store " + f_curr.llvm_type + " " + zero_val + ", " + f_curr.llvm_type + "* " + f_ptr + "\n");
         }
@@ -4644,7 +4640,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             WhitelangExceptions.throw_type_error(b_node.pos, "Cannot use 'nullptr' with non-pointer types.");
             return void_result();
         }
-        if (lhs_res.type == TYPE_INT || lhs_res.type == TYPE_FLOAT || lhs_res.type == TYPE_BOOL || lhs_res.type == TYPE_BYTE || lhs_res.type == TYPE_LONG || lhs_res.type == TYPE_CHAR) {
+        if (is_primitive_type(lhs_res.type)) {
             WhitelangExceptions.throw_type_error(b_node.pos, "Operator 'is' cannot be used with primitive types.");
             return void_result();
         }
@@ -5482,7 +5478,7 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
         return;
     }
 
-    if (type_id == TYPE_INT || type_id == TYPE_LONG || type_id == TYPE_FLOAT || type_id == TYPE_BOOL || type_id == TYPE_BYTE) {
+    else if (is_primitive_type(type_id)) {
         let temp_res -> CompileResult = CompileResult(reg=reg, type=type_id, origin_type=origin_id);
         let str_res -> CompileResult = convert_to_string(c, temp_res);
         c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + str_res.reg + ")\n");
