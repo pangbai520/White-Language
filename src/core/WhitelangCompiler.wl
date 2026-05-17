@@ -653,6 +653,10 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
             let raw_name -> String = f_node.name_tok.value;
             
             let ret_type_id -> Int = resolve_type(c, f_node.ret_type_tok);
+            if (ret_type_id == TYPE_AUTO) {
+                WhitelangExceptions.throw_type_error(f_node.pos, "Auto return type deduction is not supported yet.");
+                return;
+            }
             let arg_types -> Vector(Struct) = [];
             
             let params -> Vector(Struct) = f_node.params;
@@ -662,6 +666,10 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
             while (p_idx < p_len) {
                 let p -> ParamNode = params[p_idx];
                 let p_id -> Int = resolve_type(c, p.type_tok);
+                if (p_id == TYPE_AUTO) {
+                    WhitelangExceptions.throw_type_error(p.pos, "Auto cannot be used in function parameters.");
+                    return;
+                }
                 arg_types.append(TypeListNode(type=p_id));
                 p_idx += 1;
             }
@@ -703,6 +711,10 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                 let m_raw_name -> String = m_node.name_tok.value;
 
                 let ret_id -> Int = resolve_type(c, m_node.return_type);
+                if (ret_id == TYPE_AUTO) { 
+                    WhitelangExceptions.throw_type_error(m_node.pos, "Auto return type deduction is not supported in methods."); 
+                    return; 
+                }
                 let arg_types -> Vector(Struct) = [];
 
                 arg_types.append(TypeListNode(type=class_type_id));
@@ -713,6 +725,10 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                 while (p_idx < p_len) {
                     let p -> ParamNode = p_vec[p_idx];
                     let p_type -> Int = resolve_type(c, p.type_tok);
+                    if (p_type == TYPE_AUTO) { 
+                        WhitelangExceptions.throw_type_error(p.pos, "Auto cannot be used in method parameters."); 
+                        return; 
+                    }
                     arg_types.append(TypeListNode(type=p_type));
                     p_idx += 1;
                 }
@@ -2247,6 +2263,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     
     let lambda_name -> String = "lambda." + func_def.name_tok.value + "." + env_id;
     let ret_type_id -> Int = resolve_type(c, func_def.ret_type_tok);
+    if (ret_type_id == TYPE_AUTO) { WhitelangExceptions.throw_type_error(func_def.pos, "Auto return type deduction is not supported in closures."); return void_result(); }
     let ret_ty_str -> String = get_llvm_type_str(c, ret_type_id);
     let specific_type_id -> Int = get_func_type_id(c, ret_type_id);
     
@@ -2434,8 +2451,12 @@ func compile_struct_def(c -> Compiler, node -> StructDefNode) -> CompileResult {
     while (idx < f_len) {
         let p -> ParamNode = fields[idx];
         let f_name -> String = p.name_tok.value;
-        
         let f_type_id -> Int = resolve_type(c, p.type_tok);
+        if (f_type_id == TYPE_AUTO) {
+            WhitelangExceptions.throw_type_error(node.pos, "Struct fields cannot use 'Auto' because they lack initializers for static deduction.");
+            return void_result();
+        }
+
         let f_llvm_type -> String = get_llvm_type_str(c, f_type_id);
         if (idx > 0) { llvm_body = llvm_body + ", "; }
         llvm_body += f_llvm_type;
@@ -2666,6 +2687,15 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
         let p -> VarDeclareNode = my_fields[mf_idx];
         let f_name -> String = p.name_tok.value;
         let f_type_id -> Int = resolve_type(c, p.type_node);
+
+        if (f_type_id == TYPE_AUTO) {
+            f_type_id = get_expr_type(c, p.value);
+            if (f_type_id == 0 || f_type_id == TYPE_AUTO) {
+                WhitelangExceptions.throw_type_error(p.pos, "Failed to statically infer type for 'Auto' in class field '" + f_name + "'.");
+                return void_result();
+            }
+        }
+
         let f_llvm_type -> String = get_llvm_type_str(c, f_type_id);
         
         if (current_offset > 0) { llvm_body += ", "; }
@@ -3089,6 +3119,7 @@ func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResu
 func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult {
     let func_name -> String = node.name_tok.value;
     let ret_type_id -> Int = resolve_type(c, node.ret_type_tok);
+    if (ret_type_id == TYPE_AUTO) { WhitelangExceptions.throw_type_error(node.pos, "Extern C functions cannot use Auto."); return void_result(); }
     
     let arg_types -> Vector(Struct) = [];
     
@@ -3102,6 +3133,7 @@ func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult
     while (p_idx < p_len) {
         let p -> ParamNode = params[p_idx];
         let p_id -> Int = resolve_type(c, p.type_tok);
+        if (p_id == TYPE_AUTO) { WhitelangExceptions.throw_type_error(p.pos, "Extern C functions cannot use Auto parameters."); return void_result(); }
         
         arg_types.append(TypeListNode(type=p_id));
         

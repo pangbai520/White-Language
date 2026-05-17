@@ -389,7 +389,6 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_FUNCTION) { return "i8*"; }
     if (type_id == TYPE_GENERIC_CLASS) { return "i8*"; }
     if (type_id == TYPE_GENERIC_METHOD) { return "i8*"; }
-    if (type_id == TYPE_AUTO) { return "i8*"; }
     if (type_id == TYPE_ANYPTR) { return "i8*"; }
 
     let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
@@ -501,7 +500,6 @@ func is_ref_type(c -> Compiler, type_id -> Int) -> Bool {
     if (type_id == TYPE_GENERIC_FUNCTION) { return true; }
     if (type_id == TYPE_GENERIC_CLASS) { return true; }
     if (type_id == TYPE_GENERIC_METHOD) { return true; }
-    if (type_id == TYPE_AUTO) { return true; }
 
     if (type_id >= 100) {
         if (c.array_info_map.get("" + type_id) is !null) { return false; }
@@ -551,7 +549,6 @@ func is_nullable_reference_type(t -> Int) -> Bool {
            t == TYPE_GENERIC_CLASS || 
            t == TYPE_GENERIC_FUNCTION || 
            t == TYPE_GENERIC_METHOD || 
-           t == TYPE_AUTO || 
            t >= 100;
 }
 
@@ -651,8 +648,15 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
         let callee -> BaseNode = call_node.callee;
         if (callee.type == NODE_VAR_ACCESS) {
             let v -> VarAccessNode = call_node.callee;
-            let f_info -> FuncInfo = c.func_table.get(v.name_tok.value);
+            let callee_name -> String = v.name_tok.value;
+
+            let f_info -> FuncInfo = c.func_table.get(callee_name);
+            if (f_info is null && c.current_package_prefix != "") { f_info = c.func_table.get(c.current_package_prefix + callee_name); }
             if (f_info is !null) { return f_info.ret_type; }
+
+            let s_info -> StructInfo = c.struct_table.get(callee_name);
+            if (s_info is null && c.current_package_prefix != "") { s_info = c.struct_table.get(c.current_package_prefix + callee_name); }
+            if (s_info is !null) { return s_info.type_id; }
         }
         return 0;
     }
