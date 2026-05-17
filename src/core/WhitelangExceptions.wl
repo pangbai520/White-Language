@@ -171,6 +171,10 @@ func throw_zero_division_error(pos -> Position, details -> String) -> Void {
     report_error(pos, "ZeroDivisionError", details);
 }
 
+func throw_overflow_error(pos -> Position, details -> String) -> Void {
+    report_error(pos, "OverflowError", details);
+}
+
 func throw_missing_main_function() -> Void { // special
     builtin.print("MissingMainFunction: No 'main' function defined.");
     abort_and_clean(1);

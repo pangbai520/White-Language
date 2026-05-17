@@ -74,53 +74,6 @@ func promote_to_int(c -> Compiler, res -> CompileResult) -> CompileResult {
     return CompileResult(reg=zext_reg, type=TYPE_INT);
 }
 
-
-func eval_const_int(c -> Compiler, node -> Struct, pos -> Position) -> Int {
-    if (node is null) { return 0; }
-    let base -> BaseNode = node;
-    
-    if (base.type == NODE_INT) {
-        let n -> IntNode = node;
-        return string_to_int(n.tok.value, n.pos);
-    }
-    if (base.type == NODE_UNARYOP) {
-        let u -> UnaryOpNode = node;
-        let op_str -> String = u.op_tok.value;
-        let val -> Int = eval_const_int(c, u.node, pos);
-        if (op_str == "-") { return 0 - val; }
-        if (op_str == "~") { return val ^ -1; }
-        WhitelangExceptions.throw_type_error(pos, "Invalid unary operator for const integer.");
-        return 0;
-    }
-    if (base.type == NODE_BINOP) {
-        let b -> BinOpNode = node;
-        let op_str -> String = b.op_tok.value;
-        let left -> Int = eval_const_int(c, b.left, pos);
-        let right -> Int = eval_const_int(c, b.right, pos);
-        
-        if (op_str == "+") { return left + right; }
-        if (op_str == "-") { return left - right; }
-        if (op_str == "*") { return left * right; }
-        if (op_str == "/") { 
-            if (right == 0) { WhitelangExceptions.throw_zero_division_error(pos, "Compile-time division by zero."); return 0; }
-            return left / right; 
-        }
-        if (op_str == "%") { 
-            if (right == 0) { WhitelangExceptions.throw_zero_division_error(pos, "Compile-time modulo by zero."); return 0; }
-            return left % right; 
-        }
-        if (op_str == "<<") { return left << right; }
-        if (op_str == ">>") { return left >> right; }
-        if (op_str == "&") { return left & right; }
-        if (op_str == "|") { return left | right; }
-        if (op_str == "^") { return left ^ right; }
-        
-        WhitelangExceptions.throw_type_error(pos, "Invalid binary operator for const integer.");
-        return 0;
-    }
-    WhitelangExceptions.throw_invalid_syntax(pos, "Expression is not a compile-time constant integer.");
-    return 0;
-}
 func eval_const_long(c -> Compiler, node -> Struct, pos -> Position) -> Long {
     if (node is null) { return 0L; }
     let base -> BaseNode = node;
@@ -398,6 +351,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
     if (expected_type == TYPE_INT && val_res.type == TYPE_BYTE) { return promote_to_int(c, val_res); }
     if (expected_type == TYPE_LONG && val_res.type == TYPE_INT) { return promote_to_long(c, val_res); }
     if (expected_type == TYPE_FLOAT && val_res.type == TYPE_INT) { return promote_to_float(c, val_res); }
+    if (expected_type == TYPE_FLOAT && val_res.type == TYPE_LONG) { return promote_to_float(c, val_res); }
 
     if (expected_type == TYPE_INT && val_res.type == TYPE_BOOL) {
         let zext_reg -> String = next_reg(c);
@@ -1519,18 +1473,18 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 init_val_str = get_string_ptr(s_id, s_val);
             }
             else if (val_node.type == NODE_NULLPTR) {
-                if (is_pointer_type(c, target_type_id) == false) {
+                if (!is_pointer_type(c, target_type_id)) {
                     WhitelangExceptions.throw_invalid_syntax(node.pos, "Global 'nullptr' can only be assigned to pointer types.");
                     return void_result();
                 }
                 init_val_str = "null";
             }
             else if (val_node.type == NODE_NULL) {
-                    if (is_pointer_type(c, target_type_id) == true) {
+                if (is_pointer_type(c, target_type_id)) {
                     WhitelangExceptions.throw_invalid_syntax(node.pos, "Global 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
                     return void_result();
                 }
-                    if (target_type_id == TYPE_INT || target_type_id == TYPE_FLOAT || target_type_id == TYPE_BOOL || target_type_id == TYPE_CHAR) {
+                if (target_type_id == TYPE_INT || target_type_id == TYPE_FLOAT || target_type_id == TYPE_BOOL || target_type_id == TYPE_CHAR || target_type_id == TYPE_LONG || target_type_id == TYPE_BYTE) {
                     WhitelangExceptions.throw_type_error(node.pos, "Primitive types cannot be null.");
                     return void_result();
                 }
@@ -1544,6 +1498,17 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 }
 
                 let folded_val -> Long = eval_const_long(c, val_node, node.pos);
+                if (target_type_id == TYPE_BYTE) {
+                    if (folded_val < 0L || folded_val > 255L) {
+                        WhitelangExceptions.throw_overflow_error(node.pos, "Global constant overflows Byte type valid range (0~255).");
+                        return void_result();
+                    }
+                } else if (target_type_id == TYPE_INT) {
+                    if (folded_val < -2147483648L || folded_val > 2147483647L) {
+                        WhitelangExceptions.throw_overflow_error(node.pos, "Global constant overflows 32-bit Int range.");
+                        return void_result();
+                    }
+                }
                 init_val_str = "" + folded_val;
             }
             else if (target_type_id == TYPE_CHAR) {
@@ -2402,13 +2367,13 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
         let target_ty -> String = get_llvm_type_str(c, c.current_ret_type);
 
         if (res.type == TYPE_NULLPTR) {
-            if (is_pointer_type(c, c.current_ret_type) == false) {
+            if (!is_pointer_type(c, c.current_ret_type)) {
                 WhitelangExceptions.throw_type_error(node.pos, "nullptr can only be returned for explicit pointer types.");
                 return void_result();
             }
             res.type = c.current_ret_type;
         } else if (res.type == TYPE_NULL) {
-            if (is_pointer_type(c, c.current_ret_type) == true) {
+            if (is_pointer_type(c, c.current_ret_type)) {
                 WhitelangExceptions.throw_type_error(node.pos, "null cannot be returned for explicit pointer types. Use 'nullptr'.");
                 return void_result();
             }
@@ -4679,7 +4644,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             WhitelangExceptions.throw_type_error(b_node.pos, "Cannot use 'nullptr' with non-pointer types.");
             return void_result();
         }
-        if (lhs_res.type == TYPE_INT || lhs_res.type == TYPE_FLOAT || lhs_res.type == TYPE_BOOL || lhs_res.type == TYPE_BYTE) {
+        if (lhs_res.type == TYPE_INT || lhs_res.type == TYPE_FLOAT || lhs_res.type == TYPE_BOOL || lhs_res.type == TYPE_BYTE || lhs_res.type == TYPE_LONG || lhs_res.type == TYPE_CHAR) {
             WhitelangExceptions.throw_type_error(b_node.pos, "Operator 'is' cannot be used with primitive types.");
             return void_result();
         }
@@ -4711,11 +4676,46 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         let raw_val -> String = n.tok.value;
         let parsed_val -> Long = string_to_long(raw_val, n.pos);
         let t_id -> Int = TYPE_INT;
+
+        let has_l_suffix -> Bool = false;
         if (raw_val.ends_with("L") || raw_val.ends_with("l")) {
             t_id = TYPE_LONG;
         } else {
-            if (c.expected_type == TYPE_BYTE) {
+            if (c.expected_type == TYPE_LONG) {
+                t_id = TYPE_LONG;
+            }
+            else if (c.expected_type == TYPE_BYTE) {
+                if (parsed_val < 0L || parsed_val > 255L) {
+                    WhitelangExceptions.throw_overflow_error(n.pos, "Literal '" + raw_val + "' overflows Byte type valid range (0~255).");
+                    return void_result();
+                }
                 t_id = TYPE_BYTE;
+            }
+            else if (c.expected_type == TYPE_INT) {
+                if (parsed_val < -2147483648L || parsed_val > 2147483647L) {
+                    WhitelangExceptions.throw_overflow_error(n.pos, "Literal '" + raw_val + "' overflows 32-bit Int range. Use 'L' suffix or assign to a Long type.");
+                    return void_result();
+                }
+                t_id = TYPE_INT;
+            }
+            else if (c.expected_type == TYPE_FLOAT) {
+                if (parsed_val < -2147483648L || parsed_val > 2147483647L) {
+                    t_id = TYPE_LONG;
+                } else {
+                    t_id = TYPE_INT;
+                }
+            }
+            else {
+                if (parsed_val < -2147483648L || parsed_val > 2147483647L) {
+                    if (c.expected_type == 0) {
+                        t_id = TYPE_LONG;
+                    } else {
+                        WhitelangExceptions.throw_overflow_error(n.pos, "Literal '" + raw_val + "' overflows 32-bit Int range.");
+                        return void_result();
+                    }
+                } else {
+                    t_id = TYPE_INT;
+                }
             }
         }
 
@@ -5063,6 +5063,11 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                     }
                     let arg_val -> CompileResult = compile_node(c, arg_node_curr.val);
 
+                    if (arg_val.type >= 100) {
+                        WhitelangExceptions.throw_type_error(n_call.pos, "Cannot pass complex types (Struct/Array/Vector) directly to C varargs functions.");
+                        return void_result();
+                    }
+
                     if (arg_val.type == TYPE_BYTE) {
                         arg_val = promote_to_int(c, arg_val);
                     }
@@ -5090,7 +5095,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 arg_val = emit_implicit_cast(c, arg_val, expected_type, n_call.pos);
 
                 let ty_str -> String = get_llvm_type_str(c, arg_val.type);
-                if (is_first == false) { args_str = args_str + ", "; }
+                if (!is_first) { args_str = args_str + ", "; }
                 args_str += ty_str + " " + arg_val.reg;
                 is_first = false;
                 

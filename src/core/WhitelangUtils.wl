@@ -707,6 +707,12 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         let arr_node -> ArrayTypeNode = node;
         let base_id -> Int = resolve_type(c, arr_node.base_type);
 
+        let parsed_size -> Long = string_to_long(arr_node.size_tok.value, arr_node.pos);
+        if (parsed_size < 0L || parsed_size > 2147483647L) {
+            WhitelangExceptions.throw_overflow_error(arr_node.pos, "Array size overflows maximum allowed 32-bit limit.");
+            return 0;
+        }
+
         let size -> Int = string_to_int(arr_node.size_tok.value, arr_node.pos);
 
         let cache_key -> String = "arr_" + base_id + "_" + size;
@@ -1268,7 +1274,7 @@ func check_out_index(c -> Compiler, target_node -> Struct, index_node -> Struct,
     if (base_idx.type == NODE_INT) {
         let i_node -> IntNode = index_node;
         let val_str -> String = i_node.tok.value;
-        let idx_val -> Int = string_to_int(i_node.tok.value, i_node.pos);
+        let idx_val -> Long = string_to_long(i_node.tok.value, i_node.pos);
 
         if (idx_val < 0) {
             WhitelangExceptions.throw_index_error(pos, "Negative index " + val_str + " is not supported yet.");
