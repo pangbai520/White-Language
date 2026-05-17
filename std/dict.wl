@@ -3,8 +3,8 @@
 // Forced 2^n capacity so we can use bitmasking instead of slow modulo ops.
 
 extern "C" {
-    func calloc(num -> Long, size -> Long) -> ptr Void;
-    func free(ptr p -> Void) -> Void;
+    func calloc(num -> Long, size -> Long) -> AnyPtr;
+    func free(p -> AnyPtr) -> Void;
     func strcmp(s1 -> String, s2 -> String) -> Int;
 }
 

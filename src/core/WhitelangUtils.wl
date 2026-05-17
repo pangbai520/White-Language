@@ -556,7 +556,6 @@ func is_nullable_reference_type(t -> Int) -> Bool {
 }
 
 func get_ptr_type_id(c -> Compiler, base_id -> Int) -> Int {
-    if (base_id == TYPE_VOID) { return TYPE_ANYPTR; }
     let key -> String = "ptr_" + base_id;
     let cached -> SymbolInfo = c.ptr_cache.get(key);
     if (cached is !null) { return cached.type; }
@@ -733,6 +732,11 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         }
 
         let base_id -> Int = resolve_type(c, p_node.base_type);
+
+        if (base_id == TYPE_VOID) {
+            WhitelangExceptions.throw_type_error(p_node.pos, "Cannot create a pointer to 'Void' (it has no size and no value), use 'AnyPtr' instead.");
+            return TYPE_ANYPTR;
+        }
         
         let current_id -> Int = base_id;
         let i -> Int = 0;

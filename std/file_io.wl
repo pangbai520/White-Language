@@ -4,13 +4,13 @@
 // This file provides high-level abstractions over C stdio file operations.
 
 extern "C" {
-    func fopen(filename -> String, mode -> String) -> ptr Void;
-    func fclose(ptr stream -> Void) -> Int;
-    func fread(p -> String, size -> Long, count -> Long, ptr stream -> Void) -> Long;
-    func fwrite(p -> String, size -> Long, count -> Long, ptr stream -> Void) -> Long;
-    func fseek(ptr stream -> Void, offset -> Long, origin -> Int) -> Int;
-    func ftell(ptr stream -> Void) -> Long;
-    func rewind(ptr stream -> Void) -> Void;
+    func fopen(filename -> String, mode -> String) -> AnyPtr;
+    func fclose(stream -> AnyPtr) -> Int;
+    func fread(p -> String, size -> Long, count -> Long, stream -> AnyPtr) -> Long;
+    func fwrite(p -> String, size -> Long, count -> Long, stream -> AnyPtr) -> Long;
+    func fseek(stream -> AnyPtr, offset -> Long, origin -> Int) -> Int;
+    func ftell(stream -> AnyPtr) -> Long;
+    func rewind(stream -> AnyPtr) -> Void;
     func remove(filename -> String) -> Int;
 
     func wl_alloc_string(size -> Long) -> String;
@@ -23,12 +23,12 @@ const SEEK_END -> Int = 2;
 
 
 class File {
-    let ptr handle -> Void = nullptr;
+    let handle -> AnyPtr = nullptr;
     let path -> String = "";
 
     init(p -> String, mode -> String) {
         self.path = p;
-        let ptr raw_handle -> Void = fopen(p, mode);
+        let raw_handle -> AnyPtr = fopen(p, mode);
         if (raw_handle is !nullptr) {
             self.handle = raw_handle;
         }
