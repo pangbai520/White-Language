@@ -19,59 +19,79 @@ func promote_to_float(c -> Compiler, res -> CompileResult) -> CompileResult {
     if (res.type == TYPE_FLOAT) { return res; }
     let input_reg -> String = res.reg;
 
-    if (res.type == TYPE_BYTE) {
-        let uitofp_reg -> String = next_reg(c);
-        c.output_file.write(c.indent + uitofp_reg + " = uitofp i8 " + input_reg + " to double\n");
-        return CompileResult(reg=uitofp_reg, type=TYPE_FLOAT);
-    }
-
-    if (res.type == TYPE_LONG) {
-        let sitofp_reg -> String = next_reg(c);
-        c.output_file.write(c.indent + sitofp_reg + " = sitofp i64 " + input_reg + " to double\n");
-        return CompileResult(reg=sitofp_reg, type=TYPE_FLOAT);
+    if (res.type == TYPE_FLOAT32) {
+        let fpext_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + fpext_reg + " = fpext float " + input_reg + " to double\n");
+        return CompileResult(reg=fpext_reg, type=TYPE_FLOAT);
     }
 
     if (res.type == TYPE_BOOL) {
         let zext_reg -> String = next_reg(c);
         c.output_file.write(c.indent + zext_reg + " = zext i1 " + input_reg + " to i32\n");
-        input_reg = zext_reg;
+        let uitofp_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + uitofp_reg + " = uitofp i32 " + zext_reg + " to double\n");
+        return CompileResult(reg=uitofp_reg, type=TYPE_FLOAT);
     }
-    
-    let n_reg -> String = next_reg(c);
-    c.output_file.write(c.indent + n_reg + " = sitofp i32 " + input_reg + " to double\n");
-    return CompileResult(reg=n_reg, type=TYPE_FLOAT);
+
+    let ty_str -> String = get_llvm_type_str(c, res.type);
+    let fp_reg -> String = next_reg(c);
+
+    if (is_signed_integer(res.type)) {
+        c.output_file.write(c.indent + fp_reg + " = sitofp " + ty_str + " " + input_reg + " to double\n");
+        return CompileResult(reg=fp_reg, type=TYPE_FLOAT);
+    }
+
+    if (is_unsigned_integer(res.type)) {
+        c.output_file.write(c.indent + fp_reg + " = uitofp " + ty_str + " " + input_reg + " to double\n");
+        return CompileResult(reg=fp_reg, type=TYPE_FLOAT);
+    }
+
+    return res;
 }
 func promote_to_long(c -> Compiler, res -> CompileResult) -> CompileResult {
-    if (res.type == TYPE_LONG) { return res; }
-    let input_reg -> String = res.reg;
-
-    if (res.type == TYPE_BYTE) {
-        let zext_reg -> String = next_reg(c);
-        c.output_file.write(c.indent + zext_reg + " = zext i8 " + input_reg + " to i64\n");
-        return CompileResult(reg=zext_reg, type=TYPE_LONG);
+    let ty_str -> String = get_llvm_type_str(c, res.type);
+    
+    if (ty_str == "i64" || ty_str == "i128" || ty_str == "double" || ty_str == "float" || res.type >= 100) { 
+        return res; 
     }
+    
+    let input_reg -> String = res.reg;
+    let ext_reg -> String = next_reg(c);
 
     if (res.type == TYPE_BOOL) {
-        let zext_reg -> String = next_reg(c);
-        c.output_file.write(c.indent + zext_reg + " = zext i1 " + input_reg + " to i64\n");
-        return CompileResult(reg=zext_reg, type=TYPE_LONG);
+        c.output_file.write(c.indent + ext_reg + " = zext i1 " + input_reg + " to i64\n");
+        return CompileResult(reg=ext_reg, type=TYPE_LONG);
     }
 
-    if (res.type == TYPE_INT) {
-        let n_reg -> String = next_reg(c);
-        // sext: sign extension
-        c.output_file.write(c.indent + n_reg + " = sext i32 " + input_reg + " to i64\n");
-        return CompileResult(reg=n_reg, type=TYPE_LONG);
+    if (is_signed_integer(res.type)) {
+        c.output_file.write(c.indent + ext_reg + " = sext " + ty_str + " " + input_reg + " to i64\n");
+        return CompileResult(reg=ext_reg, type=TYPE_LONG);
+    }
+    
+    if (is_unsigned_integer(res.type)) {
+        c.output_file.write(c.indent + ext_reg + " = zext " + ty_str + " " + input_reg + " to i64\n");
+        return CompileResult(reg=ext_reg, type=TYPE_LONG);
     }
     
     return res;
 }
 func promote_to_int(c -> Compiler, res -> CompileResult) -> CompileResult {
-    if (res.type != TYPE_BYTE) { return res; }
+    let ty_str -> String = get_llvm_type_str(c, res.type);
+
+    if (ty_str == "i32" || ty_str == "i64" || ty_str == "i128" || ty_str == "double" || ty_str == "float" || res.type == TYPE_BOOL || res.type >= 100) { 
+        return res; 
+    }
     
-    let zext_reg -> String = next_reg(c);
-    c.output_file.write(c.indent + zext_reg + " = zext i8 " + res.reg + " to i32\n");
-    return CompileResult(reg=zext_reg, type=TYPE_INT);
+    let input_reg -> String = res.reg;
+    let ext_reg -> String = next_reg(c);
+
+    if (is_signed_integer(res.type)) {
+        c.output_file.write(c.indent + ext_reg + " = sext " + ty_str + " " + input_reg + " to i32\n");
+    } else {
+        c.output_file.write(c.indent + ext_reg + " = zext " + ty_str + " " + input_reg + " to i32\n");
+    }
+    
+    return CompileResult(reg=ext_reg, type=TYPE_INT);
 }
 
 func eval_const_long(c -> Compiler, node -> Struct, pos -> Position) -> Long {
@@ -205,10 +225,22 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         c.output_file.write(c.indent + payload_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + box_ptr + ", i32 0, i32 1\n");
         
         let payload_i64 -> String = next_reg(c);
-        if (is_small_primitive_type(val_res.type)) {
+        
+        if (val_res.type == TYPE_INT128 || val_res.type == TYPE_UINT128) {
+            WhitelangExceptions.throw_type_error(pos, "Cannot pack 128-bit integers into 16-byte Variant box directly.");
+            return CompileResult(reg="0", type=expected_type, origin_type=val_res.type);
+        } else if (is_small_primitive_type(val_res.type)) {
             let prim_ty -> String = get_llvm_type_str(c, val_res.type);
-            c.output_file.write(c.indent + payload_i64 + " = zext " + prim_ty + " " + val_res.reg + " to i64\n");
-        } else if (val_res.type == TYPE_LONG) {
+            if (is_signed_integer(val_res.type)) {
+                c.output_file.write(c.indent + payload_i64 + " = sext " + prim_ty + " " + val_res.reg + " to i64\n");
+            } else {
+                c.output_file.write(c.indent + payload_i64 + " = zext " + prim_ty + " " + val_res.reg + " to i64\n");
+            }
+        } else if (val_res.type == TYPE_FLOAT32) {
+            let fpext_reg -> String = next_reg(c);
+            c.output_file.write(c.indent + fpext_reg + " = fpext float " + val_res.reg + " to double\n");
+            c.output_file.write(c.indent + payload_i64 + " = bitcast double " + fpext_reg + " to i64\n");
+        } else if (val_res.type == TYPE_LONG || val_res.type == TYPE_UINT64 || val_res.type == TYPE_INTSIZE || val_res.type == TYPE_UINTSIZE) {
             c.output_file.write(c.indent + payload_i64 + " = add i64 0, " + val_res.reg + "\n"); 
         } else if (val_res.type == TYPE_FLOAT) {
             c.output_file.write(c.indent + payload_i64 + " = bitcast double " + val_res.reg + " to i64\n");
@@ -287,10 +319,16 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         c.output_file.write(c.indent + payload_i64 + " = load i64, i64* " + payload_ptr + "\n");
         
         let unboxed_reg -> String = next_reg(c);
-        if (is_small_primitive_type(expected_type)) {
+        if (expected_type == TYPE_INT128 || expected_type == TYPE_UINT128) {
+            WhitelangExceptions.throw_type_error(pos, "Cannot unpack 128-bit integers from 16-byte Variant box directly.");
+        } else if (is_small_primitive_type(expected_type)) {
             let prim_ty -> String = get_llvm_type_str(c, expected_type);
             c.output_file.write(c.indent + unboxed_reg + " = trunc i64 " + payload_i64 + " to " + prim_ty + "\n");
-        } else if (expected_type == TYPE_LONG) {
+        } else if (expected_type == TYPE_FLOAT32) {
+            let cast_double -> String = next_reg(c);
+            c.output_file.write(c.indent + cast_double + " = bitcast i64 " + payload_i64 + " to double\n");
+            c.output_file.write(c.indent + unboxed_reg + " = fptrunc double " + cast_double + " to float\n");
+        } else if (expected_type == TYPE_LONG || expected_type == TYPE_UINT64 || expected_type == TYPE_INTSIZE || expected_type == TYPE_UINTSIZE) {
             c.output_file.write(c.indent + unboxed_reg + " = add i64 0, " + payload_i64 + "\n");
         } else if (expected_type == TYPE_FLOAT) {
             c.output_file.write(c.indent + unboxed_reg + " = bitcast i64 " + payload_i64 + " to double\n");
@@ -501,7 +539,28 @@ func get_string_ptr(s_id -> Int, s_val -> String) -> String {
 func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
     if (res.type == TYPE_STRING) { return res; }
 
+    if (res.type == TYPE_INT8 || res.type == TYPE_INT16 || res.type == TYPE_UINT16) {
+        res = promote_to_int(c, res);
+    }
+    if (res.type == TYPE_UINT32) {
+        res = promote_to_long(c, res);
+    }
+    if (res.type == TYPE_FLOAT32) {
+        res = promote_to_float(c, res);
+    }
+    if (res.type == TYPE_INTSIZE) {
+        res.type = TYPE_LONG;
+    }
+
     let buf_ptr -> String = emit_alloc_obj(c, "32", "" + TYPE_STRING, "i8*");
+
+    if (res.type == TYPE_UINT64 || res.type == TYPE_UINTSIZE) {
+        let fmt -> String = next_reg(c);
+        c.output_file.write(c.indent + fmt + " = getelementptr [5 x i8], [5 x i8]* @.fmt_ulong_simple, i32 0, i32 0\n");
+        
+        c.output_file.write(c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 32, i8* " + fmt + ", i64 " + res.reg + ")\n");
+        return CompileResult(reg=buf_ptr, type=TYPE_STRING);
+    }
 
     if (res.type == TYPE_INT || res.type == TYPE_BYTE) {
         let val_reg -> String = res.reg;
@@ -1502,25 +1561,42 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 }
                 init_val_str = "null";
             }
-            else if (target_type_id == TYPE_INT || target_type_id == TYPE_LONG || target_type_id == TYPE_BYTE) {
+            else if (is_integer_type(target_type_id)) {
                 let expr_type -> Int = get_expr_type(c, val_node);
-                if (target_type_id != TYPE_LONG && expr_type == TYPE_LONG) {
+                if (get_type_bitwidth(target_type_id) < 64 && expr_type == TYPE_LONG) {
                     WhitelangExceptions.throw_type_error(node.pos, "Type mismatch. Expected " + get_type_name(c, target_type_id) + ", got Long.");
                     return void_result();
                 }
 
                 let folded_val -> Long = eval_const_long(c, val_node, node.pos);
-                if (target_type_id == TYPE_BYTE) {
-                    if (folded_val < 0L || folded_val > 255L) {
-                        WhitelangExceptions.throw_overflow_error(node.pos, "Global constant overflows Byte type valid range (0~255).");
-                        return void_result();
+                let bits -> Int = get_type_bitwidth(target_type_id);
+                let is_overflow -> Bool = false;
+                
+                if (bits == 8) {
+                    if (is_unsigned_integer(target_type_id)) {
+                        if (folded_val < 0L || folded_val > 255L) { is_overflow = true; }
+                    } else {
+                        if (folded_val < -128L || folded_val > 127L) { is_overflow = true; }
                     }
-                } else if (target_type_id == TYPE_INT) {
-                    if (folded_val < -2147483648L || folded_val > 2147483647L) {
-                        WhitelangExceptions.throw_overflow_error(node.pos, "Global constant overflows 32-bit Int range.");
-                        return void_result();
+                } else if (bits == 16) {
+                    if (is_unsigned_integer(target_type_id)) {
+                        if (folded_val < 0L || folded_val > 65535L) { is_overflow = true; }
+                    } else {
+                        if (folded_val < -32768L || folded_val > 32767L) { is_overflow = true; }
+                    }
+                } else if (bits == 32) {
+                    if (is_unsigned_integer(target_type_id)) {
+                        if (folded_val < 0L || folded_val > 4294967295L) { is_overflow = true; }
+                    } else {
+                        if (folded_val < -2147483648L || folded_val > 2147483647L) { is_overflow = true; }
                     }
                 }
+
+                if (is_overflow) {
+                    WhitelangExceptions.throw_overflow_error(node.pos, "Global constant overflows " + get_type_name(c, target_type_id) + " valid range.");
+                    return void_result();
+                }
+                
                 init_val_str = "" + folded_val;
             }
             else if (target_type_id == TYPE_CHAR) {
@@ -1535,10 +1611,13 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 let folded_val -> Int = eval_const_bool(c, val_node, node.pos);
                 if (folded_val == 1) { init_val_str = "1"; } else { init_val_str = "0"; }
             }
-            else if (val_node.type == NODE_FLOAT) {
+            else if (target_type_id == TYPE_FLOAT || target_type_id == TYPE_FLOAT32) {
+                if (val_node.type != NODE_FLOAT) {
+                    WhitelangExceptions.throw_type_error(node.pos, "Type mismatch. Expected Float literal.");
+                    return void_result();
+                }
                 let n -> FloatNode = node.value;
                 init_val_str = n.tok.value;
-                if (target_type_id != TYPE_FLOAT) { WhitelangExceptions.throw_type_error(node.pos, "Type mismatch (Float -> Int). "); }
             } else {
                 WhitelangExceptions.throw_invalid_syntax(node.pos, "Global variable initialisation must be a compile-time constant expression. ");
                 return void_result();
@@ -4380,8 +4459,8 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
             return void_result();
         }
         if (left.type == TYPE_BOOL || right.type == TYPE_BOOL) {
-            if (left.type != right.type) { WhitelangExceptions.throw_type_error(node.pos, "Cannot compare Bool with other types."); }
-            if (op_type != TOK_EE && op_type != TOK_NE) { WhitelangExceptions.throw_type_error(node.pos, "Invalid Bool comparison."); }
+            if (left.type != right.type) { WhitelangExceptions.throw_type_error(node.pos, "Cannot mix Bool with other types."); return void_result(); }
+            if (op_type != TOK_EE && op_type != TOK_NE) { WhitelangExceptions.throw_type_error(node.pos, "Invalid Bool operator."); return void_result(); }
             let res_reg -> String = next_reg(c);
             let op_code -> String = "icmp eq";
             if (op_type == TOK_NE) { op_code = "icmp ne"; }
@@ -4389,56 +4468,106 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
             return CompileResult(reg=res_reg, type=TYPE_BOOL);
         }
 
-        let cmp_mode -> Int = TYPE_BYTE;
+        let target_type -> Int = left.type;
         if (left.type == TYPE_FLOAT || right.type == TYPE_FLOAT) {
-            cmp_mode = TYPE_FLOAT;
-            left = promote_to_float(c, left);
-            right = promote_to_float(c, right);
-        } else if (left.type == TYPE_LONG || right.type == TYPE_LONG) {
-            cmp_mode = TYPE_LONG;
-            left = promote_to_long(c, left);
-            right = promote_to_long(c, right);
-        } else if (left.type == TYPE_INT || right.type == TYPE_INT) {
-            cmp_mode = TYPE_INT;
-            if (left.type == TYPE_BYTE) { left = promote_to_int(c, left); }
-            if (right.type == TYPE_BYTE) { right = promote_to_int(c, right); }
+            target_type = TYPE_FLOAT;
+        } else if (left.type == TYPE_FLOAT32 || right.type == TYPE_FLOAT32) {
+            target_type = TYPE_FLOAT32;
+        } else if (is_integer_type(left.type) && is_integer_type(right.type)) {
+            let l_bits -> Int = get_type_bitwidth(left.type);
+            let r_bits -> Int = get_type_bitwidth(right.type);
+
+            if (r_bits > l_bits) { target_type = right.type; }
+            else if (l_bits > r_bits) { target_type = left.type; }
+            else {
+                if (is_unsigned_integer(right.type)) { target_type = right.type; }
+                else { target_type = left.type; }
+            }
+            if (get_type_bitwidth(target_type) < 32) { target_type = TYPE_INT; }
+        } else {
+            WhitelangExceptions.throw_type_error(node.pos, "Invalid types for binary operator.");
+            return void_result();
         }
 
+        left = compile_type_cast(c, left, target_type, node.pos);
+        right = compile_type_cast(c, right, target_type, node.pos);
+
+        let type_str -> String = get_llvm_type_str(c, target_type);
         let res_reg -> String = next_reg(c);
         let op_code -> String = "";
-        let type_str -> String = "i8";
-        
-        if (cmp_mode == TYPE_FLOAT) {
-            type_str = "double";
-            if (op_type == TOK_EE) { op_code = "fcmp oeq"; }
-            else if (op_type == TOK_NE) { op_code = "fcmp one"; }
-            else if (op_type == TOK_GT) { op_code = "fcmp ogt"; }
-            else if (op_type == TOK_LT) { op_code = "fcmp olt"; }
-            else if (op_type == TOK_GTE) { op_code = "fcmp oge"; }
-            else if (op_type == TOK_LTE) { op_code = "fcmp ole"; }
-        } else {
-            // Int, Long, Byte
-            let suffix -> String = "u"; // default unsigned for Byte
-            
-            if (cmp_mode == TYPE_LONG) { 
-                type_str = "i64"; 
-                suffix = "s"; // signed for Long
+
+        let is_cmp -> Bool = false;
+        if (op_type == TOK_EE || op_type == TOK_NE || op_type == TOK_GT || op_type == TOK_LT || op_type == TOK_GTE || op_type == TOK_LTE) { is_cmp = true; }
+
+        if is_cmp {
+            if (target_type == TYPE_FLOAT || target_type == TYPE_FLOAT32) {
+                if (op_type == TOK_EE) { op_code = "fcmp oeq"; }
+                else if (op_type == TOK_NE) { op_code = "fcmp one"; }
+                else if (op_type == TOK_GT) { op_code = "fcmp ogt"; }
+                else if (op_type == TOK_LT) { op_code = "fcmp olt"; }
+                else if (op_type == TOK_GTE) { op_code = "fcmp oge"; }
+                else if (op_type == TOK_LTE) { op_code = "fcmp ole"; }
+            } else {
+                let suffix -> String = "s"; 
+                if (is_unsigned_integer(target_type)) { suffix = "u"; }
+                if (op_type == TOK_EE) { op_code = "icmp eq"; }
+                else if (op_type == TOK_NE) { op_code = "icmp ne"; }
+                else if (op_type == TOK_GT) { op_code = "icmp " + suffix + "gt"; }
+                else if (op_type == TOK_LT) { op_code = "icmp " + suffix + "lt"; }
+                else if (op_type == TOK_GTE) { op_code = "icmp " + suffix + "ge"; }
+                else if (op_type == TOK_LTE) { op_code = "icmp " + suffix + "le"; }
             }
-            else if (cmp_mode == TYPE_INT) { 
-                type_str = "i32"; 
-                suffix = "s"; // signed for Int
-            }
-            
-            if (op_type == TOK_EE) { op_code = "icmp eq"; }
-            else if (op_type == TOK_NE) { op_code = "icmp ne"; }
-            else if (op_type == TOK_GT) { op_code = "icmp " + suffix + "gt"; }
-            else if (op_type == TOK_LT) { op_code = "icmp " + suffix + "lt"; }
-            else if (op_type == TOK_GTE) { op_code = "icmp " + suffix + "ge"; }
-            else if (op_type == TOK_LTE) { op_code = "icmp " + suffix + "le"; }
+            c.output_file.write(c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
+            return CompileResult(reg=res_reg, type=TYPE_BOOL);
         }
-        
+
+        if (target_type == TYPE_FLOAT || target_type == TYPE_FLOAT32) {
+            if (op_type == TOK_PLUS)  { op_code = "fadd"; }
+            else if (op_type == TOK_SUB)   { op_code = "fsub"; }
+            else if (op_type == TOK_MUL)   { op_code = "fmul"; }
+            else if (op_type == TOK_DIV)   { op_code = "fdiv"; }
+            else if (op_type == TOK_MOD)   { op_code = "frem"; } 
+        } else {
+            if (op_type == TOK_PLUS)  { op_code = "add"; }
+            else if (op_type == TOK_SUB)   { op_code = "sub"; }
+            else if (op_type == TOK_MUL)   { op_code = "mul"; }
+            else if (op_type == TOK_DIV) { 
+                if (is_unsigned_integer(target_type)) { op_code = "udiv"; } else { op_code = "sdiv"; }
+            }
+            else if (op_type == TOK_MOD) { 
+                if (is_unsigned_integer(target_type)) { op_code = "urem"; } else { op_code = "srem"; }
+            }
+            else if (op_type == TOK_BIT_AND) { op_code = "and"; }
+            else if (op_type == TOK_BIT_OR) { op_code = "or"; }
+            else if (op_type == TOK_BIT_XOR) { op_code = "xor"; }
+            else if (op_type == TOK_LSHIFT) { op_code = "shl"; }
+            else if (op_type == TOK_RSHIFT) { 
+                if (is_unsigned_integer(target_type)) { op_code = "lshr"; } else { op_code = "ashr"; }
+            }
+        }
+
+        if (op_type == TOK_DIV || op_type == TOK_MOD) {
+            if (right.reg == "0" || right.reg == "0.0") {
+                WhitelangExceptions.throw_zero_division_error(node.pos, "Cannot divide by zero. ");
+                return void_result();
+            }
+            let is_zero_reg -> String = next_reg(c);
+            if (target_type == TYPE_FLOAT || target_type == TYPE_FLOAT32) {
+                c.output_file.write(c.indent + is_zero_reg + " = fcmp oeq " + type_str + " " + right.reg + ", 0.0\n");
+            } else {
+                c.output_file.write(c.indent + is_zero_reg + " = icmp eq " + type_str + " " + right.reg + ", 0\n");
+            }
+            let err_label -> String = "div_zero_" + c.type_counter;
+            let ok_label -> String = "div_ok_" + c.type_counter;
+            c.type_counter += 1;
+            c.output_file.write(c.indent + "br i1 " + is_zero_reg + ", label %" + err_label + ", label %" + ok_label + "\n");
+            c.output_file.write("\n" + err_label + ":\n");
+            emit_runtime_error(c, node.pos, "Division by zero");
+            c.output_file.write("\n" + ok_label + ":\n");
+        }
+
         c.output_file.write(c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
-        return CompileResult(reg=res_reg, type=TYPE_BOOL);
+        return CompileResult(reg=res_reg, type=target_type);
     }
 
     if (left.type == TYPE_BOOL || right.type == TYPE_BOOL) {
@@ -4703,47 +4832,44 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         let n -> IntNode = node;
         let raw_val -> String = n.tok.value;
         let parsed_val -> Long = string_to_long(raw_val, n.pos);
-        let t_id -> Int = TYPE_INT;
+        
+        let t_id -> Int = c.expected_type;
 
-        let has_l_suffix -> Bool = false;
-        if (raw_val.ends_with("L") || raw_val.ends_with("l")) {
-            t_id = TYPE_LONG;
-        } else {
-            if (c.expected_type == TYPE_LONG) {
+        if (t_id == 0 || !is_integer_type(t_id)) {
+            if (raw_val.ends_with("L") || raw_val.ends_with("l")) {
                 t_id = TYPE_LONG;
-            }
-            else if (c.expected_type == TYPE_BYTE) {
-                if (parsed_val < 0L || parsed_val > 255L) {
-                    WhitelangExceptions.throw_overflow_error(n.pos, "Literal '" + raw_val + "' overflows Byte type valid range (0~255).");
-                    return void_result();
-                }
-                t_id = TYPE_BYTE;
-            }
-            else if (c.expected_type == TYPE_INT) {
-                if (parsed_val < -2147483648L || parsed_val > 2147483647L) {
-                    WhitelangExceptions.throw_overflow_error(n.pos, "Literal '" + raw_val + "' overflows 32-bit Int range. Use 'L' suffix or assign to a Long type.");
-                    return void_result();
-                }
+            } else if (parsed_val < -2147483648L || parsed_val > 2147483647L) {
+                t_id = TYPE_LONG;
+            } else {
                 t_id = TYPE_INT;
             }
-            else if (c.expected_type == TYPE_FLOAT) {
-                if (parsed_val < -2147483648L || parsed_val > 2147483647L) {
-                    t_id = TYPE_LONG;
+        } else {
+            let bits -> Int = get_type_bitwidth(t_id); // Byte or Int8
+            let is_overflow -> Bool = false;
+
+            if (bits == 8) {
+                if (is_unsigned_integer(t_id)) {
+                    if (parsed_val < 0L || parsed_val > 255L) { is_overflow = true; }
                 } else {
-                    t_id = TYPE_INT;
+                    if (parsed_val < -128L || parsed_val > 127L) { is_overflow = true; }
+                }
+            } else if (bits == 16) {
+                if (is_unsigned_integer(t_id)) {
+                    if (parsed_val < 0L || parsed_val > 65535L) { is_overflow = true; }
+                } else {
+                    if (parsed_val < -32768L || parsed_val > 32767L) { is_overflow = true; }
+                }
+            } else if (bits == 32) {
+                if (is_unsigned_integer(t_id)) {
+                    if (parsed_val < 0L || parsed_val > 4294967295L) { is_overflow = true; }
+                } else {
+                    if (parsed_val < -2147483648L || parsed_val > 2147483647L) { is_overflow = true; }
                 }
             }
-            else {
-                if (parsed_val < -2147483648L || parsed_val > 2147483647L) {
-                    if (c.expected_type == 0) {
-                        t_id = TYPE_LONG;
-                    } else {
-                        WhitelangExceptions.throw_overflow_error(n.pos, "Literal '" + raw_val + "' overflows 32-bit Int range.");
-                        return void_result();
-                    }
-                } else {
-                    t_id = TYPE_INT;
-                }
+
+            if is_overflow {
+                WhitelangExceptions.throw_overflow_error(n.pos, "Literal '" + raw_val + "' overflows " + get_type_name(c, t_id) + " valid range.");
+                return void_result();
             }
         }
 
@@ -4756,9 +4882,14 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     }
     if (base.type == NODE_FLOAT) {
         let n -> FloatNode = node;
+        if (c.expected_type == TYPE_FLOAT32) {
+            let tmp_reg -> String = next_reg(c);
+            c.output_file.write(c.indent + tmp_reg + " = fptrunc double " + n.tok.value + " to float\n");
+            return CompileResult(reg=tmp_reg, type=TYPE_FLOAT32);
+        }
         return CompileResult(reg=n.tok.value, type=TYPE_FLOAT); 
     }
-    
+
     if (base.type == NODE_BOOL) {
         let b -> BooleanNode = node;
         let val_str -> String = "0";
@@ -4980,6 +5111,43 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         }
 
         if (func_name != "") {
+            let is_cast -> Bool = false;
+            let cast_target -> Int = 0;
+
+            if (func_name == "Int" || func_name == "Int32") { cast_target = TYPE_INT; is_cast = true; }
+            else if (func_name == "Long" || func_name == "Int64") { cast_target = TYPE_LONG; is_cast = true; }
+            else if (func_name == "Float" || func_name == "Float64") { cast_target = TYPE_FLOAT; is_cast = true; }
+            else if (func_name == "Byte" || func_name == "UInt8") { cast_target = TYPE_BYTE; is_cast = true; }
+            else if (func_name == "Int8") { cast_target = TYPE_INT8; is_cast = true; }
+            else if (func_name == "Int16") { cast_target = TYPE_INT16; is_cast = true; }
+            else if (func_name == "Int128") { cast_target = TYPE_INT128; is_cast = true; }
+            else if (func_name == "UInt16") { cast_target = TYPE_UINT16; is_cast = true; }
+            else if (func_name == "UInt32") { cast_target = TYPE_UINT32; is_cast = true; }
+            else if (func_name == "UInt64") { cast_target = TYPE_UINT64; is_cast = true; }
+            else if (func_name == "UInt128") { cast_target = TYPE_UINT128; is_cast = true; }
+            else if (func_name == "Float32") { cast_target = TYPE_FLOAT32; is_cast = true; }
+            else if (func_name == "IntSize") { cast_target = TYPE_INTSIZE; is_cast = true; }
+            else if (func_name == "UIntSize") { cast_target = TYPE_UINTSIZE; is_cast = true; }
+            else if (func_name == "Bool") { cast_target = TYPE_BOOL; is_cast = true; }
+            else if (func_name == "Char") { cast_target = TYPE_CHAR; is_cast = true; }
+            else if (func_name == "AnyPtr") { cast_target = TYPE_ANYPTR; is_cast = true; }
+
+            if is_cast {
+                let args -> Vector(Struct) = n_call.args;
+                let a_len -> Int = 0; if (args is !null) { a_len = args.length(); }
+                if (a_len != 1) {
+                    WhitelangExceptions.throw_type_error(n_call.pos, "Type cast expects exactly 1 argument.");
+                    return void_result();
+                }
+                let arg_curr -> ArgNode = args[0];
+                let old_exp -> Int = c.expected_type;
+                c.expected_type = 0;
+                let val_res -> CompileResult = compile_node(c, arg_curr.val);
+                c.expected_type = old_exp;
+
+                return compile_type_cast(c, val_res, cast_target, n_call.pos);
+            }
+
             if (!is_package_call) {
                 let found_local -> Bool = false;
                 let local_name -> String = func_name;
@@ -5417,22 +5585,18 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
         let old_val_reg -> String = next_reg(c);
         c.output_file.write(c.indent + old_val_reg + " = load " + type_str + ", " + type_str + "* " + target_reg + "\n");
-        
+
         let new_val_reg -> String = next_reg(c);
-        if (target_type == TYPE_INT) {
-            let op_code -> String = "add i32";
-            if (op_type == TOK_DEC) { op_code = "sub i32"; }
-            c.output_file.write(c.indent + new_val_reg + " = " + op_code + " " + old_val_reg + ", 1\n");
-        } 
-        else if (target_type == TYPE_LONG) {
-            let op_code -> String = "add i64";
-            if (op_type == TOK_DEC) { op_code = "sub i64"; }
-            c.output_file.write(c.indent + new_val_reg + " = " + op_code + " " + old_val_reg + ", 1\n");
+
+        if (is_integer_type(target_type)) {
+            let op_code -> String = "add";
+            if (op_type == TOK_DEC) { op_code = "sub"; }
+            c.output_file.write(c.indent + new_val_reg + " = " + op_code + " " + type_str + " " + old_val_reg + ", 1\n");
         }
-        else if (target_type == TYPE_FLOAT) {
-            let op_code -> String = "fadd double";
-            if (op_type == TOK_DEC) { op_code = "fsub double"; }
-            c.output_file.write(c.indent + new_val_reg + " = " + op_code + " " + old_val_reg + ", 1.0\n");
+        else if (target_type == TYPE_FLOAT || target_type == TYPE_FLOAT32) {
+            let op_code -> String = "fadd";
+            if (op_type == TOK_DEC) { op_code = "fsub"; }
+            c.output_file.write(c.indent + new_val_reg + " = " + op_code + " " + type_str + " " + old_val_reg + ", 1.0\n");
         }
         else {
             WhitelangExceptions.throw_type_error(u.pos, "Cannot increment/decrement type " + get_type_name(c, target_type));
@@ -5449,25 +5613,22 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         
         let operand -> CompileResult = compile_node(c, u.node);
         let res_reg -> String = next_reg(c);
-        
+
         if (op_type == TOK_SUB) {
-            if (operand.type == TYPE_INT) {
-                c.output_file.write(c.indent + res_reg + " = sub i32 0, " + operand.reg + "\n");
-                return CompileResult(reg=res_reg, type=TYPE_INT);
-            } else if (operand.type == TYPE_LONG) {
-                c.output_file.write(c.indent + res_reg + " = sub i64 0, " + operand.reg + "\n");
-                return CompileResult(reg=res_reg, type=TYPE_LONG);
-            } else if (operand.type == TYPE_BYTE) {
-                c.output_file.write(c.indent + res_reg + " = sub i8 0, " + operand.reg + "\n");
-                return CompileResult(reg=res_reg, type=TYPE_BYTE);
-            } else if (operand.type == TYPE_FLOAT) {
-                c.output_file.write(c.indent + res_reg + " = fneg double " + operand.reg + "\n");
-                return CompileResult(reg=res_reg, type=TYPE_FLOAT);
+            if (is_integer_type(operand.type)) {
+                let ty_str -> String = get_llvm_type_str(c, operand.type);
+                c.output_file.write(c.indent + res_reg + " = sub " + ty_str + " 0, " + operand.reg + "\n");
+                return CompileResult(reg=res_reg, type=operand.type);
+            } else if (operand.type == TYPE_FLOAT || operand.type == TYPE_FLOAT32) {
+                let ty_str -> String = get_llvm_type_str(c, operand.type);
+                c.output_file.write(c.indent + res_reg + " = fneg " + ty_str + " " + operand.reg + "\n");
+                return CompileResult(reg=res_reg, type=operand.type);
             } else {
                 WhitelangExceptions.throw_type_error(u.pos, "Cannot negate non-numeric type. ");
                 return void_result();
             }
-        } else if (op_type == TOK_NOT) {
+        }
+        else if (op_type == TOK_NOT) {
             if (operand.type != TYPE_BOOL) {
                 WhitelangExceptions.throw_type_error(u.pos, "Operator '!' requires Bool type. ");
                 return void_result();
@@ -5476,17 +5637,12 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             return CompileResult(reg=res_reg, type=TYPE_BOOL);
         } 
         else if (op_type == TOK_BIT_NOT) {
-            if (operand.type == TYPE_INT) {
-                c.output_file.write(c.indent + res_reg + " = xor i32 " + operand.reg + ", -1\n");
-                return CompileResult(reg=res_reg, type=TYPE_INT);
-            } else if (operand.type == TYPE_LONG) {
-                c.output_file.write(c.indent + res_reg + " = xor i64 " + operand.reg + ", -1\n");
-                return CompileResult(reg=res_reg, type=TYPE_LONG);
-            } else if (operand.type == TYPE_BYTE) {
-                c.output_file.write(c.indent + res_reg + " = xor i8 " + operand.reg + ", -1\n");
-                return CompileResult(reg=res_reg, type=TYPE_BYTE);
+            if (is_integer_type(operand.type)) {
+                let ty_str -> String = get_llvm_type_str(c, operand.type);
+                c.output_file.write(c.indent + res_reg + " = xor " + ty_str + " " + operand.reg + ", -1\n");
+                return CompileResult(reg=res_reg, type=operand.type);
             } else {
-                WhitelangExceptions.throw_type_error(u.pos, "Operator '~' requires an integer type (Byte, Int, Long).");
+                WhitelangExceptions.throw_type_error(u.pos, "Operator '~' requires an integer type.");
                 return void_result();
             }
         }
@@ -5496,6 +5652,79 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     }
 
     return null;
+}
+
+func compile_type_cast(c -> Compiler, val_res -> CompileResult, target_type -> Int, pos -> Position) -> CompileResult {
+    if (val_res.type == target_type) { return val_res; }
+
+    let src_ty_str -> String = get_llvm_type_str(c, val_res.type);
+    let dst_ty_str -> String = get_llvm_type_str(c, target_type);
+    let res_reg -> String = next_reg(c);
+
+    let src_is_float -> Bool = val_res.type == TYPE_FLOAT || val_res.type == TYPE_FLOAT32;
+    let dst_is_float -> Bool = target_type == TYPE_FLOAT || target_type == TYPE_FLOAT32;
+
+    let src_is_int -> Bool = is_integer_type(val_res.type) || val_res.type == TYPE_BOOL;
+    let dst_is_int -> Bool = is_integer_type(target_type) || target_type == TYPE_BOOL;
+    
+    let src_is_ptr -> Bool = is_pointer_type(c, val_res.type) || val_res.type == TYPE_STRING || val_res.type == TYPE_ANYPTR || val_res.type == TYPE_NULLPTR;
+    let dst_is_ptr -> Bool = is_pointer_type(c, target_type) || target_type == TYPE_STRING || target_type == TYPE_ANYPTR;
+
+    if (src_is_ptr && dst_is_ptr) {
+        c.output_file.write(c.indent + res_reg + " = bitcast " + src_ty_str + " " + val_res.reg + " to " + dst_ty_str + "\n");
+        return CompileResult(reg=res_reg, type=target_type, origin_type=0);
+    }
+
+    if (src_is_ptr && dst_is_int) {
+        c.output_file.write(c.indent + res_reg + " = ptrtoint " + src_ty_str + " " + val_res.reg + " to " + dst_ty_str + "\n");
+        return CompileResult(reg=res_reg, type=target_type, origin_type=0);
+    }
+    if (src_is_int && dst_is_ptr) {
+        c.output_file.write(c.indent + res_reg + " = inttoptr " + src_ty_str + " " + val_res.reg + " to " + dst_ty_str + "\n");
+        return CompileResult(reg=res_reg, type=target_type, origin_type=0);
+    }
+
+    if (src_is_float && dst_is_float) {
+        if (val_res.type == TYPE_FLOAT && target_type == TYPE_FLOAT32) {
+            c.output_file.write(c.indent + res_reg + " = fptrunc double " + val_res.reg + " to float\n");
+        } else {
+            c.output_file.write(c.indent + res_reg + " = fpext float " + val_res.reg + " to double\n");
+        }
+        return CompileResult(reg=res_reg, type=target_type, origin_type=0);
+    }
+
+    if (src_is_int && dst_is_float) {
+        let op -> String = "sitofp";
+        if (is_unsigned_integer(val_res.type) || val_res.type == TYPE_BOOL) { op = "uitofp"; }
+        c.output_file.write(c.indent + res_reg + " = " + op + " " + src_ty_str + " " + val_res.reg + " to " + dst_ty_str + "\n");
+        return CompileResult(reg=res_reg, type=target_type, origin_type=0);
+    }
+    if (src_is_float && dst_is_int) {
+        let op -> String = "fptosi";
+        if (is_unsigned_integer(target_type) || target_type == TYPE_BOOL) { op = "fptoui"; }
+        c.output_file.write(c.indent + res_reg + " = " + op + " " + src_ty_str + " " + val_res.reg + " to " + dst_ty_str + "\n");
+        return CompileResult(reg=res_reg, type=target_type, origin_type=0);
+    }
+
+    if (src_is_int && dst_is_int) {
+        let src_bits -> Int = get_type_bitwidth(val_res.type);
+        let dst_bits -> Int = get_type_bitwidth(target_type);
+        
+        if (src_bits == dst_bits) {
+            return CompileResult(reg=val_res.reg, type=target_type, origin_type=0);
+        }
+        if (src_bits > dst_bits) {
+            c.output_file.write(c.indent + res_reg + " = trunc " + src_ty_str + " " + val_res.reg + " to " + dst_ty_str + "\n");
+        } else {
+            let op -> String = "sext";
+            if (is_unsigned_integer(val_res.type) || val_res.type == TYPE_BOOL) { op = "zext"; }
+            c.output_file.write(c.indent + res_reg + " = " + op + " " + src_ty_str + " " + val_res.reg + " to " + dst_ty_str + "\n");
+        }
+        return CompileResult(reg=res_reg, type=target_type, origin_type=0);
+    }
+
+    WhitelangExceptions.throw_type_error(pos, "Unsupported explicit type cast.");
+    return void_result();
 }
 
 // BUILTIN HELPER
@@ -5945,6 +6174,7 @@ func compile_start(c -> Compiler) -> Void {
     c.output_file.write("@.fmt_int_simple = private unnamed_addr constant [3 x i8] c\"%d\\00\"\n");
     c.output_file.write("@.fmt_float_simple = private unnamed_addr constant [3 x i8] c\"%f\\00\"\n");
     c.output_file.write("@.fmt_long_simple = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n");
+    c.output_file.write("@.fmt_ulong_simple = private unnamed_addr constant [5 x i8] c\"%llu\\00\"\n");
     c.output_file.write("@.str_true = private unnamed_addr constant [5 x i8] c\"true\\00\"\n");
     c.output_file.write("@.str_false = private unnamed_addr constant [6 x i8] c\"false\\00\"\n");
     c.output_file.write("@.str_null = private unnamed_addr constant [5 x i8] c\"null\\00\"\n\n");

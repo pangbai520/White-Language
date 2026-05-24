@@ -197,6 +197,13 @@ func get_token_name(type -> Int) -> String {
 
     if (type == TOK_AT) { return "@"; }
 
+    if (type == TOK_T_INT) { return "Int"; }
+    if (type == TOK_T_FLOAT) { return "Float"; }
+    if (type == TOK_T_STRING) { return "String"; }
+    if (type == TOK_T_BOOL) { return "Bool"; }
+    if (type == TOK_T_CHAR) { return "Char"; }
+    if (type == TOK_T_VOID) { return "Void"; }
+
     return "EOF";
 }
 

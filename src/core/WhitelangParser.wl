@@ -429,8 +429,12 @@ func atom(p -> Parser) -> Struct {
         return NullNode(type=NODE_NULL, pos=pos);
     }
     
-    // Variable access
-    if (tok.type == TOK_IDENTIFIER) {
+    // Variable access or Built-in Type Cast Call
+    let tt -> Int = tok.type;
+    if (tt == TOK_IDENTIFIER || 
+        tt == TOK_T_INT || tt == TOK_T_FLOAT || tt == TOK_T_STRING || 
+        tt == TOK_T_BOOL || tt == TOK_T_CHAR || tt == TOK_T_VOID) {
+
         parser_advance(p);
         let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
         return VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);

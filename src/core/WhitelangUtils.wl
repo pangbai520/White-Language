@@ -26,6 +26,28 @@ const TYPE_GENERIC_METHOD -> Int = 12;
 const TYPE_AUTO -> Int = 13;
 const TYPE_CHAR -> Int = 14;
 const TYPE_ANYPTR -> Int = 15;
+
+const TYPE_INT8    -> Int = 16;
+const TYPE_INT16   -> Int = 17;
+//    TYPE_INT32   -> TYPE_INT
+//    TYPE_INT64   -> TYPE_LONG
+const TYPE_INT128  -> Int = 18;
+
+//    TYPE_UINT8   -> TYPE_BYTE
+const TYPE_UINT16  -> Int = 19;
+const TYPE_UINT32  -> Int = 20;
+const TYPE_UINT64  -> Int = 21;
+const TYPE_UINT128 -> Int = 22;
+
+const TYPE_FLOAT32 -> Int = 23;
+//    TYPE_FLOAT64 -> TYPE_FLOAT
+
+const TYPE_INTSIZE  -> Int = 24;
+const TYPE_UINTSIZE -> Int = 25;
+
+
+
+
 const TYPE_NULLPTR -> Int = 99;
 
 
@@ -391,6 +413,16 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_METHOD) { return "i8*"; }
     if (type_id == TYPE_ANYPTR) { return "i8*"; }
 
+    if (type_id == TYPE_INT8)  { return "i8"; }
+    if (type_id == TYPE_INT16) { return "i16"; }
+    if (type_id == TYPE_INT128){ return "i128"; }
+    if (type_id == TYPE_UINT16){ return "i16"; }
+    if (type_id == TYPE_UINT32){ return "i32"; }
+    if (type_id == TYPE_UINT64){ return "i64"; }
+    if (type_id == TYPE_UINT128){ return "i128"; }
+    if (type_id == TYPE_FLOAT32){ return "float"; }
+    if (type_id == TYPE_INTSIZE || type_id == TYPE_UINTSIZE) { return "i64"; }
+
     let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
     if (arr_info is !null) {
         return arr_info.llvm_name;
@@ -420,7 +452,7 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
         }
     }
 
-    return "i8*"; // unknow type
+    return "i8*"; // unknown type
 }
 
 func get_type_name(c -> Compiler, type_id -> Int) -> String {
@@ -440,6 +472,17 @@ func get_type_name(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_METHOD) { return "Method"; }
     if (type_id == TYPE_AUTO) { return "Auto"; }
     if (type_id == TYPE_ANYPTR) { return "AnyPtr"; }
+
+    if (type_id == TYPE_INT8)  { return "Int8"; }
+    if (type_id == TYPE_INT16) { return "Int16"; }
+    if (type_id == TYPE_INT128){ return "Int128"; }
+    if (type_id == TYPE_UINT16){ return "UInt16"; }
+    if (type_id == TYPE_UINT32){ return "UInt32"; }
+    if (type_id == TYPE_UINT64){ return "UInt64"; }
+    if (type_id == TYPE_UINT128){ return "UInt128"; }
+    if (type_id == TYPE_FLOAT32){ return "Float32"; }
+    if (type_id == TYPE_INTSIZE){ return "IntSize"; }
+    if (type_id == TYPE_UINTSIZE){ return "UIntSize"; }
 
     if (type_id >= 100) {
         let f_info -> SymbolInfo = c.func_ret_map.get("" + type_id);
@@ -511,22 +554,29 @@ func is_ref_type(c -> Compiler, type_id -> Int) -> Bool {
     return false;
 }
 
+
+func is_signed_integer(t -> Int) -> Bool {
+    return t == TYPE_INT || t == TYPE_LONG || 
+           t == TYPE_INT8 || t == TYPE_INT16 || t == TYPE_INT128 || 
+           t == TYPE_INTSIZE;
+}
+
+func is_unsigned_integer(t -> Int) -> Bool {
+    return t == TYPE_BYTE || t == TYPE_CHAR || 
+           t == TYPE_UINT16 || t == TYPE_UINT32 || t == TYPE_UINT64 || t == TYPE_UINT128 || 
+           t == TYPE_UINTSIZE;
+}
+
 func is_integer_type(t -> Int) -> Bool {
 // Checks if the type is an integer (int, long, byte, char, etc)
 
-    return t == TYPE_INT || t == TYPE_LONG || t == TYPE_BYTE || t == TYPE_CHAR;
+    return is_signed_integer(t) || is_unsigned_integer(t);
 }
 
 func is_numeric_type(t -> Int) -> Bool {
 // Checks if the type is a number (integer or float)
 
-    return is_integer_type(t) || t == TYPE_FLOAT;
-}
-
-func is_small_primitive_type(t -> Int) -> Bool {
-// // Checks if the type is smaller than 64 bits
-
-    return t == TYPE_INT || t == TYPE_BOOL || t == TYPE_BYTE || t == TYPE_CHAR;
+    return is_integer_type(t) || t == TYPE_FLOAT || t == TYPE_FLOAT32;
 }
 
 func is_primitive_type(t -> Int) -> Bool {
@@ -535,10 +585,19 @@ func is_primitive_type(t -> Int) -> Bool {
     return is_numeric_type(t) || t == TYPE_BOOL;
 }
 
+func is_small_primitive_type(t -> Int) -> Bool {
+// Checks if the type is smaller than 64 bits
+
+    return t == TYPE_BOOL || 
+           t == TYPE_BYTE || t == TYPE_CHAR || 
+           t == TYPE_INT || t == TYPE_INT8 || t == TYPE_INT16 || 
+           t == TYPE_UINT16 || t == TYPE_UINT32;
+}
+
 func is_nullable_complex_type(t -> Int) -> Bool {
 // Checks if the type is a nullable reference type handled as an implicit pointer
 
-    return t == TYPE_STRING || t >= 100 || t == TYPE_GENERIC_STRUCT || t == TYPE_GENERIC_CLASS || t == TYPE_GENERIC_FUNCTION || t == TYPE_GENERIC_METHOD || t == TYPE_AUTO;
+    return t == TYPE_STRING || t >= 100 || t == TYPE_GENERIC_STRUCT || t == TYPE_GENERIC_CLASS || t == TYPE_GENERIC_FUNCTION || t == TYPE_GENERIC_METHOD;
 }
 
 func is_nullable_reference_type(t -> Int) -> Bool {
@@ -551,6 +610,7 @@ func is_nullable_reference_type(t -> Int) -> Bool {
            t == TYPE_GENERIC_METHOD || 
            t >= 100;
 }
+
 
 func get_ptr_type_id(c -> Compiler, base_id -> Int) -> Int {
     let key -> String = "ptr_" + base_id;
@@ -650,6 +710,24 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
             let v -> VarAccessNode = call_node.callee;
             let callee_name -> String = v.name_tok.value;
 
+            if (callee_name == "Int" || callee_name == "Int32") { return TYPE_INT; }
+            if (callee_name == "Long" || callee_name == "Int64") { return TYPE_LONG; }
+            if (callee_name == "Float" || callee_name == "Float64") { return TYPE_FLOAT; }
+            if (callee_name == "Byte" || callee_name == "UInt8") { return TYPE_BYTE; }
+            if (callee_name == "Int8") { return TYPE_INT8; }
+            if (callee_name == "Int16") { return TYPE_INT16; }
+            if (callee_name == "Int128") { return TYPE_INT128; }
+            if (callee_name == "UInt16") { return TYPE_UINT16; }
+            if (callee_name == "UInt32") { return TYPE_UINT32; }
+            if (callee_name == "UInt64") { return TYPE_UINT64; }
+            if (callee_name == "UInt128") { return TYPE_UINT128; }
+            if (callee_name == "Float32") { return TYPE_FLOAT32; }
+            if (callee_name == "IntSize") { return TYPE_INTSIZE; }
+            if (callee_name == "UIntSize") { return TYPE_UINTSIZE; }
+            if (callee_name == "Bool") { return TYPE_BOOL; }
+            if (callee_name == "Char") { return TYPE_CHAR; }
+            if (callee_name == "AnyPtr") { return TYPE_ANYPTR; }
+
             let f_info -> FuncInfo = c.func_table.get(callee_name);
             if (f_info is null && c.current_package_prefix != "") { f_info = c.func_table.get(c.current_package_prefix + callee_name); }
             if (f_info is !null) { return f_info.ret_type; }
@@ -693,6 +771,16 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
     }
 
     return 0;
+}
+
+func get_type_bitwidth(t -> Int) -> Int {
+    if (t == TYPE_BOOL) { return 1; }
+    if (t == TYPE_BYTE || t == TYPE_INT8) { return 8; }
+    if (t == TYPE_INT16 || t == TYPE_UINT16) { return 16; }
+    if (t == TYPE_INT || t == TYPE_UINT32 || t == TYPE_CHAR || t == TYPE_FLOAT32) { return 32; }
+    if (t == TYPE_LONG || t == TYPE_UINT64 || t == TYPE_FLOAT || t == TYPE_INTSIZE || t == TYPE_UINTSIZE) { return 64; }
+    if (t == TYPE_INT128 || t == TYPE_UINT128) { return 128; }
+    return 64; // fallback for pointers
 }
 
 func resolve_type(c -> Compiler, node -> Struct) -> Int {
@@ -814,11 +902,23 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
     if (base.type == NODE_VAR_ACCESS) {
         let v -> VarAccessNode = node;
         let name -> String = v.name_tok.value;
-        
-        if (name == "Int") { return TYPE_INT; }
-        if (name == "Long") { return TYPE_LONG; }
-        if (name == "Byte") { return TYPE_BYTE; }
-        if (name == "Float") { return TYPE_FLOAT; }
+
+        if (name == "Int" || name == "Int32") { return TYPE_INT; }
+        if (name == "Long" || name == "Int64") { return TYPE_LONG; }
+        if (name == "Float" || name == "Float64") { return TYPE_FLOAT; }
+        if (name == "Byte" || name == "UInt8") { return TYPE_BYTE; }
+
+        if (name == "Int8") { return TYPE_INT8; }
+        if (name == "Int16") { return TYPE_INT16; }
+        if (name == "Int128") { return TYPE_INT128; }
+        if (name == "UInt16") { return TYPE_UINT16; }
+        if (name == "UInt32") { return TYPE_UINT32; }
+        if (name == "UInt64") { return TYPE_UINT64; }
+        if (name == "UInt128") { return TYPE_UINT128; }
+        if (name == "Float32") { return TYPE_FLOAT32; }
+        if (name == "IntSize") { return TYPE_INTSIZE; }
+        if (name == "UIntSize") { return TYPE_UINTSIZE; }
+
         if (name == "Bool") { return TYPE_BOOL; }
         if (name == "String") { return TYPE_STRING; }
         if (name == "Char") { return TYPE_CHAR; }
