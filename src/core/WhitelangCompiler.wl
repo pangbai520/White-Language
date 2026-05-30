@@ -552,7 +552,23 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
         res.type = TYPE_LONG;
     }
 
-    let buf_ptr -> String = emit_alloc_obj(c, "32", "" + TYPE_STRING, "i8*");
+    let buf_ptr -> String = emit_alloc_obj(c, "64", "" + TYPE_STRING, "i8*");
+
+    if (res.type == TYPE_INT128 || res.type == TYPE_UINT128) {
+        let fmt_func -> String = "@wl_format_i128";
+        if (res.type == TYPE_UINT128) {
+            fmt_func = "@wl_format_u128";
+        }
+        let low_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + low_reg + " = trunc i128 " + res.reg + " to i64\n");
+        let shifted -> String = next_reg(c);
+        c.output_file.write(c.indent + shifted + " = lshr i128 " + res.reg + ", 64\n");
+        let high_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + high_reg + " = trunc i128 " + shifted + " to i64\n");
+        
+        c.output_file.write(c.indent + "call void " + fmt_func + "(i8* " + buf_ptr + ", i64 " + low_reg + ", i64 " + high_reg + ")\n");
+        return CompileResult(reg=buf_ptr, type=TYPE_STRING);
+    }
 
     if (res.type == TYPE_UINT64 || res.type == TYPE_UINTSIZE) {
         let fmt -> String = next_reg(c);
@@ -4831,10 +4847,54 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_INT) {
         let n -> IntNode = node;
         let raw_val -> String = n.tok.value;
-        let parsed_val -> Long = string_to_long(raw_val, n.pos);
-        
         let t_id -> Int = c.expected_type;
+        
+        let is_i128 -> Bool = false;
+        let suffix_len -> Int = 0;
+        
+        if (raw_val.ends_with("ULL") || raw_val.ends_with("ull")) {
+            is_i128 = true;
+            suffix_len = 3;
+            if (t_id == 0) { t_id = TYPE_UINT128; }
+        } else if (raw_val.ends_with("LL") || raw_val.ends_with("ll")) {
+            is_i128 = true;
+            suffix_len = 2;
+        } else if (raw_val.ends_with("UL") || raw_val.ends_with("ul")) {
+            suffix_len = 2;
+            if (t_id == 0) { t_id = TYPE_UINT64; }
+        } else if (raw_val.ends_with("U") || raw_val.ends_with("u")) {
+            suffix_len = 1;
+            if (t_id == 0) { t_id = TYPE_UINT32; }
+        } else if (raw_val.ends_with("L") || raw_val.ends_with("l")) {
+            suffix_len = 1;
+            if (t_id == 0) { t_id = TYPE_LONG; }
+        }
 
+        if (exceeds_64bit_range(raw_val)) {
+            is_i128 = true;
+        }
+
+        if is_i128 {
+            if (t_id == 0 || !is_integer_type(t_id)) {
+                t_id = TYPE_INT128;
+            }
+            let actual_val -> String = raw_val;
+            if (suffix_len > 0) {
+                actual_val = raw_val.slice(0, raw_val.length() - suffix_len);
+            }
+            let clean_val -> String = "";
+            let i -> Int = 0;
+            let act_len -> Int = actual_val.length();
+            while (i < act_len) {
+                if (actual_val[i] != 95) {
+                    clean_val = clean_val + actual_val.slice(i, i + 1);
+                }
+                i += 1;
+            }
+            return CompileResult(reg=clean_val, type=t_id); 
+        }
+
+        let parsed_val -> Long = string_to_long(raw_val, n.pos);
         if (t_id == 0 || !is_integer_type(t_id)) {
             if (raw_val.ends_with("L") || raw_val.ends_with("l")) {
                 t_id = TYPE_LONG;
@@ -6162,6 +6222,12 @@ func compile_start(c -> Compiler) -> Void {
 
     c.output_file.write("declare void @wl_write_utf8(i8*)\n");
     c.declared_externs.put("wl_write_utf8", StringConstant(id=0, value=""));
+
+    c.output_file.write("declare void @wl_format_i128(i8*, i64, i64)\n");
+    c.declared_externs.put("wl_format_i128", StringConstant(id=0, value=""));
+    c.output_file.write("declare void @wl_format_u128(i8*, i64, i64)\n");
+    c.declared_externs.put("wl_format_u128", StringConstant(id=0, value=""));
+
 
 
     c.output_file.write("@.fmt_int = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\"\n");

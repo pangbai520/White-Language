@@ -140,3 +140,53 @@ void wl_print_utf8(const char* str) {
     printf("\n");
 #endif
 }
+
+void wl_format_i128(char* buf, unsigned long long low, long long high) {
+    __int128 val = (__int128)(((unsigned __int128)(unsigned long long)high << 64) | low);
+    if (val == 0) {
+        strcpy(buf, "0");
+        return;
+    }
+    int is_neg = 0;
+    unsigned __int128 uval;
+    if (val < 0) {
+        is_neg = 1;
+        uval = (unsigned __int128)(-val);
+    } else {
+        uval = (unsigned __int128)val;
+    }
+    
+    char temp[64];
+    int pos = 0;
+    while (uval > 0) {
+        temp[pos++] = (char)((uval % 10) + '0');
+        uval /= 10;
+    }
+    if (is_neg) {
+        temp[pos++] = '-';
+    }
+    int i;
+    for (i = 0; i < pos; i++) {
+        buf[i] = temp[pos - 1 - i];
+    }
+    buf[pos] = '\0';
+}
+
+void wl_format_u128(char* buf, unsigned long long low, unsigned long long high) {
+    unsigned __int128 val = ((unsigned __int128)high << 64) | low;
+    if (val == 0) {
+        strcpy(buf, "0");
+        return;
+    }
+    char temp[64];
+    int pos = 0;
+    while (val > 0) {
+        temp[pos++] = (char)((val % 10) + '0');
+        val /= 10;
+    }
+    int i;
+    for (i = 0; i < pos; i++) {
+        buf[i] = temp[pos - 1 - i];
+    }
+    buf[pos] = '\0';
+}

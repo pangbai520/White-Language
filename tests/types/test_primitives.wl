@@ -1,5 +1,5 @@
-// Test: EXPLICIT_TYPE_CAST_AND_DECLARATION
-// File: tests/types/test_new_types.wl
+// Test: PRIMITIVE_TYPES_AND_CASTS
+// File: tests/types/test_primitives.wl
 // Focus: Integer bit-width resolution, explicit cast semantics (trunc/ext), and pointer-integer roundtripping.
 import "builtin"
 
@@ -45,7 +45,18 @@ func main() -> Int {
     let addr_back -> UIntSize = UIntSize(ptr_val);
     let ptr_ok -> Bool = (addr_back == 123456789);
 
-    if (decl_ok && cast_a_ok && cast_b_ok && trunc_ok && sext_ok && zext_ok && bool_ok && ptr_ok) {
+    // validate literal suffixes (LL, ULL, U, UL, L) and Auto deduction
+    let auto_i128 -> Auto = 170141183460469231731687303715884105727LL; // ((2^127) - 1)
+    let auto_u128 -> Auto = 340282366920938463463374607431768211455ULL;// ((2^128) - 1)
+    let auto_u64  -> Auto = 18446744073709551615UL;                    // ((2^64) - 1)
+    let auto_u32  -> Auto = 4294967295U;                               // ((2^32) - 1)
+
+    let suffix_ok -> Bool = (auto_i128 == 170141183460469231731687303715884105727LL) && 
+                            (auto_u128 == 340282366920938463463374607431768211455ULL) && 
+                            (auto_u64 == 18446744073709551615UL) && 
+                            (auto_u32 == 4294967295U);
+
+    if (decl_ok && cast_a_ok && cast_b_ok && trunc_ok && sext_ok && zext_ok && bool_ok && ptr_ok && suffix_ok) {
         builtin.print("PASS: Modern type declarations and zero-cost conversion semantics");
     } else {
         // failure indicates a regression in LLVM IR cast instructions (sext/zext/trunc)

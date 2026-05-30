@@ -660,7 +660,15 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
     if (base.type == NODE_INT) { 
         let n -> IntNode = node;
         let raw_val -> String = n.tok.value;
+        if (raw_val.ends_with("ULL") || raw_val.ends_with("ull")) { return TYPE_UINT128; }
+        if (raw_val.ends_with("LL") || raw_val.ends_with("ll")) { return TYPE_INT128; }
+        if (raw_val.ends_with("UL") || raw_val.ends_with("ul")) { return TYPE_UINT64; }
+        if (raw_val.ends_with("U") || raw_val.ends_with("u")) { return TYPE_UINT32; }
+        if (exceeds_64bit_range(raw_val)) { return TYPE_INT128; }
+        
+        let parsed_val -> Long = string_to_long(raw_val, n.pos);
         if (raw_val.ends_with("L") || raw_val.ends_with("l")) { return TYPE_LONG; }
+        if (parsed_val < -2147483648L || parsed_val > 2147483647L) { return TYPE_LONG; }
         return TYPE_INT; 
     }
     if (base.type == NODE_STRING) { return TYPE_STRING; }
@@ -1079,8 +1087,16 @@ func string_to_int(val_str -> String, pos -> Position) -> Int {
     let start -> Int = 0; let is_neg -> Bool = false;
     if (val_str[0] == 45) { start = 1; is_neg = true; }
     let end -> Int = len;
-    let last_char -> Int = val_str[len - 1];
-    if (last_char == 76 || last_char == 108) { end = len - 1; }
+    if (val_str.ends_with("ULL") || val_str.ends_with("ull")) {
+        end = len - 3;
+    } else if (val_str.ends_with("LL") || val_str.ends_with("ll") || val_str.ends_with("UL") || val_str.ends_with("ul")) {
+        end = len - 2;
+    } else {
+        let last_char -> Int = val_str[len - 1];
+        if (last_char == 76 || last_char == 108 || last_char == 85 || last_char == 117) {
+            end = len - 1;
+        }
+    }
 
     let base_val -> Int = 10;
     if (end - start >= 2 && val_str[start] == 48) { 
@@ -1118,6 +1134,75 @@ func string_to_int(val_str -> String, pos -> Position) -> Int {
     return val;
 }
 
+func exceeds_64bit_range(val_str -> String) -> Bool {
+    let len -> Int = val_str.length();
+    if (len == 0) { return false; }
+    let start -> Int = 0;
+    if (val_str[0] == 45) { // '-'
+        start = 1;
+    }
+    let end -> Int = len;
+    if (val_str.ends_with("ULL") || val_str.ends_with("ull")) {
+        end = len - 3;
+    } else if (val_str.ends_with("LL") || val_str.ends_with("ll") || val_str.ends_with("UL") || val_str.ends_with("ul")) {
+        end = len - 2;
+    } else {
+        let last_char -> Int = val_str[len - 1];
+        if (last_char == 76 || last_char == 108 || last_char == 85 || last_char == 117) {
+            end = len - 1;
+        }
+    }
+    
+    // check hex/bin/octal
+    if (end - start >= 2 && val_str[start] == 48) { 
+        let second_char -> Int = val_str[start + 1];
+        if (second_char == 120 || second_char == 88) { // 0x
+            return (end - start) > 18; // 0x + 16 chars
+        } else if (second_char == 98 || second_char == 66) { // 0b
+            return (end - start) > 66; // 0b + 64 chars
+        } else if (second_char == 111 || second_char == 79) { // 0o
+            return (end - start) > 24; // 0o + 22 chars approx
+        }
+    }
+
+    // base 10: remove leading zeros
+    while (start < end - 1 && val_str[start] == 48) {
+        start += 1;
+    }
+    
+    let digit_count -> Int = 0;
+    let i -> Int = start;
+    while (i < end) {
+        if (val_str[i] != 95) { // ignore '_'
+            digit_count += 1;
+        }
+        i += 1;
+    }
+
+    if (digit_count > 19) { return true; }
+    if (digit_count < 19) { return false; }
+    
+    // exact 19 digits, compare string
+    let max_str -> String = "9223372036854775807"; // 19 digits
+    if (val_str[0] == 45) {
+        max_str = "9223372036854775808"; 
+    }
+    
+    let max_idx -> Int = 0;
+    i = start;
+    while (i < end) {
+        if (val_str[i] == 95) { 
+            i += 1;
+            continue; 
+        }
+        if (val_str[i] > max_str[max_idx]) { return true; }
+        if (val_str[i] < max_str[max_idx]) { return false; }
+        max_idx += 1;
+        i += 1;
+    }
+    return false;
+}
+
 func string_to_long(val_str -> String, pos -> Position) -> Long {
     let len -> Int = val_str.length();
     if (len == 0) { return 0L; }
@@ -1131,9 +1216,15 @@ func string_to_long(val_str -> String, pos -> Position) -> Long {
     }
 
     let end -> Int = len;
-    let last_char -> Int = val_str[len - 1];
-    if (last_char == 76 || last_char == 108) {
-        end = len - 1;
+    if (val_str.ends_with("ULL") || val_str.ends_with("ull")) {
+        end = len - 3;
+    } else if (val_str.ends_with("LL") || val_str.ends_with("ll") || val_str.ends_with("UL") || val_str.ends_with("ul")) {
+        end = len - 2;
+    } else {
+        let last_char -> Int = val_str[len - 1];
+        if (last_char == 76 || last_char == 108 || last_char == 85 || last_char == 117) {
+            end = len - 1;
+        }
     }
 
     let base_val -> Long = 10L;
