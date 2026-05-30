@@ -19,7 +19,7 @@ extern "C" {
 // ==========================================================
 // String methods (Built-in 'str.length()')
 // ==========================================================
-func string_at(self -> String, idx -> Int) -> Byte { // str.at()
+func string_at(self -> String, idx -> Int) -> Char { // str.at()
     return self[idx];
 }
 

@@ -16,11 +16,11 @@ struct Position(
     fn   -> String
 )
 
-func advance_pos(pos -> Position, current_char -> Byte) -> Void {
+func advance_pos(pos -> Position, current_char -> Char) -> Void {
     pos.idx = pos.idx + 1;
     pos.col = pos.col + 1;
 
-    if (current_char == 10) { // '\n'
+    if (current_char == '\n') {
         pos.ln = pos.ln + 1;
         pos.col = 0;
     }
@@ -53,7 +53,7 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
     let i -> Int = 0;
 
     while (i < text.length() && current_ln < target_ln) {
-        if (text[i] == 10) { // '\n'
+        if (text[i] == '\n') { // '\n'
             current_ln += 1;
             start_idx = i + 1;
         }
@@ -61,7 +61,7 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
     }
 
     let end_idx -> Int = start_idx;
-    while (end_idx < text.length() && text[end_idx] != 10 && text[end_idx] != 13) {
+    while (end_idx < text.length() && text[end_idx] != '\n' && text[end_idx] != '\r') {
         end_idx += 1;
     }
 
@@ -81,12 +81,12 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
         let err_len -> Int = 1;
         let line_len -> Int = line_text.length();
         if (pos.col < line_len) {
-            let ch -> Int = line_text[pos.col];
-            if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95 || (ch >= 48 && ch <= 57)) {
+            let ch -> Char = line_text[pos.col];
+            if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '_' || (ch >= '0' && ch <= '9')) {
                 let cur -> Int = pos.col + 1;
                 while (cur < line_len) {
-                    let c2 -> Int = line_text[cur];
-                    if ((c2 >= 65 && c2 <= 90) || (c2 >= 97 && c2 <= 122) || c2 == 95 || (c2 >= 48 && c2 <= 57)) {
+                    let c2 -> Char = line_text[cur]; 
+                    if ((c2 >= 'A' && c2 <= 'Z') || (c2 >= 'a' && c2 <= 'z') || c2 == '_' || (c2 >= '0' && c2 <= '9')) {
                         cur += 1;
                     } else {
                         break;
@@ -99,10 +99,10 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
         let caret_line -> String = empty_prefix + "| ";
         let j -> Int = 0;
         while (j < pos.col) {
-            let ch -> Int = 32;
+            let ch -> Char = ' ';
             if (j < line_len) { ch = line_text[j]; }
-            
-            if (ch == 9) { 
+
+            if (ch == '\t') { 
                 caret_line = caret_line + line_text.slice(j, j + 1);
             } else {
                 caret_line = caret_line + " ";

@@ -121,7 +121,7 @@ func peek_type(p -> Parser) -> Int {
     let save_idx  -> Int = l.pos.idx;
     let save_ln   -> Int = l.pos.ln;
     let save_col  -> Int = l.pos.col;
-    let save_char -> Byte = l.current_char;
+    let save_char -> Char = l.current_char;
     
     // get next token
     let tok -> Token = WhitelangLexer.get_next_token(l);
@@ -142,9 +142,9 @@ func parse_decimal_int(p -> Parser, tok -> Token) -> Int {
     let res -> Int = 0;
     let i -> Int = 0;
     while (i < s.length()) {
-        let code -> Int = s[i];
-        if (code >= 48 && code <= 57) {
-            res = res * 10 + (code - 48);
+        let code -> Char = s[i];
+        if (code >= '0' && code <= '9') {
+            res = res * 10 + (Int(code) - Int('0'));
         } else {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             WhitelangExceptions.throw_invalid_syntax(err_pos, "Pointer or dereference level must be a pure decimal integer.");

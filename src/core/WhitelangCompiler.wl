@@ -990,14 +990,14 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
 
         while (scan_idx < len) {
             if (current_ln == pos.ln) { line_start_idx = scan_idx; break; }
-            if (full_text[scan_idx] == 10) { current_ln += 1; }
+            if (full_text[scan_idx] == '\n') { current_ln += 1; }
             scan_idx += 1;
         }
 
         let line_end_idx -> Int = line_start_idx;
         while (line_end_idx < len) {
-            let ch -> Int = full_text[line_end_idx];
-            if (ch == 10 || ch == 13) { break; }
+            let ch -> Char = full_text[line_end_idx];
+            if (ch == '\n' || ch == '\r') { break; }
             line_end_idx += 1;
         }
 
@@ -1011,12 +1011,12 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
         let err_len -> Int = 1;
         let line_len -> Int = raw_line.length();
         if (pos.col < line_len) {
-            let ch -> Int = raw_line[pos.col];
-            if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95 || (ch >= 48 && ch <= 57)) {
+            let ch -> Char = raw_line[pos.col];
+            if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '_' || (ch >= '0' && ch <= '9')) {
                 let cur -> Int = pos.col + 1;
                 while (cur < line_len) {
-                    let c2 -> Int = raw_line[cur];
-                    if ((c2 >= 65 && c2 <= 90) || (c2 >= 97 && c2 <= 122) || c2 == 95 || (c2 >= 48 && c2 <= 57)) {
+                    let c2 -> Char = raw_line[cur];
+                    if ((c2 >= 'A' && c2 <= 'Z') || (c2 >= 'a' && c2 <= 'z') || c2 == '_' || (c2 >= '0' && c2 <= '9')) {
                         cur += 1;
                     } else {
                         break;
@@ -1396,8 +1396,8 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
         let start_idx -> Int = 0;
         let i -> Int = len - 1;
         while (i >= 0) {
-            let ch -> Int = raw_path[i];
-            if (ch == 47 || ch == 92) {
+            let ch -> Char = raw_path[i];
+            if (ch == '/' || ch == '\\') {
                 start_idx = i + 1;
                 break;
             }
@@ -2154,7 +2154,7 @@ func compile_class_method_call(c -> Compiler, s_info -> StructInfo, obj_res -> C
         let class_prefix -> String = "";
         let dot_idx -> Int = s_info.name.length() - 1;
         while (dot_idx >= 0) {
-            if (s_info.name[dot_idx] == 46) { // '.'
+            if (s_info.name[dot_idx] == '.') { // '.'
                 class_prefix = s_info.name.slice(0, dot_idx + 1);
                 break;
             }
@@ -2991,7 +2991,7 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
         let class_prefix -> String = "";
         let dot_idx -> Int = s_info.name.length() - 1;
         while (dot_idx >= 0) {
-            if (s_info.name[dot_idx] == 46) {
+            if (s_info.name[dot_idx] == '.') {
                 class_prefix = s_info.name.slice(0, dot_idx + 1);
                 break;
             }
@@ -3169,7 +3169,7 @@ func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResu
         let class_prefix -> String = "";
         let dot_idx -> Int = s_info.name.length() - 1;
         while (dot_idx >= 0) {
-            if (s_info.name[dot_idx] == 46) {
+            if (s_info.name[dot_idx] == '.') {
                 class_prefix = s_info.name.slice(0, dot_idx + 1);
                 break;
             }
@@ -3748,7 +3748,7 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
         return CompileResult(reg=val_reg, type=elem_type);
     }
     
-    // str access(-> Byte)
+    // str access(-> Char)
     if (target_res.type == TYPE_STRING) {
         let idx_i64 -> String = next_reg(c);
         c.output_file.write(c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
@@ -3904,7 +3904,7 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
 
             let val_i8 -> String = next_reg(c);
             c.output_file.write(c.indent + val_i8 + " = trunc i32 " + val_res.reg + " to i8\n");
-            
+
             c.output_file.write(c.indent + "store i8 " + val_i8 + ", i8* " + ptr_reg + "\n");
             return val_res;
         }
@@ -4242,7 +4242,7 @@ func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> Compi
             let class_prefix -> String = "";
             let dot_idx -> Int = s_info.name.length() - 1;
             while (dot_idx >= 0) {
-                if (s_info.name[dot_idx] == 46) {
+                if (s_info.name[dot_idx] == '.') {
                     class_prefix = s_info.name.slice(0, dot_idx + 1);
                     break;
                 }
@@ -4892,7 +4892,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             let i -> Int = 0;
             let act_len -> Int = actual_val.length();
             while (i < act_len) {
-                if (actual_val[i] != 95) {
+                if (actual_val[i] != '_') {
                     clean_val = clean_val + actual_val.slice(i, i + 1);
                 }
                 i += 1;

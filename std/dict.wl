@@ -19,9 +19,9 @@ func hash_string(key -> String) -> Int {
     let len -> Int = key.length();
 
     while (i < len) {
-        let c -> Int = key[i];
-        if (c == 0) { break; }
-        hash = ((hash << 5) + hash) ^ c;
+        let c -> Char = key[i];
+        if (c == '\0') { break; }
+        hash = ((hash << 5) + hash) ^ Int(c);
         i++;
     }
 

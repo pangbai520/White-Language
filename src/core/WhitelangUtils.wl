@@ -1085,22 +1085,22 @@ func string_to_int(val_str -> String, pos -> Position) -> Int {
     let len -> Int = val_str.length();
     if (len == 0) { return 0; }
     let start -> Int = 0; let is_neg -> Bool = false;
-    if (val_str[0] == 45) { start = 1; is_neg = true; }
+    if (val_str[0] == '-') { start = 1; is_neg = true; }
     let end -> Int = len;
     if (val_str.ends_with("ULL") || val_str.ends_with("ull")) {
         end = len - 3;
     } else if (val_str.ends_with("LL") || val_str.ends_with("ll") || val_str.ends_with("UL") || val_str.ends_with("ul")) {
         end = len - 2;
     } else {
-        let last_char -> Int = val_str[len - 1];
+        let last_char -> Int = Int(val_str[len - 1]);
         if (last_char == 76 || last_char == 108 || last_char == 85 || last_char == 117) {
             end = len - 1;
         }
     }
 
     let base_val -> Int = 10;
-    if (end - start >= 2 && val_str[start] == 48) { 
-        let second_char -> Int = val_str[start + 1];
+    if (end - start >= 2 && val_str[start] == '0') { 
+        let second_char -> Int = Int(val_str[start + 1]);
         if (second_char == 120 || second_char == 88) { base_val = 16; start += 2; } 
         else if (second_char == 98 || second_char == 66) { base_val = 2; start += 2; } 
         else if (second_char == 111 || second_char == 79) { base_val = 8; start += 2; }
@@ -1108,7 +1108,7 @@ func string_to_int(val_str -> String, pos -> Position) -> Int {
 
     let val -> Int = 0; let j -> Int = start;
     while (j < end) {
-        let code -> Int = val_str[j];
+        let code -> Int = Int(val_str[j]);
         if (code == 95) { j += 1; continue; }
         let digit -> Int = -1;
         if (code >= 48 && code <= 57) { digit = code - 48; } 
@@ -1138,7 +1138,7 @@ func exceeds_64bit_range(val_str -> String) -> Bool {
     let len -> Int = val_str.length();
     if (len == 0) { return false; }
     let start -> Int = 0;
-    if (val_str[0] == 45) { // '-'
+    if (val_str[0] == '-') { // '-'
         start = 1;
     }
     let end -> Int = len;
@@ -1147,33 +1147,33 @@ func exceeds_64bit_range(val_str -> String) -> Bool {
     } else if (val_str.ends_with("LL") || val_str.ends_with("ll") || val_str.ends_with("UL") || val_str.ends_with("ul")) {
         end = len - 2;
     } else {
-        let last_char -> Int = val_str[len - 1];
+        let last_char -> Int = Int(val_str[len - 1]);
         if (last_char == 76 || last_char == 108 || last_char == 85 || last_char == 117) {
             end = len - 1;
         }
     }
     
     // check hex/bin/octal
-    if (end - start >= 2 && val_str[start] == 48) { 
-        let second_char -> Int = val_str[start + 1];
-        if (second_char == 120 || second_char == 88) { // 0x
+    if (end - start >= 2 && val_str[start] == '0') { 
+        let second_char -> Char = val_str[start + 1];
+        if (second_char == 'x' || second_char == 'X') { // 0x
             return (end - start) > 18; // 0x + 16 chars
-        } else if (second_char == 98 || second_char == 66) { // 0b
+        } else if (second_char == 'b' || second_char == 'B') { // 0b
             return (end - start) > 66; // 0b + 64 chars
-        } else if (second_char == 111 || second_char == 79) { // 0o
+        } else if (second_char == 'o' || second_char == 'O') { // 0o
             return (end - start) > 24; // 0o + 22 chars approx
         }
     }
 
     // base 10: remove leading zeros
-    while (start < end - 1 && val_str[start] == 48) {
+    while (start < end - 1 && val_str[start] == '0') {
         start += 1;
     }
     
     let digit_count -> Int = 0;
     let i -> Int = start;
     while (i < end) {
-        if (val_str[i] != 95) { // ignore '_'
+        if (val_str[i] != '_') { // ignore '_'
             digit_count += 1;
         }
         i += 1;
@@ -1184,14 +1184,14 @@ func exceeds_64bit_range(val_str -> String) -> Bool {
     
     // exact 19 digits, compare string
     let max_str -> String = "9223372036854775807"; // 19 digits
-    if (val_str[0] == 45) {
+    if (val_str[0] == '-') {
         max_str = "9223372036854775808"; 
     }
     
     let max_idx -> Int = 0;
     i = start;
     while (i < end) {
-        if (val_str[i] == 95) { 
+        if (val_str[i] == '_') { 
             i += 1;
             continue; 
         }
@@ -1210,7 +1210,7 @@ func string_to_long(val_str -> String, pos -> Position) -> Long {
     let start -> Int = 0;
     let is_neg -> Bool = false;
     
-    if (val_str[0] == 45) { // '-'
+    if (val_str[0] == '-') {
         start = 1;
         is_neg = true;
     }
@@ -1221,22 +1221,22 @@ func string_to_long(val_str -> String, pos -> Position) -> Long {
     } else if (val_str.ends_with("LL") || val_str.ends_with("ll") || val_str.ends_with("UL") || val_str.ends_with("ul")) {
         end = len - 2;
     } else {
-        let last_char -> Int = val_str[len - 1];
-        if (last_char == 76 || last_char == 108 || last_char == 85 || last_char == 117) {
+        let last_char -> Char = val_str[len - 1];
+        if (last_char == 'L' || last_char == 'l' || last_char == 'U' || last_char == 'u') {
             end = len - 1;
         }
     }
 
     let base_val -> Long = 10L;
-    if (end - start >= 2 && val_str[start] == 48) { 
-        let second_char -> Int = val_str[start + 1];
-        if (second_char == 120 || second_char == 88) { // 0x
+    if (end - start >= 2 && val_str[start] == '0') { 
+        let second_char -> Char = val_str[start + 1];
+        if (second_char == 'x' || second_char == 'X') {
             base_val = 16L;
             start += 2;
-        } else if (second_char == 98 || second_char == 66) { // 0b
+        } else if (second_char == 'b' || second_char == 'B') {
             base_val = 2L;
             start += 2;
-        } else if (second_char == 111 || second_char == 79) { // 0o
+        } else if (second_char == 'o' || second_char == 'O') {
             base_val = 8L;
             start += 2;
         }
@@ -1245,16 +1245,17 @@ func string_to_long(val_str -> String, pos -> Position) -> Long {
     let val -> Long = 0L;
     let j -> Int = start;
     while (j < end) {
-        let code -> Int = val_str[j];
-        if (code == 95) { // ignore '_' 
+        let code -> Char = val_str[j];
+        if (code == '_') {
             j += 1;
             continue;
         }
 
         let digit -> Long = -1L;
-        if (code >= 48 && code <= 57) { digit = code - 48; } 
-        else if (code >= 97 && code <= 102) { digit = code - 87; } 
-        else if (code >= 65 && code <= 70) { digit = code - 55; } 
+        if (code >= '0' && code <= '9') { digit = Int(code) - Int('0'); }
+        else if (code >= 'a' && code <= 'f') { digit = Int(code) - Int('a') + 10; }
+        else if (code >= 'A' && code <= 'F') { digit = Int(code) - Int('A') + 10; }
+
 
         let is_valid -> Bool = false;
         if (digit >= 0L) {
@@ -1286,16 +1287,15 @@ func string_escape(s -> String) -> String {
     let len -> Int = s.length();
     
     while (i < len) {
-        let b -> Byte = s[i];
-        let code -> Int = b;
+        let code -> Char = s[i];
         
-        if (code == 34) { // "
+    if (code == '"') { // "
             res = res + "\\22";
-        } else if (code == 92) { // \
+        } else if (code == '\\') {
             res = res + "\\5C";
-        } else if (code == 10) { // \n
+        } else if (code == '\n') {
             res = res + "\\0A";
-        } else if (code == 13) { // \r
+        } else if (code == '\r') {
             res = res + "\\0D";
         } else {
             res += s.slice(i, i + 1);
@@ -1318,8 +1318,8 @@ func get_dir_name(path -> String) -> String {
     let len -> Int = path.length();
     let i -> Int = len - 1;
     while (i >= 0) {
-        let c -> Int = path[i];
-        if (c == 47 || c == 92) { // '/' or '\'
+        let c -> Char = path[i];
+        if (c == '/' || c == '\\') {
             return path.slice(0, i);
         }
         i -= 1;

@@ -171,8 +171,8 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         let len -> Int = base_name.length();
         let idx -> Int = len - 1;
         while (idx >= 0) {
-            let ch -> Int = base_name[idx];
-            if (ch == 47 || ch == 92) {
+            let ch -> Char = base_name[idx];
+            if (ch == '/' || ch == '\\') {
                 file_only = base_name.slice(idx + 1, len);
                 break;
             }

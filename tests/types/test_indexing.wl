@@ -10,9 +10,9 @@ func main() -> Int {
     
     // 2. String byte access
     let s -> String = "ABC";
-    let first_byte -> Byte = s[0]; // 'A' = 65
+    let first_byte -> Char = s[0];
 
-    if (v[1] == 999 && first_byte == 65) {
+    if (v[1] == 999 && first_byte == 'A') {
         builtin.print("PASS: Vector and String indexing");
     } else {
         builtin.print("FAIL: Indexing value mismatch");
