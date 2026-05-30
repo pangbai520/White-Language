@@ -45,9 +45,7 @@ const TYPE_FLOAT32 -> Int = 23;
 const TYPE_INTSIZE  -> Int = 24;
 const TYPE_UINTSIZE -> Int = 25;
 
-
-
-
+const TYPE_POISON -> Int = 98;
 const TYPE_NULLPTR -> Int = 99;
 
 
@@ -412,6 +410,8 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_CLASS) { return "i8*"; }
     if (type_id == TYPE_GENERIC_METHOD) { return "i8*"; }
     if (type_id == TYPE_ANYPTR) { return "i8*"; }
+    
+    if (type_id == TYPE_POISON) { return "void"; } // dummy type for poison variables
 
     if (type_id == TYPE_INT8)  { return "i8"; }
     if (type_id == TYPE_INT16) { return "i16"; }
@@ -466,6 +466,7 @@ func get_type_name(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_CHAR)   { return "Char"; }
     if (type_id == TYPE_NULL)   { return "null"; }
     if (type_id == TYPE_NULLPTR){ return "nullptr"; }
+    if (type_id == TYPE_POISON) { return "Poison"; }
     if (type_id == TYPE_GENERIC_STRUCT) { return "Struct"; }
     if (type_id == TYPE_GENERIC_FUNCTION) { return "Function"; }
     if (type_id == TYPE_GENERIC_CLASS) { return "Class"; }
@@ -976,7 +977,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         }
     }
     
-    return TYPE_VOID;
+    return TYPE_POISON;
 }
 
 func get_func_sig_str(c -> Compiler, info -> FuncInfo) -> String {
