@@ -3756,10 +3756,13 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
         let char_ptr -> String = next_reg(c);
         c.output_file.write(c.indent + char_ptr + " = getelementptr inbounds i8, i8* " + target_res.reg + ", i64 " + idx_i64 + "\n");
         
-        let char_val -> String = next_reg(c);
-        c.output_file.write(c.indent + char_val + " = load i8, i8* " + char_ptr + "\n");
+        let char_val_i8 -> String = next_reg(c);
+        c.output_file.write(c.indent + char_val_i8 + " = load i8, i8* " + char_ptr + "\n");
         
-        return CompileResult(reg=char_val, type=TYPE_BYTE);
+        let char_val_i32 -> String = next_reg(c);
+        c.output_file.write(c.indent + char_val_i32 + " = zext i8 " + char_val_i8 + " to i32\n");
+        
+        return CompileResult(reg=char_val_i32, type=TYPE_CHAR);
     }
     
     WhitelangExceptions.throw_type_error(node.pos, "Type " + get_type_name(c, target_res.type) + " is not indexable.");
@@ -3897,9 +3900,12 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
 
             let ptr_reg -> String = next_reg(c);
             c.output_file.write(c.indent + ptr_reg + " = getelementptr inbounds i8, i8* " + target_res.reg + ", i64 " + idx_i64 + "\n");
-            val_res = emit_implicit_cast(c, val_res, TYPE_BYTE, node.pos);
+            val_res = emit_implicit_cast(c, val_res, TYPE_CHAR, node.pos);
 
-            c.output_file.write(c.indent + "store i8 " + val_res.reg + ", i8* " + ptr_reg + "\n");
+            let val_i8 -> String = next_reg(c);
+            c.output_file.write(c.indent + val_i8 + " = trunc i32 " + val_res.reg + " to i8\n");
+            
+            c.output_file.write(c.indent + "store i8 " + val_i8 + ", i8* " + ptr_reg + "\n");
             return val_res;
         }
 

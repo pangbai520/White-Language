@@ -707,7 +707,7 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
             let v_info -> SymbolInfo = c.vector_base_map.get("" + target_type);
             if (v_info is !null) { return v_info.type; }
         }
-        if (target_type == TYPE_STRING) { return TYPE_BYTE; }
+        if (target_type == TYPE_STRING) { return TYPE_CHAR; }
         return 0;
     }
 
