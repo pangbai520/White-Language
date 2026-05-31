@@ -61,7 +61,7 @@ const TOK_POW_ASSIGN    -> Int = 51; // **=
 
 const TOK_STRUCT        -> Int = 52;
 const TOK_THIS          -> Int = 53; // this
-const TOK_DOT           -> Int = 53; // .
+const TOK_DOT           -> Int = 54; // .
 
 const TOK_PTR           -> Int = 55; // ptr
 const TOK_REF           -> Int = 56; // ref
@@ -103,6 +103,8 @@ const TOK_AT            -> Int = 85; // @
 
 const TOK_T_CHAR        -> Int = 86;
 const TOK_CHAR_LIT      -> Int = 87;
+
+const TOK_ENUM          -> Int = 88; // enum
 
 
 func get_token_name(type -> Int) -> String {
@@ -203,6 +205,8 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_T_BOOL) { return "Bool"; }
     if (type == TOK_T_CHAR) { return "Char"; }
     if (type == TOK_T_VOID) { return "Void"; }
+
+    if (type == TOK_ENUM) { return "enum"; }
 
     return "EOF";
 }

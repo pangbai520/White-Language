@@ -105,7 +105,8 @@ struct StructInfo(
     vtable_name -> String,
     parent_id   -> Int,
     vtable      -> Vector(Struct),
-    annotations -> Vector(Struct)
+    annotations -> Vector(Struct),
+    is_enum     -> Bool
 )
 
 struct ArrayInfo(
@@ -471,6 +472,7 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
 
         let s_info -> StructInfo = c.struct_id_map.get("" + type_id);
         if (s_info is !null) { 
+            if (s_info.is_enum) { return "i32"; }
             return s_info.llvm_name + "*"; 
         }
 
@@ -576,7 +578,11 @@ func is_ref_type(c -> Compiler, type_id -> Int) -> Bool {
 
     if (type_id >= 100) {
         if (c.array_info_map.get("" + type_id) is !null) { return false; }
-        if (c.struct_id_map.get("" + type_id) is !null) { return true; }
+        let s_info -> StructInfo = c.struct_id_map.get("" + type_id);
+        if (s_info is !null) {
+            if (s_info.is_enum) { return false; }
+            return true;
+        }
         if (c.vector_base_map.get("" + type_id) is !null) { return true; }
         if (c.func_ret_map.get("" + type_id) is !null) { return true; }
     }
@@ -630,7 +636,12 @@ func is_nullable_complex_type(t -> Int) -> Bool {
     return t == TYPE_STRING || t >= 100 || t == TYPE_GENERIC_STRUCT || t == TYPE_GENERIC_CLASS || t == TYPE_GENERIC_FUNCTION || t == TYPE_GENERIC_METHOD;
 }
 
-func is_nullable_reference_type(t -> Int) -> Bool {
+func is_nullable_reference_type(c -> Compiler, t -> Int) -> Bool {
+    if (t >= 100) {
+        let s_info -> StructInfo = c.struct_id_map.get("" + t);
+        if (s_info is !null && s_info.is_enum) { return false; }
+    }
+    
     return t == TYPE_STRING || 
            t == TYPE_ANYPTR || 
            t == TYPE_NULLPTR || 

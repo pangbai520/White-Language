@@ -270,7 +270,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         let null_return_label -> String = "ret_null_" + c.type_counter;
         c.type_counter += 1;
 
-        let can_be_null -> Bool = is_nullable_reference_type(expected_type);
+        let can_be_null -> Bool = is_nullable_reference_type(c, expected_type);
 
         let is_null_ptr -> String = next_reg(c);
         c.output_file.write(c.indent + is_null_ptr + " = icmp eq " + variant_llvm + "* " + val_res.reg + ", null\n");
@@ -353,7 +353,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
             let zero_val -> String = "0";
             if (expected_type == TYPE_FLOAT) {
                 zero_val = "0.0";
-            } else if (is_nullable_reference_type(expected_type)) {
+            } else if (is_nullable_reference_type(c, expected_type)) {
                 zero_val = "null";
             }
             
@@ -661,7 +661,7 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             let active_anns -> Dict = analyze_annotations(c, n.annotations);
             if (active_anns.get("CompilerIntrinsic") is !null) {
                 if (c.current_package_prefix != "dict." && c.current_package_prefix != "") {
-                    WhitelangExceptions.throw_invalid_syntax(n.pos, "Security Error: @CompilerIntrinsic is restricted to compiler internal libraries.");
+                    WhitelangExceptions.throw_internal_compiler_error(n.pos, "@CompilerIntrinsic is restricted to compiler internal libraries.");
                     return; 
                 }
 
@@ -671,7 +671,7 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                     i += 1;
                     continue; 
                 } else {
-                    WhitelangExceptions.throw_invalid_syntax(n.pos, "Compiler Error: Unknown intrinsic struct '" + raw_name + "'.");
+                    WhitelangExceptions.throw_internal_compiler_error(n.pos, "Unknown intrinsic struct '" + raw_name + "'.");
                     return;
                 }
             }
@@ -687,7 +687,8 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 vtable_name="", 
                 parent_id=0, 
                 vtable=null,
-                annotations=n.annotations
+                annotations=n.annotations,
+                is_enum=false
             );
             c.struct_table.put(s_name, info);
             c.struct_id_map.put("" + new_id, info);
@@ -708,9 +709,31 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 vtable_name="@vtable." + c_name, 
                 parent_id=0, 
                 vtable=null,
-                annotations=c_node.annotations
+                annotations=c_node.annotations,
+                is_enum=false
             );
             c.struct_table.put(c_name, info);
+            c.struct_id_map.put("" + new_id, info);
+        } else if (base.type == NODE_ENUM_DEF) {
+            let e_node -> EnumDefNode = stmts[i];
+            let raw_name -> String = e_node.name_tok.value;
+            let e_name -> String = c.current_package_prefix + raw_name;
+            let new_id -> Int = c.type_counter;
+            c.type_counter += 1;
+            let info -> StructInfo = StructInfo(
+                name=e_name, 
+                type_id=new_id, 
+                fields=[], 
+                llvm_name="i32", 
+                init_body=null, 
+                is_class=false, 
+                vtable_name="", 
+                parent_id=0, 
+                vtable=null,
+                annotations=null,
+                is_enum=true
+            );
+            c.struct_table.put(e_name, info);
             c.struct_id_map.put("" + new_id, info);
         }
         i += 1;
@@ -1561,7 +1584,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         }
 
         let init_val_str -> String = "0";
-        if (is_nullable_reference_type(target_type_id)) { init_val_str = "null"; }
+        if (is_nullable_reference_type(c, target_type_id)) { init_val_str = "null"; }
 
         if (node.value is !null) {
             let val_node -> BaseNode = node.value;
@@ -1676,7 +1699,8 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         if (s_info is !null) {
             if (c.array_info_map.get("" + target_type_id) is null && 
                 c.vector_base_map.get("" + target_type_id) is null && 
-                c.func_ret_map.get("" + target_type_id) is null) {
+                c.func_ret_map.get("" + target_type_id) is null &&
+                !s_info.is_enum) {
                 is_valid_struct = true;
             }
         }
@@ -2060,7 +2084,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         } else {
             let zero_val -> String = "0";
             if (ret_type_id == TYPE_FLOAT) { zero_val = "0.0"; }
-            else if (is_nullable_reference_type(ret_type_id)) { zero_val = "null"; }
+            else if (is_nullable_reference_type(c, ret_type_id)) { zero_val = "null"; }
             
             c.output_file.write(c.indent + "ret " + llvm_ret_type + " " + zero_val + "\n");
         }
@@ -2159,7 +2183,7 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
         } else {
             let zero_val -> String = "0";
             if (ret_type_id == TYPE_FLOAT) { zero_val = "0.0"; }
-            else if (is_nullable_reference_type(ret_type_id)) { zero_val = "null"; }
+            else if (is_nullable_reference_type(c, ret_type_id)) { zero_val = "null"; }
             c.output_file.write(c.indent + "ret " + llvm_ret_type + " " + zero_val + "\n");
         }
     }
@@ -2283,7 +2307,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
         scope.local_vars.put(p_node.name_tok.value, TypeListNode(type=1));
         p_i += 1;
     }
-    
+
     analyze_captures(func_def.body, scope);
     
     let captures -> Vector(String) = [];
@@ -2330,7 +2354,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     }
     let llvm_env_name -> String = "{ " + env_body + " }";
 
-    let env_info -> StructInfo = StructInfo(name=env_struct_name, type_id=env_id, fields=env_fields, llvm_name=llvm_env_name, init_body=null, is_class=false, vtable_name="", parent_id=0, vtable=null);
+    let env_info -> StructInfo = StructInfo(name=env_struct_name, type_id=env_id, fields=env_fields, llvm_name=llvm_env_name, init_body=null, is_class=false, vtable_name="", parent_id=0, vtable=null, is_enum=false);
     c.struct_id_map.put("" + env_id, env_info);
     c.type_drop_list.append(TypeListNode(type=env_id));
 
@@ -2444,7 +2468,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     } else {
         let zero_val -> String = "0";
         if (ret_type_id == TYPE_FLOAT) { zero_val = "0.0"; }
-        else if (is_nullable_reference_type(ret_type_id)) { zero_val = "null"; }
+        else if (is_nullable_reference_type(c, ret_type_id)) { zero_val = "null"; }
         c.output_file.write("  ret " + ret_ty_str + " " + zero_val + "\n");
     }
     c.output_file.write("}\n\n");
@@ -2610,7 +2634,7 @@ func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode
         c.output_file.write(c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_ptr + ", i32 0, i32 " + f_curr.offset + "\n");
         let zero_val -> String = "0";
         if (f_curr.type == TYPE_FLOAT) { zero_val = "0.0"; }
-        else if (is_nullable_reference_type(f_curr.type)) { zero_val = "null"; }
+        else if (is_nullable_reference_type(c, f_curr.type)) { zero_val = "null"; }
         
         c.output_file.write(c.indent + "store " + f_curr.llvm_type + " " + zero_val + ", " + f_curr.llvm_type + "* " + f_ptr + "\n");
         
@@ -2685,7 +2709,7 @@ func compile_class_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode)
         } else {
             let zero_val -> String = "0";
             if (f_curr.type == TYPE_FLOAT) { zero_val = "0.0"; }
-            else if (is_nullable_reference_type(f_curr.type)) { zero_val = "null"; }
+            else if (is_nullable_reference_type(c, f_curr.type)) { zero_val = "null"; }
             
             c.output_file.write(c.indent + "store " + f_curr.llvm_type + " " + zero_val + ", " + f_curr.llvm_type + "* " + f_ptr + "\n");
         }
@@ -4134,6 +4158,40 @@ func compile_map_lit(c -> Compiler, lit_node -> Struct) -> CompileResult {
     return CompileResult(reg=dict_res.reg, type=dict_info.type_id, origin_type=0);
 }
 
+func compile_enum_def(c -> Compiler, node -> EnumDefNode) -> CompileResult {
+    let raw_name -> String = node.name_tok.value;
+    let enum_name -> String = c.current_package_prefix + raw_name;
+    
+    let type_info -> StructInfo = c.struct_table.get(enum_name);
+    let type_id -> Int = type_info.type_id;
+    let llvm_ty_str -> String = "i32";
+
+    let fields -> Vector(Struct) = node.fields;
+    let len -> Int = 0; if (fields is !null) { len = fields.length(); }
+    let i -> Int = 0;
+    
+    let current_val -> Long = 0L;
+
+    while (i < len) {
+        let f_node -> EnumFieldNode = fields[i];
+        
+        if (f_node.value is !null) {
+            current_val = eval_const_long(c, f_node.value, f_node.pos);
+        }
+        
+        let field_name -> String = f_node.name_tok.value;
+        let global_name -> String = "@" + enum_name + "." + field_name;
+        
+        c.output_file.write(global_name + " = global " + llvm_ty_str + " " + current_val + "\n");
+        c.global_symbol_table.put(enum_name + "." + field_name, SymbolInfo(reg=global_name, type=type_id, origin_type=type_id, is_const=true));
+        
+        current_val += 1L;
+        i += 1;
+    }
+    
+    return void_result();
+}
+
 func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> CompileResult {
     if (node is null) { return null; }
     let base -> BaseNode = node;
@@ -4519,6 +4577,26 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
     if (op_type == TOK_LTE) { is_cmp = true; }
 
     if is_cmp {
+        let is_enum_cmp -> Bool = false;
+        if (left.type >= 100 && left.type == right.type) {
+            let s_info -> StructInfo = c.struct_id_map.get("" + left.type);
+            if (s_info is !null && s_info.is_enum) {
+                is_enum_cmp = true;
+            }
+        }
+        
+        if is_enum_cmp {
+            if (op_type != TOK_EE && op_type != TOK_NE) {
+                WhitelangExceptions.throw_type_error(node.pos, "Enum type only supports == and !=.");
+                return void_result();
+            }
+            let res_reg -> String = next_reg(c);
+            let op_code -> String = "icmp eq";
+            if (op_type == TOK_NE) { op_code = "icmp ne"; }
+            c.output_file.write(c.indent + res_reg + " = " + op_code + " i32 " + left.reg + ", " + right.reg + "\n");
+            return CompileResult(reg=res_reg, type=TYPE_BOOL);
+        }
+        
         if (left.type >= 100 || right.type >= 100 || left.type == TYPE_NULL || right.type == TYPE_NULL) {
             WhitelangExceptions.throw_type_error(node.pos, "Pointer comparison is not supported yet. Please use loop counters.");
             return void_result();
@@ -4756,6 +4834,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_INDEX_ASSIGN) { return compile_index_assign(c, node); }
     if (base.type == NODE_SLICE_ACCESS) { return compile_slice_access(c, node); }
     if (base.type == NODE_MAP_LIT) { return compile_map_lit(c, node); }
+    if (base.type == NODE_ENUM_DEF) { return compile_enum_def(c, node); }
 
     // function and closure
     if (base.type == NODE_FUNC_DEF) {
@@ -6346,7 +6425,8 @@ func compile_start(c -> Compiler) -> Void {
         vtable_name="", 
         parent_id=0, 
         vtable=null, 
-        annotations=null
+        annotations=null,
+        is_enum=false
     );
     c.struct_table.put("$Variant", variant_info);
     c.struct_id_map.put("" + variant_id, variant_info);

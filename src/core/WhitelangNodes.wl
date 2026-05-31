@@ -51,7 +51,8 @@ const NODE_SLICE_ACCESS   -> Int = 47;
 const NODE_MAP_LIT        -> Int = 48;
 const NODE_ANNOTATION     -> Int = 49; // @XXX
 const NODE_CHAR           -> Int = 50;
-
+const NODE_ENUM_DEF       -> Int = 51;
+const NODE_ENUM_FIELD     -> Int = 52;
 
 struct BaseNode(type -> Int) // Used to read node type
 
@@ -403,6 +404,20 @@ struct AnnotationNode(
 
 struct CharNode(
     type -> Int, // NODE_CHAR
-    tok -> Token,
-    pos -> Position
+    tok  -> Token,
+    pos  -> Position
+)
+
+struct EnumDefNode(
+    type     -> Int, // NODE_ENUM_DEF
+    name_tok -> Token,
+    fields   -> Vector(Struct),
+    pos      -> Position
+)
+
+struct EnumFieldNode(
+    type     -> Int, // NODE_ENUM_FIELD
+    name_tok -> Token,
+    value    -> Struct,
+    pos      -> Position
 )

@@ -76,6 +76,8 @@ func parse(p -> Parser) -> Struct {
             stmt = parse_struct_def(p, anns);
         } else if (p.current_tok.type == TOK_CLASS) {
             stmt = parse_class_def(p, anns);
+        } else if (p.current_tok.type == TOK_ENUM) {
+            stmt = parse_enum_def(p, anns);
         } else if (p.current_tok.type == TOK_IMPORT) { 
             if (anns.length() > 0) { 
                 let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -1651,4 +1653,67 @@ func parse_class_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
     parser_advance(p); // skip '}'
 
     return ClassDefNode(type=NODE_CLASS_DEF, pos=pos, name_tok=name_tok, parent_tok=parent_tok, fields=fields, methods=methods, annotations=anns);
+}
+
+func parse_enum_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
+    let start_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+
+    parser_advance(p); // skip 'enum'
+
+    if (p.current_tok.type != TOK_IDENTIFIER) {
+        let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected enum name.");
+    }
+    let name_tok -> Token = p.current_tok;
+    parser_advance(p);
+
+    if (p.current_tok.type != TOK_LBRACE) {
+        let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '{' after enum name.");
+    }
+    parser_advance(p); // skip '{'
+
+    let fields -> Vector(Struct) = [];
+
+    while (p.current_tok.type != TOK_RBRACE && p.current_tok.type != TOK_EOF) {
+        if (p.current_tok.type != TOK_IDENTIFIER) {
+            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected identifier in enum fields.");
+            parser_advance(p);
+            continue;
+        }
+        let field_name_tok -> Token = p.current_tok;
+        let field_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        parser_advance(p);
+
+        let value_expr -> Struct = null;
+        if (p.current_tok.type == TOK_ASSIGN) {
+            parser_advance(p); // skip '='
+            value_expr = expression(p);
+        }
+
+        fields.append(EnumFieldNode(type=NODE_ENUM_FIELD, name_tok=field_name_tok, value=value_expr, pos=field_pos));
+
+        if (p.current_tok.type == TOK_COMMA) {
+            parser_advance(p);
+        } else if (p.current_tok.type != TOK_RBRACE) {
+            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ',' or '}' in enum definition.");
+            break;
+        }
+    }
+
+    if (p.current_tok.type == TOK_RBRACE) {
+        parser_advance(p);
+    } else {
+        let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '}' to close enum definition.");
+    }
+
+    if (anns.length() > 0) {
+        let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        WhitelangExceptions.throw_invalid_syntax(err_pos, "Annotations not allowed on enums.");
+    }
+
+    return EnumDefNode(type=NODE_ENUM_DEF, name_tok=name_tok, fields=fields, pos=start_pos);
 }
