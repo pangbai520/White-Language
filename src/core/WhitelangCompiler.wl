@@ -247,10 +247,15 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         } else if (val_res.type == TYPE_FLOAT) {
             c.output_file.write(c.indent + payload_i64 + " = bitcast double " + val_res.reg + " to i64\n");
         } else {
-            let ptr_ty -> String = get_llvm_type_str(c, val_res.type);
-            c.output_file.write(c.indent + payload_i64 + " = ptrtoint " + ptr_ty + " " + val_res.reg + " to i64\n");
-            if (is_ref_type(c, val_res.type)) {
-                emit_retain(c, val_res.reg, val_res.type);
+            let val_s_info -> StructInfo = c.struct_id_map.get("" + val_res.type);
+            if (val_s_info is !null && val_s_info.is_enum) {
+                c.output_file.write(c.indent + payload_i64 + " = zext i32 " + val_res.reg + " to i64\n");
+            } else {
+                let ptr_ty -> String = get_llvm_type_str(c, val_res.type);
+                c.output_file.write(c.indent + payload_i64 + " = ptrtoint " + ptr_ty + " " + val_res.reg + " to i64\n");
+                if (is_ref_type(c, val_res.type)) {
+                    emit_retain(c, val_res.reg, val_res.type);
+                }
             }
         }
         
@@ -335,8 +340,13 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         } else if (expected_type == TYPE_FLOAT) {
             c.output_file.write(c.indent + unboxed_reg + " = bitcast i64 " + payload_i64 + " to double\n");
         } else {
-            let ptr_ty -> String = get_llvm_type_str(c, expected_type);
-            c.output_file.write(c.indent + unboxed_reg + " = inttoptr i64 " + payload_i64 + " to " + ptr_ty + "\n");
+            let exp_s_info -> StructInfo = c.struct_id_map.get("" + expected_type);
+            if (exp_s_info is !null && exp_s_info.is_enum) {
+                c.output_file.write(c.indent + unboxed_reg + " = trunc i64 " + payload_i64 + " to i32\n");
+            } else {
+                let ptr_ty -> String = get_llvm_type_str(c, expected_type);
+                c.output_file.write(c.indent + unboxed_reg + " = inttoptr i64 " + payload_i64 + " to " + ptr_ty + "\n");
+            }
         }
         c.output_file.write(c.indent + "br label %" + merge_label + "\n");
 
@@ -1370,17 +1380,19 @@ func compile_arc_hooks(c -> Compiler) -> Void {
     c.output_file.write("}\n\n");
 }
 
-func compile_ast(c -> Compiler, node -> Struct) -> Void {
+func precompile_ast(c -> Compiler, node -> Struct, final_path -> String, import_prefix -> String, old_dir -> String) -> Void {
     let block -> BlockNode = node;
     let stmts -> Vector(Struct) = block.stmts;
     let len -> Int = 0;
     if (stmts is !null) { len = stmts.length(); }
 
+    let imports -> Vector(Struct) = [];
     let i -> Int = 0;
     while (i < len) {
         let base -> BaseNode = stmts[i];
         if (base.type == NODE_IMPORT) {
             compile_import(c, stmts[i]);
+            imports.append(stmts[i]);
         }
         i += 1;
     }
@@ -1388,14 +1400,19 @@ func compile_ast(c -> Compiler, node -> Struct) -> Void {
     pre_register_structs(c, node);
     pre_register_funcs(c, node);
 
-    i = 0;
-    while (i < len) {
-        let base -> BaseNode = stmts[i];
-        if (base.type != NODE_IMPORT) {
-            compile_node(c, stmts[i]);
-        }
-        i += 1;
-    }
+    let p_mod -> ParsedModule = ParsedModule(
+        path = final_path,
+        prefix = import_prefix,
+        dir = old_dir,
+        ast = node,
+        visible = c.current_file_visible_prefixes,
+        types = c.current_file_type_aliases,
+        funcs = c.current_file_func_aliases,
+        globals = c.current_file_global_aliases,
+        imports = imports
+    );
+
+    c.all_modules.append(p_mod);
 }
 
 func compile_import(c -> Compiler, node -> ImportNode) -> Void {
@@ -1484,7 +1501,7 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     let parser -> Parser = WhitelangParser.Parser(lexer=lexer, current_tok=WhitelangLexer.get_next_token(lexer));
     let mod_ast -> Struct = WhitelangParser.parse(parser);
 
-    compile_ast(c, mod_ast);
+    precompile_ast(c, mod_ast, final_path, import_prefix, c.current_dir);
 
     c.current_file_visible_prefixes = backup_visible;
     c.current_file_type_aliases     = backup_types;
@@ -1497,6 +1514,76 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     if (node.symbols is !null) {
         bind_import_symbols(c, node, import_prefix);
     }
+}
+
+func compile_ast_pass(c -> Compiler, p_mod -> ParsedModule) -> Void {
+    c.current_file_visible_prefixes = p_mod.visible;
+    c.current_file_type_aliases     = p_mod.types;
+    c.current_file_func_aliases     = p_mod.funcs;
+    c.current_file_global_aliases   = p_mod.globals;
+    c.current_package_prefix        = p_mod.prefix;
+    c.current_dir                   = p_mod.dir;
+
+    let imports -> Vector(Struct) = p_mod.imports;
+    let i_len -> Int = 0; if (imports is !null) { i_len = imports.length(); }
+    let i -> Int = 0;
+    while (i < i_len) {
+        let imp -> ImportNode = imports[i];
+        if (imp.symbols is !null) {
+            let raw_path -> String = imp.path_tok.value;
+            let is_pkg -> Bool = false;
+            let final_path -> String = resolve_import_path(c, raw_path, imp.pos);
+            if (!raw_path.ends_with(".wl")) {
+                if (final_path.ends_with("/_pkg.wl") || final_path.ends_with("\\_pkg.wl") || final_path.ends_with("\\_pgk.wl")) {
+                    is_pkg = true;
+                }
+            }
+            let module_name -> String = "";
+            if (imp.alias_tok is !null) {
+                module_name = imp.alias_tok.value;
+            } else {
+                let len -> Int = raw_path.length();
+                let end_idx -> Int = len;
+                if (raw_path.ends_with(".wl")) { end_idx = len - 3; }
+                let start_idx -> Int = 0;
+                let j -> Int = len - 1;
+                while (j >= 0) {
+                    let ch -> Char = raw_path[j];
+                    if (ch == '/' || ch == '\\') {
+                        start_idx = j + 1;
+                        break;
+                    }
+                    j -= 1;
+                }
+                module_name = raw_path.slice(start_idx, end_idx);
+            }
+            let imp_prefix -> String = "";
+            if is_pkg { imp_prefix = module_name + "."; } 
+            else {
+                if (raw_path == "builtin" || raw_path == "builtin.wl") { imp_prefix = ""; } 
+                else { imp_prefix = module_name + "."; }
+            }
+            bind_import_symbols(c, imp, imp_prefix);
+        }
+        i += 1;
+    }
+
+    let block -> BlockNode = p_mod.ast;
+    let stmts -> Vector(Struct) = block.stmts;
+    let len -> Int = 0;
+    if (stmts is !null) { len = stmts.length(); }
+
+    i = 0;
+    while (i < len) {
+        let base -> BaseNode = stmts[i];
+        if (base.type != NODE_IMPORT) {
+            compile_node(c, stmts[i]);
+        }
+        i += 1;
+    }
+
+    // free AST memory immediately since code generation for this module is done
+    p_mod.ast = null;
 }
 
 func compile_block(c -> Compiler, node -> BlockNode) -> CompileResult {
@@ -4184,6 +4271,9 @@ func compile_enum_def(c -> Compiler, node -> EnumDefNode) -> CompileResult {
         
         c.output_file.write(global_name + " = global " + llvm_ty_str + " " + current_val + "\n");
         c.global_symbol_table.put(enum_name + "." + field_name, SymbolInfo(reg=global_name, type=type_id, origin_type=type_id, is_const=true));
+
+        let offset_int -> Int = string_to_int("" + current_val, f_node.pos);
+        type_info.fields.append(FieldInfo(name=field_name, type=type_id, llvm_type="i32", offset=offset_int));
         
         current_val += 1L;
         i += 1;
@@ -5993,6 +6083,10 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
                 compile_print_variant_internal(c, reg, s_info, pos);
                 return;
             }
+            if (s_info.is_enum) {
+                compile_print_enum_internal(c, reg, s_info, pos);
+                return;
+            }
             compile_print_struct_internal(c, reg, s_info, pos);
             return;
         }
@@ -6009,6 +6103,49 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
             return;
         }
     }
+}
+
+func compile_print_enum_internal(c -> Compiler, enum_reg -> String, s_info -> StructInfo, pos -> Position) -> Void {
+    let default_label -> String = next_label(c);
+    let end_label -> String = next_label(c);
+    
+    let fields -> Vector(Struct) = s_info.fields;
+    let len -> Int = 0; if (fields is !null) { len = fields.length(); }
+    
+    c.output_file.write(c.indent + "switch i32 " + enum_reg + ", label %" + default_label + " [\n");
+    
+    let i -> Int = 0;
+    let labels -> Vector(String) = [];
+    while (i < len) {
+        let f -> FieldInfo = fields[i];
+        let lbl -> String = next_label(c);
+        labels.append(lbl);
+        c.output_file.write("    i32 " + f.offset + ", label %" + lbl + "\n");
+        i += 1;
+    }
+    c.output_file.write("  ]\n");
+    
+    i = 0;
+    while (i < len) {
+        let f -> FieldInfo = fields[i];
+        let lbl -> String = labels[i];
+        c.output_file.write("\n" + lbl + ":\n");
+        let name_str -> String = s_info.name + "." + f.name;
+        let id -> Int = register_string_constant(c, name_str);
+        let ptr_ -> String = get_string_ptr(id, name_str);
+        c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + ptr_ + ")\n");
+        c.output_file.write(c.indent + "br label %" + end_label + "\n");
+        i += 1;
+    }
+    
+    c.output_file.write("\n" + default_label + ":\n");
+    let unk_str -> String = s_info.name + "(<unknown>)";
+    let unk_id -> Int = register_string_constant(c, unk_str);
+    let unk_ptr -> String = get_string_ptr(unk_id, unk_str);
+    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + unk_ptr + ")\n");
+    c.output_file.write(c.indent + "br label %" + end_label + "\n");
+    
+    c.output_file.write("\n" + end_label + ":\n");
 }
 
 func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> StructInfo, pos -> Position) -> Void {
@@ -6452,7 +6589,16 @@ func compile(c -> Compiler, node -> Struct) -> Void {
         return;
     }
 
-    compile_ast(c, node);
+    precompile_ast(c, node, "<main>", "", c.current_dir);
+
+    c.is_precompile_phase = false;
+
+    let mod_i -> Int = 0;
+    while (mod_i < c.all_modules.length()) {
+        let p_mod -> ParsedModule = c.all_modules[mod_i];
+        compile_ast_pass(c, p_mod);
+        mod_i += 1;
+    }
     compile_end(c);
 }
 
