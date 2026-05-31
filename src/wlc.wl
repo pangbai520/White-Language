@@ -36,7 +36,7 @@ struct CompilerConfig(
 )
 
 func print_usage() -> Void {
-    builtin.print("White Language Compiler (v0.2.4)");
+    builtin.print("White Language Compiler (v0.2.5)");
     builtin.print("Usage: wlc <source.wl> [extra_files...] [options]");
     builtin.print("");
     builtin.print("Arguments:");
@@ -348,7 +348,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
 
     if (cfg.verbose) { builtin.print("Command: " + cmd); }
     if (is_windows() == 1) { cmd = "\"" + cmd + "\""; }
-    
+
     let ret -> Int = system_call(cmd);
 
     if (!cfg.keep_temps && cfg.output_file != ll_file) {

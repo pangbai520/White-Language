@@ -734,6 +734,21 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
                 if (field is !null) { return field.type; }
             }
         }
+
+        let obj_base -> BaseNode = f.obj;
+        if (obj_base.type == NODE_VAR_ACCESS) {
+            let v_node -> VarAccessNode = f.obj;
+            let target_name -> String = v_node.name_tok.value;
+            if (c.current_package_prefix != "") {
+                if (c.struct_table.get(c.current_package_prefix + target_name) is !null) {
+                    target_name = c.current_package_prefix + target_name;
+                }
+            }
+            let s_info -> StructInfo = c.struct_table.get(target_name);
+            if (s_info is !null && s_info.is_enum) {
+                return s_info.type_id;
+            }
+        }
         return 0;
     }
     
@@ -1368,12 +1383,79 @@ func get_dir_name(path -> String) -> String {
     return ".";
 }
 
+func to_normpath(path -> String) -> String {
+    let len -> Int = path.length();
+    let parts -> Vector(String) = [];
+    let i -> Int = 0;
+    let start_idx -> Int = 0;
+    
+    while (i <= len) {
+        let c -> Char = ' ';
+        if (i < len) { c = path[i]; }
+        if (c == '/' || c == '\\' || i == len) {
+            if (i > start_idx) {
+                parts.append(path.slice(start_idx, i));
+            }
+            start_idx = i + 1;
+        }
+        i += 1;
+    }
+    
+    let norm_parts -> Vector(String) = [];
+    let num_parts -> Int = parts.length();
+    let j -> Int = 0;
+    
+    while (j < num_parts) {
+        let p -> String = parts[j];
+        if (p == ".") {
+            // ignore
+        } else if (p == "..") {
+            let cur_len -> Int = norm_parts.length();
+            if (cur_len > 0 && norm_parts[cur_len - 1] != "..") {
+                let temp -> Vector(String) = [];
+                let k -> Int = 0;
+                while (k < cur_len - 1) {
+                    temp.append(norm_parts[k]);
+                    k += 1;
+                }
+                norm_parts = temp;
+            } else {
+                norm_parts.append("..");
+            }
+        } else {
+            norm_parts.append(p);
+        }
+        j += 1;
+    }
+    
+    let res -> String = "";
+    if (len > 0) {
+        let first_char -> Char = path[0];
+        if (first_char == '/' || first_char == '\\') {
+            res = "/";
+        }
+    }
+    
+    let norm_len -> Int = norm_parts.length();
+    let k -> Int = 0;
+    while (k < norm_len) {
+        res += norm_parts[k];
+        if (k < norm_len - 1) {
+            res += "/";
+        }
+        k += 1;
+    }
+    
+    if (res == "") { return "."; }
+    return res;
+}
+
 func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> String {
     if (raw_path.ends_with(".wl")) {
         if (c.current_dir == ".") {
-            return raw_path;
+            return to_normpath(raw_path);
         }
-        return c.current_dir + "/" + raw_path;
+        return to_normpath(c.current_dir + "/" + raw_path);
     }
 
     let wl_path -> String = wl_getenv("WL_PATH");
