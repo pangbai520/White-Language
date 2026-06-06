@@ -781,7 +781,14 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
     }
     if (base.type == NODE_STRING) { return TYPE_STRING; }
     if (base.type == NODE_CHAR) { return TYPE_CHAR; }
-    if (base.type == NODE_FLOAT) { return TYPE_FLOAT; }
+    if (base.type == NODE_FLOAT) {
+        let fn -> FloatNode = node;
+        let val_str -> String = fn.tok.value;
+        if (val_str.ends_with("f") || val_str.ends_with("F")) {
+            return TYPE_FLOAT32;
+        }
+        return TYPE_FLOAT;
+    }
     if (base.type == NODE_BOOL) { return TYPE_BOOL; }
     
     if (base.type == NODE_VAR_ACCESS) {

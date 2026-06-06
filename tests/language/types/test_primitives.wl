@@ -19,7 +19,7 @@ func main() -> Int {
     // validate integer to float conversion
     let i_val2 -> Int = -42;
     let f_val2 -> Float32 = Float32(i_val2);
-    let cast_b_ok -> Bool = (f_val2 == -42.0);
+    let cast_b_ok -> Bool = (f_val2 == -42.0f);
 
     // truncate 300 (0x12C) to UInt8 (0x2C -> 44)
     let big_int -> Int = 300; 

@@ -5275,12 +5275,20 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     }
     if (base.type == NODE_FLOAT) {
         let n -> FloatNode = node;
-        if (c.expected_type == TYPE_FLOAT32) {
+        let val_str -> String = n.tok.value;
+        let is_f32 -> Bool = false;
+        
+        if (val_str.ends_with("f") || val_str.ends_with("F")) {
+            is_f32 = true;
+            val_str = val_str.slice(0, val_str.length() - 1);
+        }
+
+        if (c.expected_type == TYPE_FLOAT32 || (c.expected_type == 0 && is_f32)) {
             let tmp_reg -> String = next_reg(c);
-            c.output_file.write(c.indent + tmp_reg + " = fptrunc double " + n.tok.value + " to float\n");
+            c.output_file.write(c.indent + tmp_reg + " = fptrunc double " + val_str + " to float\n");
             return CompileResult(reg=tmp_reg, type=TYPE_FLOAT32);
         }
-        return CompileResult(reg=n.tok.value, type=TYPE_FLOAT); 
+        return CompileResult(reg=val_str, type=TYPE_FLOAT); 
     }
 
     if (base.type == NODE_BOOL) {
