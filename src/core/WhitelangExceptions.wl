@@ -7,6 +7,7 @@ extern func exit(status -> Int) -> Void from "C";
 let GLOBAL_ERROR_COUNT -> Int = 0;
 let LAST_ERROR_FILE -> String = "";
 let CLEAN_TMP_LL -> String = "";
+let ACTIVE_FILE -> file_io.File = null;
 
 struct Position(
     idx  -> Int,
@@ -27,6 +28,9 @@ func advance_pos(pos -> Position, current_char -> Char) -> Void {
 }
 
 func abort_and_clean(status -> Int) -> Void {
+    if (ACTIVE_FILE is !null) {
+        ACTIVE_FILE.close();
+    }
     if (CLEAN_TMP_LL.length() > 0) {
         file_io.remove_file(CLEAN_TMP_LL);
     }

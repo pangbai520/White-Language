@@ -36,7 +36,7 @@ struct CompilerConfig(
 )
 
 func print_usage() -> Void {
-    builtin.print("White Language Compiler (v0.2.5)");
+    builtin.print("White Language Compiler (v0.2.6)");
     builtin.print("Usage: wlc <source.wl> [extra_files...] [options]");
     builtin.print("");
     builtin.print("Arguments:");
@@ -232,6 +232,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
 
     let compiler -> WhitelangUtils.Compiler = WhitelangUtils.new_compiler(ll_file, cfg.is_shared);
     compiler.current_dir = WhitelangUtils.get_dir_name(cfg.source_file);
+    WhitelangExceptions.ACTIVE_FILE = compiler.output_file;
     WhitelangCompiler.compile(compiler, ast);
 
     WhitelangExceptions.check_errors_and_abort();
