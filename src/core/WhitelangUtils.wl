@@ -791,8 +791,58 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
         if (target_type >= 100) {
             let v_info -> SymbolInfo = c.vector_base_map.get("" + target_type);
             if (v_info is !null) { return v_info.type; }
+            let arr_info -> ArrayInfo = c.array_info_map.get("" + target_type);
+            if (arr_info is !null) { return arr_info.base_type; }
+            let s_info -> StructInfo = c.struct_id_map.get("" + target_type);
+            if (s_info is !null && s_info.name == "Dict") { return TYPE_GENERIC_STRUCT; }
         }
         if (target_type == TYPE_STRING) { return TYPE_CHAR; }
+        return 0;
+    }
+
+    if (base.type == NODE_REF) {
+        let ref_node -> RefNode = node;
+        let base_type -> Int = get_expr_type(c, ref_node.node);
+        if (base_type != 0) { return get_ptr_type_id(c, base_type); }
+        return 0;
+    }
+
+    if (base.type == NODE_DEREF) {
+        let deref_node -> DerefNode = node;
+        let ptr_type -> Int = get_expr_type(c, deref_node.node);
+        if (is_pointer_type(c, ptr_type)) {
+            let base_info -> SymbolInfo = c.ptr_base_map.get("" + ptr_type);
+            if (base_info is !null) { return base_info.type; }
+        }
+        return 0;
+    }
+
+    if (base.type == NODE_SLICE_ACCESS) {
+        let slice_node -> SliceAccessNode = node;
+        let target_type -> Int = get_expr_type(c, slice_node.target);
+        if (target_type == TYPE_STRING) { return TYPE_STRING; }
+
+        let elem_type -> Int = 0;
+        if (target_type >= 100) {
+            let arr_info -> ArrayInfo = c.array_info_map.get("" + target_type);
+            if (arr_info is !null) { elem_type = arr_info.base_type; }
+            else {
+                let v_info -> SymbolInfo = c.vector_base_map.get("" + target_type);
+                if (v_info is !null) { elem_type = v_info.type; }
+            }
+        }
+        
+        if (elem_type != 0) {
+            let cache_key -> String = "slice_" + elem_type;
+            let cached -> SymbolInfo = c.array_type_cache.get(cache_key);
+            if (cached is !null) { return cached.type; }
+            let slice_type_id -> Int = c.type_counter;
+            c.type_counter += 1;
+            c.array_type_cache.put(cache_key, SymbolInfo(reg="", type=slice_type_id, origin_type=0, is_const=false));
+            let llvm_name -> String = "%slice." + slice_type_id;
+            c.array_info_map.put("" + slice_type_id, ArrayInfo(base_type=elem_type, size=-1, llvm_name=llvm_name));
+            return slice_type_id;
+        }
         return 0;
     }
 
@@ -829,6 +879,59 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
             if (s_info is null && c.current_package_prefix != "") { s_info = c.struct_table.get(c.current_package_prefix + callee_name); }
             if (s_info is !null) { return s_info.type_id; }
         }
+        else if (callee.type == NODE_FIELD_ACCESS) {
+            let f -> FieldAccessNode = call_node.callee;
+            let obj_type -> Int = get_expr_type(c, f.obj);
+            if (is_pointer_type(c, obj_type)) {
+                let base_info -> SymbolInfo = c.ptr_base_map.get("" + obj_type);
+                if (base_info is !null) { obj_type = base_info.type; }
+            }
+
+            if (f.field_name == "length") { return TYPE_INT; }
+            if (f.field_name == "append") { return TYPE_VOID; }
+            if (f.field_name == "drop") {
+                if (obj_type >= 100) {
+                    let v_info -> SymbolInfo = c.vector_base_map.get("" + obj_type);
+                    if (v_info is !null) { return v_info.type; }
+                }
+                return 0;
+            }
+
+            if (obj_type >= 100) {
+                let s_info -> StructInfo = c.struct_id_map.get("" + obj_type);
+                if (s_info is !null && s_info.is_class) {
+                    let vtable -> Vector(Struct) = s_info.vtable;
+                    let v_len -> Int = 0; if (vtable is !null) { v_len = vtable.length(); }
+                    let m_idx -> Int = 0;
+                    while (m_idx < v_len) {
+                        let m_info -> FuncInfo = vtable[m_idx];
+                        if (m_info.base_name == f.field_name) {
+                            return m_info.ret_type;
+                        }
+                        m_idx += 1;
+                    }
+                }
+            }
+        }
+        return 0;
+    }
+
+    if (base.type == NODE_VECTOR_LIT) {
+        let vec_node -> VectorLitNode = node;
+        if (vec_node.count > 0) {
+            let arg -> ArgNode = vec_node.elements[0];
+            let elem_type -> Int = get_expr_type(c, arg.val);
+            if (elem_type != 0) { 
+                let v_id -> Int = get_vector_type_id(c, elem_type); 
+                return v_id;
+            }
+        }
+        return 0;
+    }
+
+    if (base.type == NODE_MAP_LIT) {
+        let s_info -> StructInfo = c.struct_table.get("Dict");
+        if (s_info is !null) { return s_info.type_id; }
         return 0;
     }
 
