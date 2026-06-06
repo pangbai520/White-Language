@@ -35,7 +35,7 @@ func main() -> Int {
 
 
     let bark_func -> Method(String) = my_dog.bark;
-    let info_func -> Method(String) = my_dog.get_info;
+    let info_func -> Method(Int, String) = my_dog.get_info;
 
 
     let bark_res -> String = bark_func();

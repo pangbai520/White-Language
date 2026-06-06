@@ -405,6 +405,21 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         return CompileResult(reg=zext_reg, type=TYPE_INT, origin_type=origin);
     }
 
+    if (expected_type == TYPE_GENERIC_ENUM) {
+        if (val_res.type >= 100) {
+            let s_info -> StructInfo = c.struct_id_map.get("" + val_res.type);
+            if (s_info is !null && s_info.is_enum) {
+                return CompileResult(reg=val_res.reg, type=TYPE_GENERIC_ENUM, origin_type=val_res.type);
+            }
+        }
+    }
+    if (val_res.type == TYPE_GENERIC_ENUM && expected_type >= 100) {
+        let s_info -> StructInfo = c.struct_id_map.get("" + expected_type);
+        if (s_info is !null && s_info.is_enum) {
+            return CompileResult(reg=val_res.reg, type=expected_type, origin_type=origin);
+        }
+    }
+
     if (expected_type == TYPE_GENERIC_STRUCT || expected_type == TYPE_GENERIC_CLASS) {
         if (val_res.type >= 100) {
             let cast_reg -> String = next_reg(c);
@@ -464,7 +479,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         }
     }
 
-    if (expected_type == TYPE_GENERIC_FUNCTION || expected_type == TYPE_GENERIC_METHOD) {
+    if (expected_type == TYPE_GENERIC_FUNCTION) {
         if (val_res.type >= 100) {
             let f_check -> SymbolInfo = c.func_ret_map.get("" + val_res.type);
             if (f_check is !null) {
@@ -472,8 +487,21 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
             }
         }
     }
-    if ((val_res.type == TYPE_GENERIC_FUNCTION || val_res.type == TYPE_GENERIC_METHOD) && expected_type >= 100) {
+    if (expected_type == TYPE_GENERIC_METHOD) {
+        if (val_res.type >= 100) {
+            let m_check -> SymbolInfo = c.method_ret_map.get("" + val_res.type);
+            if (m_check is !null) {
+                return CompileResult(reg=val_res.reg, type=expected_type, origin_type=val_res.type);
+            }
+        }
+    }
+    if (val_res.type == TYPE_GENERIC_FUNCTION && expected_type >= 100) {
         if (c.func_ret_map.get("" + expected_type) is !null) {
+            return CompileResult(reg=val_res.reg, type=expected_type, origin_type=origin);
+        }
+    }
+    if (val_res.type == TYPE_GENERIC_METHOD && expected_type >= 100) {
+        if (c.method_ret_map.get("" + expected_type) is !null) {
             return CompileResult(reg=val_res.reg, type=expected_type, origin_type=origin);
         }
     }
@@ -2501,8 +2529,14 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     let ret_type_id -> Int = resolve_type(c, func_def.ret_type_tok);
     if (ret_type_id == TYPE_AUTO) { WhitelangExceptions.throw_type_error(func_def.pos, "Auto return type deduction is not supported in closures."); return void_result(); }
     let ret_ty_str -> String = get_llvm_type_str(c, ret_type_id);
-    let specific_type_id -> Int = get_func_type_id(c, ret_type_id);
-    
+    let arg_types -> Vector(Struct) = [];
+    p_i = 0;
+    while (p_i < p_len) {
+        let p_node -> ParamNode = params[p_i];
+        arg_types.append(TypeListNode(type=resolve_type(c, p_node.type_tok)));
+        p_i += 1;
+    }
+    let specific_type_id -> Int = get_func_type_id(c, arg_types, ret_type_id);
     let sig_def -> String = "i8* %raw_env";
     let sig_ty -> String = "i8*";
     p_i = 0;
@@ -3195,7 +3229,13 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
             let method_i8ptr -> String = next_reg(c);
             c.output_file.write(c.indent + method_i8ptr + " = load i8*, i8** " + method_i8ptr_addr + "\n");
 
-            let specific_type_id -> Int = get_func_type_id(c, target_func.ret_type);
+            let bound_args -> Vector(Struct) = [];
+            let ba_idx -> Int = 1;
+            while (ba_idx < target_func.arg_types.length()) {
+                bound_args.append(target_func.arg_types[ba_idx]);
+                ba_idx += 1;
+            }
+            let specific_type_id -> Int = get_method_type_id(c, bound_args, target_func.ret_type);
             // 8 is TYPE_GENERIC_FUNCTION
             let clo_payload -> String = emit_alloc_obj(c, "16", "8", "i8*");
             
@@ -4308,7 +4348,7 @@ func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> Compi
             f_info = c.func_table.get(c.current_package_prefix + name);
         }
         if (f_info is !null) {
-            let specific_type_id -> Int = get_func_type_id(c, f_info.ret_type);
+            let specific_type_id -> Int = get_func_type_id(c, f_info.arg_types, f_info.ret_type);
             let sig -> String = get_func_sig_str(c, f_info);
             let func_ptr -> String = "@" + f_info.name;
             let cast_reg -> String = next_reg(c);
@@ -4474,7 +4514,13 @@ func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> Compi
                 }
                 
                 if (m_info is !null) {
-                    let specific_type_id -> Int = get_func_type_id(c, m_info.ret_type);
+                    let bound_args -> Vector(Struct) = [];
+                    let ba_idx -> Int = 1;
+                    while (ba_idx < m_info.arg_types.length()) {
+                        bound_args.append(m_info.arg_types[ba_idx]);
+                        ba_idx += 1;
+                    }
+                    let specific_type_id -> Int = get_method_type_id(c, bound_args, m_info.ret_type);
                     let sig -> String = get_func_sig_str(c, m_info);
                     
                     let vtable_ptr_addr -> String = next_reg(c);
@@ -4734,6 +4780,14 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
             if (s_info is !null && s_info.is_enum) {
                 is_enum_cmp = true;
             }
+        } else if (left.type == TYPE_GENERIC_ENUM && right.type == TYPE_GENERIC_ENUM) {
+            is_enum_cmp = true;
+        } else if (left.type == TYPE_GENERIC_ENUM && right.type >= 100) {
+            let s_info -> StructInfo = c.struct_id_map.get("" + right.type);
+            if (s_info is !null && s_info.is_enum) { is_enum_cmp = true; }
+        } else if (right.type == TYPE_GENERIC_ENUM && left.type >= 100) {
+            let s_info -> StructInfo = c.struct_id_map.get("" + left.type);
+            if (s_info is !null && s_info.is_enum) { is_enum_cmp = true; }
         }
         
         if is_enum_cmp {
@@ -5248,7 +5302,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 if (f_info is !null) { var_name = c.current_package_prefix + var_name; }
             }
             if (f_info is !null) {
-                let specific_type_id -> Int = get_func_type_id(c, f_info.ret_type);
+                let specific_type_id -> Int = get_func_type_id(c, f_info.arg_types, f_info.ret_type);
                 let sig -> String = get_func_sig_str(c, f_info);
                 let func_ptr -> String = "@" + f_info.name;
                 
@@ -5711,6 +5765,12 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                         if (f_ret_info is !null) {
                             ret_type_id = f_ret_info.type;
                             is_valid_call = true;
+                        } else {
+                            let m_ret_info -> SymbolInfo = c.method_ret_map.get("" + info.origin_type);
+                            if (m_ret_info is !null) {
+                                ret_type_id = m_ret_info.type;
+                                is_valid_call = true;
+                            }
                         }
                     }
                 } else {
@@ -5728,6 +5788,12 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 if (f_ret_info is !null) {
                     ret_type_id = f_ret_info.type;
                     is_valid_call = true;
+                } else {
+                    let m_ret_info -> SymbolInfo = c.method_ret_map.get("" + ptr_type);
+                    if (m_ret_info is !null) {
+                        ret_type_id = m_ret_info.type;
+                        is_valid_call = true;
+                    }
                 }
             }
 
@@ -5735,7 +5801,9 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 let is_closure -> Bool = false;
                 let actual_env_reg -> String = "";
                 let raw_func_ptr -> String = callee_res.reg;
-                if (ptr_type == TYPE_GENERIC_FUNCTION || c.func_ret_map.get("" + ptr_type) is !null) {
+                let is_func -> Bool = ptr_type == TYPE_GENERIC_FUNCTION || c.func_ret_map.get("" + ptr_type) is !null;
+                let is_meth -> Bool = ptr_type == TYPE_GENERIC_METHOD || c.method_ret_map.get("" + ptr_type) is !null;
+                if (is_func || is_meth) {
                     is_closure = true;
                     let env_ptr_i8_addr -> String = next_reg(c);
                     c.output_file.write(c.indent + env_ptr_i8_addr + " = getelementptr inbounds i8, i8* " + callee_res.reg + ", i32 8\n");
@@ -5753,6 +5821,22 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
                 let args -> Vector(Struct) = n_call.args;
                 let a_len -> Int = 0; if (args is !null) { a_len = args.length(); }
+                
+                let expected_args -> Vector(Struct) = null;
+                if (ptr_type != TYPE_GENERIC_FUNCTION && ptr_type != TYPE_GENERIC_METHOD) {
+                    let sig_info -> SymbolInfo = c.func_ret_map.get("" + ptr_type);
+                    if (sig_info is null) { sig_info = c.method_ret_map.get("" + ptr_type); }
+                    if (sig_info is !null) { expected_args = sig_info.func_arg_types; }
+                }
+
+                if (expected_args is !null) {
+                    let exp_len -> Int = expected_args.length();
+                    if (a_len != exp_len) {
+                        WhitelangExceptions.throw_type_error(n_call.pos, "Argument count mismatch in Function/Method call. Expected " + exp_len + ", got " + a_len);
+                        return void_result();
+                    }
+                }
+
                 let a_idx -> Int = 0;
 
                 let sig_g -> String = "";
@@ -5764,6 +5848,17 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 while (a_idx < a_len) {
                     let curr_arg -> ArgNode = args[a_idx];
                     let a_res -> CompileResult = compile_node(c, curr_arg.val);
+                    
+                    if (expected_args is !null) {
+                        let exp_arg_node -> TypeListNode = expected_args[a_idx];
+                        if (a_res.type != exp_arg_node.type && a_res.type != TYPE_POISON && exp_arg_node.type != TYPE_POISON && a_res.type != TYPE_ANYPTR) {
+                            if (!is_subclass(c, a_res.type, exp_arg_node.type)) {
+                                WhitelangExceptions.throw_type_error(n_call.pos, "Argument type mismatch in Function/Method call. Expected " + get_type_name(c, exp_arg_node.type) + ", got " + get_type_name(c, a_res.type));
+                                return void_result();
+                            }
+                        }
+                    }
+
                     let a_ty -> String = get_llvm_type_str(c, a_res.type);
 
                     if (!first) {

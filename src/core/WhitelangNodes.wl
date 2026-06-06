@@ -215,6 +215,7 @@ struct ReturnNode(
 // Function(Type)
 struct FunctionTypeNode(
     type        -> Int,    // NODE_FUNCTION_TYPE
+    arg_types   -> Vector(Struct),
     return_type -> Struct,
     pos         -> Position
 )
@@ -360,6 +361,7 @@ struct SuperNode(
 
 struct MethodTypeNode(
     type        -> Int,    // NODE_METHOD_TYPE
+    arg_types   -> Vector(Struct),
     return_type -> Struct,
     pos         -> Position
 )

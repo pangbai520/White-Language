@@ -24,7 +24,7 @@ func main() -> Int {
     head.next = Node(2, Payload(20, "SUB"), null);
 
     // higher-order function dispatch
-    let fn_ptr -> Function(Int) = compute_sum;
+    let fn_ptr -> Function(Int, Int, Int) = compute_sum;
     let calc_res -> Int = fn_ptr(50, 50);
 
     // final integrity assertion

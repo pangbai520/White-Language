@@ -26,6 +26,7 @@ const TYPE_GENERIC_METHOD -> Int = 12;
 const TYPE_AUTO -> Int = 13;
 const TYPE_CHAR -> Int = 14;
 const TYPE_ANYPTR -> Int = 15;
+const TYPE_GENERIC_ENUM -> Int = 28;
 
 const TYPE_INT8    -> Int = 16;
 const TYPE_INT16   -> Int = 17;
@@ -65,7 +66,8 @@ struct SymbolInfo(
     reg  -> String, 
     type -> Int,
     origin_type -> Int, // for generic type
-    is_const -> Bool // const
+    is_const -> Bool, // const
+    func_arg_types -> Vector(Struct)
 )
 
 struct FuncInfo(
@@ -144,6 +146,7 @@ struct Compiler(
     array_info_map -> Dict, 
     array_type_cache -> Dict,
     func_ret_map -> Dict,
+    method_ret_map -> Dict,
     declared_externs -> Dict,
     imported_modules -> Dict,
     current_package_prefix -> String,
@@ -211,6 +214,7 @@ func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
         vector_cache=Dict(32),
         vector_base_map=Dict(32),
         func_ret_map=Dict(32),
+        method_ret_map=Dict(32),
         declared_externs=Dict(32),
         imported_modules=Dict(32),
         current_file_visible_prefixes = Dict(32),
@@ -447,6 +451,7 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_FUNCTION) { return "i8*"; }
     if (type_id == TYPE_GENERIC_CLASS) { return "i8*"; }
     if (type_id == TYPE_GENERIC_METHOD) { return "i8*"; }
+    if (type_id == TYPE_GENERIC_ENUM) { return "i32"; }
     if (type_id == TYPE_ANYPTR) { return "i8*"; }
     
     if (type_id == TYPE_POISON) { return "void"; } // dummy type for poison variables
@@ -510,6 +515,7 @@ func get_type_name(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_FUNCTION) { return "Function"; }
     if (type_id == TYPE_GENERIC_CLASS) { return "Class"; }
     if (type_id == TYPE_GENERIC_METHOD) { return "Method"; }
+    if (type_id == TYPE_GENERIC_ENUM) { return "Enum"; }
     if (type_id == TYPE_AUTO) { return "Auto"; }
     if (type_id == TYPE_ANYPTR) { return "AnyPtr"; }
 
@@ -527,7 +533,34 @@ func get_type_name(c -> Compiler, type_id -> Int) -> String {
     if (type_id >= 100) {
         let f_info -> SymbolInfo = c.func_ret_map.get("" + type_id);
         if (f_info is !null) {
-            return "Function(" + get_type_name(c, f_info.type) + ")";
+            let sig -> String = "Function(";
+            let a_idx -> Int = 0;
+            if (f_info.func_arg_types is !null) {
+                let len -> Int = f_info.func_arg_types.length();
+                while (a_idx < len) {
+                    let a_node -> TypeListNode = f_info.func_arg_types[a_idx];
+                    sig = sig + get_type_name(c, a_node.type) + ", ";
+                    a_idx += 1;
+                }
+            }
+            sig = sig + get_type_name(c, f_info.type) + ")";
+            return sig;
+        }
+
+        let m_info -> SymbolInfo = c.method_ret_map.get("" + type_id);
+        if (m_info is !null) {
+            let sig -> String = "Method(";
+            let a_idx -> Int = 0;
+            if (m_info.func_arg_types is !null) {
+                let len -> Int = m_info.func_arg_types.length();
+                while (a_idx < len) {
+                    let a_node -> TypeListNode = m_info.func_arg_types[a_idx];
+                    sig = sig + get_type_name(c, a_node.type) + ", ";
+                    a_idx += 1;
+                }
+            }
+            sig = sig + get_type_name(c, m_info.type) + ")";
+            return sig;
         }
 
         let s_info -> StructInfo = c.struct_id_map.get("" + type_id);
@@ -675,15 +708,41 @@ func get_ptr_type_id(c -> Compiler, base_id -> Int) -> Int {
     return new_id;
 }
 
-func get_func_type_id(c -> Compiler, ret_type_id -> Int) -> Int {
+func get_func_type_id(c -> Compiler, arg_types -> Vector(Struct), ret_type_id -> Int) -> Int {
     let key -> String = "func_" + ret_type_id;
+    let i -> Int = 0;
+    while (i < arg_types.length()) { 
+        let arg_node -> TypeListNode = arg_types[i];
+        key += "_" + arg_node.type; 
+        i += 1; 
+    }
+    
     let cached -> SymbolInfo = c.ptr_cache.get(key);
     if (cached is !null) { return cached.type; }
     let new_id -> Int = c.type_counter;
     c.type_counter += 1;
 
-    c.func_ret_map.put("" + new_id, SymbolInfo(reg="", type=ret_type_id, origin_type=0));
-    c.ptr_cache.put(key, SymbolInfo(reg="", type=new_id, origin_type=0));
+    c.func_ret_map.put("" + new_id, SymbolInfo(reg="", type=ret_type_id, origin_type=0, is_const=false, func_arg_types=arg_types));
+    c.ptr_cache.put(key, SymbolInfo(reg="", type=new_id, origin_type=0, is_const=false, func_arg_types=arg_types));
+    return new_id;
+}
+
+func get_method_type_id(c -> Compiler, arg_types -> Vector(Struct), ret_type_id -> Int) -> Int {
+    let key -> String = "meth_" + ret_type_id;
+    let i -> Int = 0;
+    while (i < arg_types.length()) { 
+        let arg_node -> TypeListNode = arg_types[i];
+        key += "_" + arg_node.type; 
+        i += 1; 
+    }
+    
+    let cached -> SymbolInfo = c.ptr_cache.get(key);
+    if (cached is !null) { return cached.type; }
+    let new_id -> Int = c.type_counter;
+    c.type_counter += 1;
+
+    c.method_ret_map.put("" + new_id, SymbolInfo(reg="", type=ret_type_id, origin_type=0, is_const=false, func_arg_types=arg_types));
+    c.ptr_cache.put(key, SymbolInfo(reg="", type=new_id, origin_type=0, is_const=false, func_arg_types=arg_types));
     return new_id;
 }
 
@@ -732,7 +791,7 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
 
         let f_info -> FuncInfo = c.func_table.get(v.name_tok.value);
         if (f_info is null && c.current_package_prefix != "") { f_info = c.func_table.get(c.current_package_prefix + v.name_tok.value); }
-        if (f_info is !null) { return get_func_type_id(c, f_info.ret_type); }
+        if (f_info is !null) { return get_func_type_id(c, f_info.arg_types, f_info.ret_type); }
 
         return 0;
     }
@@ -756,7 +815,13 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
                     while (m_idx < v_len) {
                         let m_info -> FuncInfo = vtable[m_idx];
                         if (m_info.base_name == f.field_name) {
-                            return get_func_type_id(c, m_info.ret_type);
+                            let bound_args -> Vector(Struct) = [];
+                            let a_idx -> Int = 1;
+                            while (a_idx < m_info.arg_types.length()) {
+                                bound_args.append(m_info.arg_types[a_idx]);
+                                a_idx += 1;
+                            }
+                            return get_method_type_id(c, bound_args, m_info.ret_type);
                         }
                         m_idx += 1;
                     }
@@ -878,6 +943,15 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
             let s_info -> StructInfo = c.struct_table.get(callee_name);
             if (s_info is null && c.current_package_prefix != "") { s_info = c.struct_table.get(c.current_package_prefix + callee_name); }
             if (s_info is !null) { return s_info.type_id; }
+
+            let var_info -> SymbolInfo = find_symbol(c, callee_name);
+            if (var_info is !null) {
+                let p_type -> Int = var_info.type;
+                let f_ret_info -> SymbolInfo = c.func_ret_map.get("" + p_type);
+                if (f_ret_info is !null) { return f_ret_info.type; }
+                let m_ret_info -> SymbolInfo = c.method_ret_map.get("" + p_type);
+                if (m_ret_info is !null) { return m_ret_info.type; }
+            }
         }
         else if (callee.type == NODE_FIELD_ACCESS) {
             let f -> FieldAccessNode = call_node.callee;
@@ -913,6 +987,14 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
                 }
             }
         }
+        let ptr_type -> Int = get_expr_type(c, callee);
+        if (ptr_type != 0) {
+            let f_ret_info -> SymbolInfo = c.func_ret_map.get("" + ptr_type);
+            if (f_ret_info is !null) { return f_ret_info.type; }
+            let m_ret_info -> SymbolInfo = c.method_ret_map.get("" + ptr_type);
+            if (m_ret_info is !null) { return m_ret_info.type; }
+        }
+
         return 0;
     }
 
@@ -986,12 +1068,26 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
     if (base.type == NODE_FUNCTION_TYPE) {
         let f_node -> FunctionTypeNode = node;
         let ret_id -> Int = resolve_type(c, f_node.return_type);
-        return get_func_type_id(c, ret_id);
+        let arg_types -> Vector(Struct) = [];
+        let i -> Int = 0;
+        let p_len -> Int = 0; if (f_node.arg_types is !null) { p_len = f_node.arg_types.length(); }
+        while (i < p_len) {
+            arg_types.append(TypeListNode(type=resolve_type(c, f_node.arg_types[i])));
+            i += 1;
+        }
+        return get_func_type_id(c, arg_types, ret_id);
     }
     if (base.type == NODE_METHOD_TYPE) {
         let m_node -> MethodTypeNode = node;
         let ret_id -> Int = resolve_type(c, m_node.return_type);
-        return get_func_type_id(c, ret_id);
+        let arg_types -> Vector(Struct) = [];
+        let i -> Int = 0;
+        let p_len -> Int = 0; if (m_node.arg_types is !null) { p_len = m_node.arg_types.length(); }
+        while (i < p_len) {
+            arg_types.append(TypeListNode(type=resolve_type(c, m_node.arg_types[i])));
+            i += 1;
+        }
+        return get_method_type_id(c, arg_types, ret_id);
     }
 
     // Pointer Type (ptr*N Type)
@@ -1123,6 +1219,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         if (name == "Function") { return TYPE_GENERIC_FUNCTION; }
         if (name == "Class") { return TYPE_GENERIC_CLASS; }
         if (name == "Method") { return TYPE_GENERIC_METHOD; }
+        if (name == "Enum") { return TYPE_GENERIC_ENUM; }
         if (name == "Auto") { return TYPE_AUTO; }
         if (name == "AnyPtr") { return TYPE_ANYPTR; }
 
@@ -1809,6 +1906,7 @@ func is_subclass(c -> Compiler, child_id -> Int, parent_id -> Int) -> Bool {
     if (child_id == parent_id) { return true; }
     let s_info -> StructInfo = c.struct_id_map.get("" + child_id);
     if (s_info is null) { return false; }
+    if (parent_id == TYPE_GENERIC_ENUM && s_info.is_enum) { return true; }
     let curr_parent -> Int = s_info.parent_id;
     while (curr_parent != 0) {
         if (curr_parent == parent_id) { return true; }

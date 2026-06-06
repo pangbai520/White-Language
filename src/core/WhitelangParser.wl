@@ -188,15 +188,37 @@ func parse_type_base(p -> Parser) -> Struct {
             parser_advance(p); // skip Function
             if (p.current_tok.type == TOK_LPAREN) {
                 parser_advance(p); // skip '('
-                let ret_ty -> Struct = parse_return_type(p);
+                
+                let all_types -> Vector(Struct) = [];
+                if (p.current_tok.type != TOK_RPAREN) {
+                    all_types.append(parse_return_type(p));
+                    while (p.current_tok.type == TOK_COMMA) {
+                        parser_advance(p); // skip ,
+                        all_types.append(parse_return_type(p));
+                    }
+                }
+                
+                if (all_types.length() == 0) {
+                    let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected at least a return type for Function.");
+                }
+                
                 if (p.current_tok.type != TOK_RPAREN) {
                     let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ')' after Function return type.");
+                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ')' after Function signature.");
                 }
                 parser_advance(p); // skip ')'
+                
+                let ret_ty -> Struct = all_types[all_types.length() - 1];
+                let arg_types -> Vector(Struct) = [];
+                let arg_idx -> Int = 0;
+                while (arg_idx < all_types.length() - 1) {
+                    arg_types.append(all_types[arg_idx]);
+                    arg_idx += 1;
+                }
 
                 let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                type_node = FunctionTypeNode(type=NODE_FUNCTION_TYPE, return_type=ret_ty, pos=pos);
+                type_node = FunctionTypeNode(type=NODE_FUNCTION_TYPE, arg_types=arg_types, return_type=ret_ty, pos=pos);
             } else {
                 let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
                 type_node = VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
@@ -206,15 +228,37 @@ func parse_type_base(p -> Parser) -> Struct {
             parser_advance(p); // skip Method
             if (p.current_tok.type == TOK_LPAREN) {
                 parser_advance(p); // skip '('
-                let ret_ty -> Struct = parse_return_type(p);
+                
+                let all_types -> Vector(Struct) = [];
+                if (p.current_tok.type != TOK_RPAREN) {
+                    all_types.append(parse_return_type(p));
+                    while (p.current_tok.type == TOK_COMMA) {
+                        parser_advance(p); // skip ,
+                        all_types.append(parse_return_type(p));
+                    }
+                }
+                
+                if (all_types.length() == 0) {
+                    let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected at least a return type for Method.");
+                }
+
                 if (p.current_tok.type != TOK_RPAREN) {
                     let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ')' after Method return type.");
+                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ')' after Method signature.");
                 }
                 parser_advance(p); // skip ')'
+                
+                let ret_ty -> Struct = all_types[all_types.length() - 1];
+                let arg_types -> Vector(Struct) = [];
+                let arg_idx -> Int = 0;
+                while (arg_idx < all_types.length() - 1) {
+                    arg_types.append(all_types[arg_idx]);
+                    arg_idx += 1;
+                }
 
                 let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                type_node = MethodTypeNode(type=NODE_METHOD_TYPE, return_type=ret_ty, pos=pos);
+                type_node = MethodTypeNode(type=NODE_METHOD_TYPE, arg_types=arg_types, return_type=ret_ty, pos=pos);
             } else {
                 let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
                 type_node = VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
