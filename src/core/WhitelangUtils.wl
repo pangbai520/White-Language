@@ -729,17 +729,38 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
         let v -> VarAccessNode = node;
         let info -> SymbolInfo = find_symbol(c, v.name_tok.value);
         if (info is !null) { return info.type; }
+
+        let f_info -> FuncInfo = c.func_table.get(v.name_tok.value);
+        if (f_info is null && c.current_package_prefix != "") { f_info = c.func_table.get(c.current_package_prefix + v.name_tok.value); }
+        if (f_info is !null) { return get_func_type_id(c, f_info.ret_type); }
+
         return 0;
     }
     
     if (base.type == NODE_FIELD_ACCESS) {
         let f -> FieldAccessNode = node;
         let obj_type -> Int = get_expr_type(c, f.obj);
+        if (is_pointer_type(c, obj_type)) {
+            let base_info -> SymbolInfo = c.ptr_base_map.get("" + obj_type);
+            if (base_info is !null) { obj_type = base_info.type; }
+        }
         if (obj_type >= 100) {
             let s_info -> StructInfo = c.struct_id_map.get("" + obj_type);
             if (s_info is !null) {
                 let field -> FieldInfo = find_field(s_info, f.field_name);
                 if (field is !null) { return field.type; }
+                if (s_info.is_class) {
+                    let vtable -> Vector(Struct) = s_info.vtable;
+                    let v_len -> Int = 0; if (vtable is !null) { v_len = vtable.length(); }
+                    let m_idx -> Int = 0;
+                    while (m_idx < v_len) {
+                        let m_info -> FuncInfo = vtable[m_idx];
+                        if (m_info.base_name == f.field_name) {
+                            return get_func_type_id(c, m_info.ret_type);
+                        }
+                        m_idx += 1;
+                    }
+                }
             }
         }
 

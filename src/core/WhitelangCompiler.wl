@@ -1003,6 +1003,13 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
             let ptr_reg -> String = next_reg(c);
             c.output_file.write(c.indent + ptr_reg + " = alloca " + llvm_ty_str + "\n");
             v_node.alloc_reg = ptr_reg;
+
+            let curr_scope -> Scope = c.symbol_table;
+            let origin_type -> Int = target_type_id;
+            if (target_type_id == TYPE_GENERIC_STRUCT || target_type_id == TYPE_GENERIC_CLASS) {
+                // Not perfectly accurate but enough for hoisting
+            }
+            curr_scope.table.put(v_node.name_tok.value, SymbolInfo(reg=ptr_reg, type=target_type_id, origin_type=origin_type, is_const=v_node.is_const));
         }
     }
 }
@@ -4411,6 +4418,13 @@ func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> Compi
         let struct_type_id -> Int = obj_res.type;
         let struct_ptr_reg -> String = obj_res.reg;
 
+        if (is_pointer_type(c, struct_type_id)) {
+            let base_info -> SymbolInfo = c.ptr_base_map.get("" + struct_type_id);
+            if (base_info is !null) {
+                struct_type_id = base_info.type;
+            }
+        }
+
         if ((struct_type_id == TYPE_GENERIC_STRUCT || struct_type_id == TYPE_GENERIC_CLASS) && obj_res.origin_type >= 100) {
             struct_type_id = obj_res.origin_type;
             let s_info_temp -> StructInfo = c.struct_id_map.get("" + struct_type_id);
@@ -4445,6 +4459,53 @@ func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> Compi
 
         let field -> FieldInfo = find_field(s_info, f_acc.field_name);
         if (field is null) {
+            if (s_info.is_class) {
+                let vtable_vec -> Vector(Struct) = s_info.vtable;
+                let v_len -> Int = 0; if (vtable_vec is !null) { v_len = vtable_vec.length(); }
+                let m_idx -> Int = 0;
+                let m_info -> FuncInfo = null;
+                while (m_idx < v_len) {
+                    let m -> FuncInfo = vtable_vec[m_idx];
+                    if (m.base_name == f_acc.field_name) {
+                        m_info = m;
+                        break;
+                    }
+                    m_idx += 1;
+                }
+                
+                if (m_info is !null) {
+                    let specific_type_id -> Int = get_func_type_id(c, m_info.ret_type);
+                    let sig -> String = get_func_sig_str(c, m_info);
+                    
+                    let vtable_ptr_addr -> String = next_reg(c);
+                    c.output_file.write(c.indent + vtable_ptr_addr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + struct_ptr_reg + ", i32 0, i32 0\n");
+                    let vtable_ptr -> String = next_reg(c);
+                    c.output_file.write(c.indent + vtable_ptr + " = load %vtable_type." + s_info.name + "*, %vtable_type." + s_info.name + "** " + vtable_ptr_addr + "\n");
+                    
+                    let method_i8ptr_addr -> String = next_reg(c);
+                    c.output_file.write(c.indent + method_i8ptr_addr + " = getelementptr inbounds %vtable_type." + s_info.name + ", %vtable_type." + s_info.name + "* " + vtable_ptr + ", i32 0, i32 " + m_idx + "\n");
+                    let method_i8ptr -> String = next_reg(c);
+                    c.output_file.write(c.indent + method_i8ptr + " = load i8*, i8** " + method_i8ptr_addr + "\n");
+                    
+                    let cast_reg -> String = next_reg(c);
+                    c.output_file.write(c.indent + cast_reg + " = bitcast i8* " + method_i8ptr + " to i8*\n");
+
+                    let clo_payload -> String = emit_alloc_obj(c, "16", "8", "i8*");
+                    let clo_func_ptr -> String = next_reg(c);
+                    c.output_file.write(c.indent + clo_func_ptr + " = bitcast i8* " + clo_payload + " to i8**\n");
+                    c.output_file.write(c.indent + "store i8* " + cast_reg + ", i8** " + clo_func_ptr + "\n");
+                    
+                    let clo_env_ptr_i8 -> String = next_reg(c);
+                    c.output_file.write(c.indent + clo_env_ptr_i8 + " = getelementptr inbounds i8, i8* " + clo_payload + ", i32 8\n");
+                    let clo_env_ptr -> String = next_reg(c);
+                    c.output_file.write(c.indent + clo_env_ptr + " = bitcast i8* " + clo_env_ptr_i8 + " to i8**\n");
+                    
+                    let env_cast -> String = next_reg(c);
+                    c.output_file.write(c.indent + env_cast + " = bitcast " + s_info.llvm_name + "* " + struct_ptr_reg + " to i8*\n");
+                    c.output_file.write(c.indent + "store i8* " + env_cast + ", i8** " + clo_env_ptr + "\n");
+                    return CompileResult(reg=clo_payload, type=specific_type_id, origin_type=specific_type_id);
+                }
+            }
             WhitelangExceptions.throw_name_error(f_acc.pos, "Field '" + f_acc.field_name + "' not found.");
             return null;
         }
