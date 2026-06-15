@@ -157,6 +157,9 @@ struct Compiler(
     current_file_type_aliases     -> Dict,
     current_file_func_aliases     -> Dict,
     current_file_global_aliases   -> Dict,
+    global_type_aliases           -> Dict,
+    global_func_aliases           -> Dict,
+    global_var_aliases            -> Dict,
     curr_func -> FuncInfo,
     expected_type -> Int,
     type_drop_list -> Vector(Struct),
@@ -221,6 +224,9 @@ func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
         current_file_type_aliases = Dict(32),
         current_file_func_aliases = Dict(32),
         current_file_global_aliases = Dict(32),
+        global_type_aliases = Dict(32),
+        global_func_aliases = Dict(32),
+        global_var_aliases = Dict(32),
         current_package_prefix = "",
         loaded_packages = Dict(32),
         loaded_files = Dict(32),
@@ -281,6 +287,12 @@ func find_symbol(c -> Compiler, name -> String) -> SymbolInfo {
         if (alias_info is !null) { return alias_info; }
     }
 
+    let g_alias -> String = c.global_var_aliases.get(name);
+    if (g_alias is !null) {
+        let alias_info -> SymbolInfo = c.global_symbol_table.get(g_alias);
+        if (alias_info is !null) { return alias_info; }
+    }
+
     return c.global_symbol_table.get(name);
 }
 
@@ -298,13 +310,67 @@ func find_field(s_info -> StructInfo, name -> String) -> FieldInfo {
 }
 
 func get_field_by_index(s_info -> StructInfo, index -> Int) -> FieldInfo {
-    if (s_info is null) { return null; }
     let fields -> Vector(Struct) = s_info.fields;
     let len -> Int = 0; if (fields is !null) { len = fields.length(); }
     if (index >= 0 && index < len) {
         return fields[index];
     }
     return null;
+}
+
+func export_module_symbols(c -> Compiler, prefix -> String, as_submodule -> Bool, module_name -> String) -> Void {
+    if (c.current_package_prefix == "") { return; }
+    
+    let p_len -> Int = prefix.length();
+    let export_prefix -> String = c.current_package_prefix;
+    if (as_submodule) {
+        export_prefix = c.current_package_prefix + module_name + ".";
+    }
+
+    let f_cap -> Int = c.func_table.capacity;
+    let k -> Int = 0;
+    while (k < f_cap) {
+        if (c.func_table.hashes[k] >= 2) { 
+            let f_key -> String = c.func_table.keys[k];
+            if (f_key.starts_with(prefix)) {
+                let bare_name -> String = f_key.slice(p_len, f_key.length());
+                if (!bare_name.starts_with("__")) {
+                    c.global_func_aliases.put(export_prefix + bare_name, f_key);
+                }
+            }
+        }
+        k += 1;
+    }
+
+    let s_cap -> Int = c.struct_table.capacity;
+    k = 0;
+    while (k < s_cap) {
+        if (c.struct_table.hashes[k] >= 2) {
+            let s_key -> String = c.struct_table.keys[k];
+            if (s_key.starts_with(prefix)) {
+                let bare_name -> String = s_key.slice(p_len, s_key.length());
+                if (!bare_name.starts_with("__")) {
+                    c.global_type_aliases.put(export_prefix + bare_name, s_key);
+                }
+            }
+        }
+        k += 1;
+    }
+
+    let g_cap -> Int = c.global_symbol_table.capacity;
+    k = 0;
+    while (k < g_cap) {
+        if (c.global_symbol_table.hashes[k] >= 2) {
+            let g_key -> String = c.global_symbol_table.keys[k];
+            if (g_key.starts_with(prefix)) {
+                let bare_name -> String = g_key.slice(p_len, g_key.length());
+                if (!bare_name.starts_with("__")) {
+                    c.global_var_aliases.put(export_prefix + bare_name, g_key);
+                }
+            }
+        }
+        k += 1;
+    }
 }
 
 func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) -> Void {
@@ -963,6 +1029,50 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
         else if (callee.type == NODE_FIELD_ACCESS) {
             let f -> FieldAccessNode = call_node.callee;
             let obj_type -> Int = get_expr_type(c, f.obj);
+            if (obj_type == 0) {
+                let path_parts -> Vector(String) = [];
+                let curr_obj -> Struct = f.obj;
+                let curr_base -> BaseNode = curr_obj;
+                while (curr_base.type == NODE_FIELD_ACCESS) {
+                    let inner_f -> FieldAccessNode = curr_obj;
+                    path_parts.append(inner_f.field_name);
+                    curr_obj = inner_f.obj;
+                    curr_base = curr_obj;
+                }
+                if (curr_base.type == NODE_VAR_ACCESS) {
+                    let inner_v -> VarAccessNode = curr_obj;
+                    let root_name -> String = inner_v.name_tok.value;
+                    if (find_symbol(c, root_name) is null) {
+                        let root_marker -> StringConstant = c.loaded_packages.get(root_name);
+                        if (root_marker is null) { root_marker = c.loaded_files.get(root_name); }
+                        
+                        let full_name -> String = "";
+                        if (root_marker is !null) {
+                            let full_path -> String = root_marker.value;
+                            let p_idx -> Int = path_parts.length() - 1;
+                            while (p_idx >= 0) {
+                                full_path = full_path + path_parts[p_idx] + ".";
+                                p_idx -= 1;
+                            }
+                            full_name = full_path + f.field_name;
+                        } else {
+                            full_name = root_name + ".";
+                            let p_idx -> Int = path_parts.length() - 1;
+                            while (p_idx >= 0) {
+                                full_name = full_name + path_parts[p_idx] + ".";
+                                p_idx -= 1;
+                            }
+                            full_name = full_name + f.field_name;
+                        }
+                        let g_alias_f -> String = c.global_func_aliases.get(full_name);
+                        if (g_alias_f is !null) { full_name = g_alias_f; }
+                        
+                        let f_info -> FuncInfo = c.func_table.get(full_name);
+                        if (f_info is !null) { return f_info.ret_type; }
+                    }
+                }
+            }
+
             if (is_pointer_type(c, obj_type)) {
                 let base_info -> SymbolInfo = c.ptr_base_map.get("" + obj_type);
                 if (base_info is !null) { obj_type = base_info.type; }
@@ -1239,30 +1349,69 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
             if (s_info is !null) { return s_info.type_id; }
         }
 
+        let s_info -> StructInfo = c.struct_table.get(name);
+        if (s_info is !null) { return s_info.type_id; }
+        
+        let local_alias -> String = c.current_file_type_aliases.get(name);
+        if (local_alias is !null) {
+            let s_info -> StructInfo = c.struct_table.get(local_alias);
+            if (s_info is !null) { return s_info.type_id; }
+        }
+
+        let g_alias -> String = c.global_type_aliases.get(name);
+        if (g_alias is !null) {
+            let s_info -> StructInfo = c.struct_table.get(g_alias);
+            if (s_info is !null) { return s_info.type_id; }
+        }
+
         WhitelangExceptions.throw_type_error(v.pos, "Unknown type: " + name);
     }
 
     if (base.type == NODE_FIELD_ACCESS) {
         let f_acc -> FieldAccessNode = node;
-        let obj_base -> BaseNode = f_acc.obj;
-        if (obj_base.type == NODE_VAR_ACCESS) {
-            let pkg_node -> VarAccessNode = f_acc.obj;
+        let path_parts -> Vector(String) = [];
+        let curr_obj -> Struct = f_acc.obj;
+        let curr_base -> BaseNode = curr_obj;
+        while (curr_base.type == NODE_FIELD_ACCESS) {
+            let inner_f -> FieldAccessNode = curr_obj;
+            path_parts.append(inner_f.field_name);
+            curr_obj = inner_f.obj;
+            curr_base = curr_obj;
+        }
+        if (curr_base.type == NODE_VAR_ACCESS) {
+            let pkg_node -> VarAccessNode = curr_obj;
             let pkg_name -> String = pkg_node.name_tok.value;
             let type_name -> String = f_acc.field_name;
 
             let full_name -> String = "";
             let pkg_marker -> StringConstant = c.loaded_packages.get(pkg_name);
+            if (pkg_marker is null) { pkg_marker = c.loaded_files.get(pkg_name); }
             if (pkg_marker is !null) {
-                full_name = pkg_marker.value + "." + type_name;
-            } else if (c.loaded_files.get(pkg_name) is !null) {
-                let file_marker -> StringConstant = c.loaded_files.get(pkg_name);
-                full_name = file_marker.value + type_name;
+                let full_path -> String = pkg_marker.value;
+                let p_idx -> Int = path_parts.length() - 1;
+                while (p_idx >= 0) {
+                    full_path = full_path + path_parts[p_idx] + ".";
+                    p_idx -= 1;
+                }
+                full_name = full_path + type_name;
             } else {
-                full_name = pkg_name + "." + type_name; 
+                full_name = pkg_name + ".";
+                let p_idx -> Int = path_parts.length() - 1;
+                while (p_idx >= 0) {
+                    full_name = full_name + path_parts[p_idx] + ".";
+                    p_idx -= 1;
+                }
+                full_name = full_name + type_name;
             }
 
             let s_info -> StructInfo = c.struct_table.get(full_name);
             if (s_info is !null) { return s_info.type_id; }
+            
+            let g_alias -> String = c.global_type_aliases.get(full_name);
+            if (g_alias is !null) {
+                let type_s_info -> StructInfo = c.struct_table.get(g_alias);
+                if (type_s_info is !null) { return type_s_info.type_id; }
+            }
             
             WhitelangExceptions.throw_type_error(f_acc.pos, "Unknown module type: " + full_name);
         }

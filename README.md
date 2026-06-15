@@ -141,7 +141,7 @@ Test the newly built compiler:
 ./wlc_new
 ```
 
-You should see the `White Language Compiler (v0.2.6)` output.
+You should see the `White Language Compiler (v0.2.7)` output.
 
 ## License
 

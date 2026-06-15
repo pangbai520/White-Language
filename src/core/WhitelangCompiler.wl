@@ -777,6 +777,29 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
         i += 1;
     }
 }
+func pre_register_globals(c -> Compiler, node -> Struct) -> Void {
+    let block -> BlockNode = node;
+    let stmts -> Vector(Struct) = block.stmts;
+    let len -> Int = 0;
+    if (stmts is !null) { len = stmts.length(); }
+    let i -> Int = 0;
+    
+    while (i < len) {
+        let base -> BaseNode = stmts[i];
+        if (base.type == NODE_VAR_DECL) {
+            let var_decl -> VarDeclareNode = stmts[i];
+            let var_name -> String = var_decl.name_tok.value;
+            let full_var_name -> String = var_name;
+            if (c.current_package_prefix != "") {
+                full_var_name = c.current_package_prefix + var_name;
+            }
+            // register a dummy SymbolInfo so bind_import_symbols can find it
+            // it will be overwritten with actual type and llvm reg in compile_ast_pass
+            c.global_symbol_table.put(full_var_name, SymbolInfo(reg="poison", type=0, origin_type=0, is_const=var_decl.is_const));
+        }
+        i += 1;
+    }
+}
 func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
     let block -> BlockNode = node;
     let stmts -> Vector(Struct) = block.stmts;
@@ -1461,55 +1484,58 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
         }
     }
 
-    let module_name -> String = "";
+    let len -> Int = raw_path.length();
+    let end_idx -> Int = len;
+    if (raw_path.ends_with(".wl")) {
+        end_idx = len - 3;
+    }
+    let start_idx -> Int = 0;
+    let i -> Int = len - 1;
+    while (i >= 0) {
+        let ch -> Char = raw_path[i];
+        if (ch == '/' || ch == '\\') {
+            start_idx = i + 1;
+            break;
+        }
+        i -= 1;
+    }
+    let canonical_name -> String = raw_path.slice(start_idx, end_idx);
+
+    let module_name -> String = canonical_name;
     if (node.alias_tok is !null) {
         module_name = node.alias_tok.value;
-    } else {
-        let len -> Int = raw_path.length();
-        let end_idx -> Int = len;
-        if (raw_path.ends_with(".wl")) {
-            end_idx = len - 3;
-        }
-        let start_idx -> Int = 0;
-        let i -> Int = len - 1;
-        while (i >= 0) {
-            let ch -> Char = raw_path[i];
-            if (ch == '/' || ch == '\\') {
-                start_idx = i + 1;
-                break;
-            }
-            i -= 1;
-        }
-        module_name = raw_path.slice(start_idx, end_idx);
     }
 
-    let import_prefix -> String = "";
+    let import_prefix -> String = canonical_name + ".";
     if is_pkg {
-        import_prefix = module_name + ".";
-    } else {
-        if (raw_path == "builtin" || raw_path == "builtin.wl") {
-            import_prefix = ""; 
-        } else {
-            import_prefix = module_name + ".";
-        }
-    }
-
-    if (c.imported_modules.get(final_path) is !null) { 
-        if (node.symbols is !null) {
-            bind_import_symbols(c, node, import_prefix);
-        }
-        return; 
-    }
-
-    let marker -> StringConstant = StringConstant(id=0, value="imported");
-    if is_pkg {
-        let pkg_val -> StringConstant = StringConstant(id=0, value=raw_path);
+        let pkg_val -> StringConstant = StringConstant(id=0, value=import_prefix);
         c.loaded_packages.put(module_name, pkg_val);
     } else {
         let file_val -> StringConstant = StringConstant(id=0, value=import_prefix);
         c.loaded_files.put(module_name, file_val);
     }
 
+    if (c.imported_modules.get(final_path) is !null) { 
+        if (node.symbols is !null) {
+            bind_import_symbols(c, node, import_prefix);
+            let s_len -> Int = node.symbols.length();
+            let i -> Int = 0;
+            let is_star -> Bool = false;
+            while (i < s_len) {
+                let curr_sym -> ImportSymbolNode = node.symbols[i];
+                if (curr_sym.name_tok.type == TOK_MUL) { is_star = true; break; }
+                i += 1;
+            }
+            if is_star {
+                export_module_symbols(c, import_prefix, false, "");
+            }
+        } else {
+            export_module_symbols(c, import_prefix, true, module_name);
+        }
+        return; 
+    }
+
+    let marker -> StringConstant = StringConstant(id=0, value="imported");
     c.imported_modules.put(final_path, marker);
 
     let old_prefix -> String = c.current_package_prefix;
@@ -1548,6 +1574,19 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
 
     if (node.symbols is !null) {
         bind_import_symbols(c, node, import_prefix);
+        let s_len -> Int = node.symbols.length();
+        let i -> Int = 0;
+        let is_star -> Bool = false;
+        while (i < s_len) {
+            let curr_sym -> ImportSymbolNode = node.symbols[i];
+            if (curr_sym.name_tok.type == TOK_MUL) { is_star = true; break; }
+            i += 1;
+        }
+        if is_star {
+            export_module_symbols(c, import_prefix, false, "");
+        }
+    } else {
+        export_module_symbols(c, import_prefix, true, module_name);
     }
 }
 
@@ -1592,12 +1631,7 @@ func compile_ast_pass(c -> Compiler, p_mod -> ParsedModule) -> Void {
                 }
                 module_name = raw_path.slice(start_idx, end_idx);
             }
-            let imp_prefix -> String = "";
-            if is_pkg { imp_prefix = module_name + "."; } 
-            else {
-                if (raw_path == "builtin" || raw_path == "builtin.wl") { imp_prefix = ""; } 
-                else { imp_prefix = module_name + "."; }
-            }
+            let imp_prefix -> String = module_name + ".";
             bind_import_symbols(c, imp, imp_prefix);
         }
         i += 1;
@@ -1675,7 +1709,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
             return void_result();
         }
         if (target_type_id == TYPE_NULL || target_type_id == TYPE_NULLPTR || target_type_id == TYPE_VOID || target_type_id == TYPE_POISON) {
-            WhitelangExceptions.throw_type_error(node.pos, "Cannot infer 'Auto' as null, Void, or Poison.");
+            WhitelangExceptions.throw_type_error(node.pos, "Cannot infer 'Auto' as null, Void");
             let curr_scope -> Scope = c.symbol_table;
             curr_scope.table.put(node.name_tok.value, SymbolInfo(reg="poison", type=TYPE_POISON, origin_type=TYPE_POISON, is_const=false));
             return void_result();
@@ -3052,46 +3086,84 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
 func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResult {
     let obj_base -> BaseNode = node.obj;
 
-    if (obj_base.type == NODE_VAR_ACCESS) {
-        let v_node -> VarAccessNode = node.obj;
-        let pkg_name -> String = v_node.name_tok.value;
-        let is_module -> Bool = false;
-        let full_name -> String = "";
-        
-        if (find_symbol(c, pkg_name) is null) {
-            let pkg_marker -> StringConstant = c.loaded_packages.get(pkg_name);
-            if (pkg_marker is !null) {
-                full_name = pkg_marker.value + "." + node.field_name;
+    let is_module -> Bool = false;
+    let full_name -> String = "";
+    
+    let path_parts -> Vector(String) = [];
+    let curr_obj -> Struct = node.obj;
+    let curr_base -> BaseNode = curr_obj;
+    while (curr_base.type == NODE_FIELD_ACCESS) {
+        let inner_f -> FieldAccessNode = curr_obj;
+        path_parts.append(inner_f.field_name);
+        curr_obj = inner_f.obj;
+        curr_base = curr_obj;
+    }
+    if (curr_base.type == NODE_VAR_ACCESS) {
+        let inner_v -> VarAccessNode = curr_obj;
+        let root_name -> String = inner_v.name_tok.value;
+        if (find_symbol(c, root_name) is null) {
+            let root_marker -> StringConstant = c.loaded_packages.get(root_name);
+            if (root_marker is null) { root_marker = c.loaded_files.get(root_name); }
+            if (root_marker is !null) {
+                let full_path -> String = root_marker.value;
+                let p_idx -> Int = path_parts.length() - 1;
+                while (p_idx >= 0) {
+                    full_path = full_path + path_parts[p_idx] + ".";
+                    p_idx -= 1;
+                }
+                full_name = full_path + node.field_name;
                 is_module = true;
             } else {
-                let file_marker -> StringConstant = c.loaded_files.get(pkg_name);
-                if (file_marker is !null) {
-                    full_name = file_marker.value + node.field_name;
+                full_name = root_name + ".";
+                let p_idx -> Int = path_parts.length() - 1;
+                while (p_idx >= 0) {
+                    full_name = full_name + path_parts[p_idx] + ".";
+                    p_idx -= 1;
+                }
+                full_name = full_name + node.field_name;
+                if (c.global_symbol_table.get(full_name) is !null) {
                     is_module = true;
-                } else {
-                    full_name = pkg_name + "." + node.field_name;
-                    if (c.global_symbol_table.get(full_name) is !null) {
-                        is_module = true;
-                    }
                 }
             }
         }
+    }
 
-        if is_module {
-            if (node.field_name.starts_with("__")) {
-                WhitelangExceptions.throw_name_error(node.pos, "Undefined module variable '" + full_name + "'.");
-                return void_result();
+    if is_module {
+        let g_alias_var -> String = c.global_var_aliases.get(full_name);
+        if (g_alias_var is !null) { full_name = g_alias_var; }
+
+        if (node.field_name.starts_with("__")) {
+            WhitelangExceptions.throw_name_error(node.pos, "Undefined module variable '" + full_name + "'.");
+            return void_result();
+        }
+
+        let g_info -> SymbolInfo = c.global_symbol_table.get(full_name);
+        if (g_info is null) {
+            let len_full -> Int = full_name.length();
+            let len_field -> Int = node.field_name.length();
+            if (len_full > len_field + 1) {
+                let type_part -> String = full_name.slice(0, len_full - len_field - 1);
+                
+                let real_type_name -> String = type_part;
+                let c_alias -> String = c.current_file_type_aliases.get(type_part);
+                if (c_alias is !null) { real_type_name = c_alias; }
+                else {
+                    let g_alias -> String = c.global_type_aliases.get(type_part);
+                    if (g_alias is !null) { real_type_name = g_alias; }
+                }
+                
+                let resolved_enum_field -> String = real_type_name + "." + node.field_name;
+                g_info = c.global_symbol_table.get(resolved_enum_field);
             }
+        }
 
-            let g_info -> SymbolInfo = c.global_symbol_table.get(full_name);
-            if (g_info is !null) {
-                let llvm_ty_str -> String = get_llvm_type_str(c, g_info.type);
-                let val_reg -> String = next_reg(c);
+        if (g_info is !null) {
+            let llvm_ty_str -> String = get_llvm_type_str(c, g_info.type);
+            let val_reg -> String = next_reg(c);
                 c.output_file.write(c.indent + val_reg + " = load " + llvm_ty_str + ", " + llvm_ty_str + "* " + g_info.reg + "\n");
                 return CompileResult(reg=val_reg, type=g_info.type, origin_type=g_info.origin_type);
             }
         }
-    }
 
     let obj_res -> CompileResult = compile_node(c, node.obj);
     if (obj_res is !null && obj_res.type == TYPE_POISON) { return CompileResult(reg="poison", type=TYPE_POISON); }
@@ -5481,18 +5553,30 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 if (res is !null) { return res; }
             }
 
-            let obj_base -> BaseNode = f_acc.obj;
-            if (obj_base.type == NODE_VAR_ACCESS) {
-                let v_node -> VarAccessNode = f_acc.obj;
-                let pkg_name -> String = v_node.name_tok.value;
-                if (find_symbol(c, pkg_name) is null) {
-                    let pkg_marker -> StringConstant = c.loaded_packages.get(pkg_name);
-                    if (pkg_marker is !null) {
-                        func_name = pkg_marker.value + "." + f_acc.field_name;
-                        is_package_call = true;
-                    } else if (c.loaded_files.get(pkg_name) is !null) {
-                        let file_marker -> StringConstant = c.loaded_files.get(pkg_name);
-                        func_name = file_marker.value + f_acc.field_name;
+            let is_module_path -> Bool = true;
+            let path_parts -> Vector(String) = [];
+            let curr_obj -> Struct = f_acc.obj;
+            let curr_base -> BaseNode = curr_obj;
+            while (curr_base.type == NODE_FIELD_ACCESS) {
+                let inner_f -> FieldAccessNode = curr_obj;
+                path_parts.append(inner_f.field_name);
+                curr_obj = inner_f.obj;
+                curr_base = curr_obj;
+            }
+            if (curr_base.type == NODE_VAR_ACCESS) {
+                let inner_v -> VarAccessNode = curr_obj;
+                let root_name -> String = inner_v.name_tok.value;
+                if (find_symbol(c, root_name) is null) {
+                    let root_marker -> StringConstant = c.loaded_packages.get(root_name);
+                    if (root_marker is null) { root_marker = c.loaded_files.get(root_name); }
+                    if (root_marker is !null) {
+                        let full_path -> String = root_marker.value;
+                        let p_idx -> Int = path_parts.length() - 1;
+                        while (p_idx >= 0) {
+                            full_path = full_path + path_parts[p_idx] + ".";
+                            p_idx -= 1;
+                        }
+                        func_name = full_path + f_acc.field_name;
                         is_package_call = true;
                     }
                 }
@@ -5602,6 +5686,12 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         }
 
         if is_direct {
+            let g_alias_type -> String = c.global_type_aliases.get(func_name);
+            if (g_alias_type is !null) { func_name = g_alias_type; }
+
+            let g_alias_func -> String = c.global_func_aliases.get(func_name);
+            if (g_alias_func is !null) { func_name = g_alias_func; }
+
             let target_func_name -> String = func_name;
             let check_built -> FuncInfo = c.func_table.get(func_name);
             if (check_built is !null) { target_func_name = check_built.base_name; }

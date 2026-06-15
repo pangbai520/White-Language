@@ -306,7 +306,7 @@ func parse_type_base(p -> Parser) -> Struct {
             let pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             type_node = VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
 
-            if (p.current_tok.type == TOK_DOT) {
+            while (p.current_tok.type == TOK_DOT) {
                 parser_advance(p); // skip '.'
                 if (p.current_tok.type != TOK_IDENTIFIER) {
                     let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -1445,11 +1445,12 @@ func parse_import(p -> Parser) -> Struct {
     let start_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
     parser_advance(p); // skip 'import'
 
-    let symbols -> Vector(Struct) = [];
+    let symbols -> Vector(Struct) = null;
     let path_tok -> Token = null;
 
     // import * from "..."
     if (p.current_tok.type == TOK_MUL) {
+        symbols = [];
         let star_tok -> Token = p.current_tok;
         parser_advance(p); // skip '*'
 
@@ -1464,8 +1465,9 @@ func parse_import(p -> Parser) -> Struct {
 
     // import A, B from "..."
     else if (p.current_tok.type == TOK_IDENTIFIER) {
+        symbols = [];
         let parsing -> Bool = true;
-        while (parsing) {
+        while parsing {
             if (p.current_tok.type != TOK_IDENTIFIER) {
                 let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
                 WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected identifier in import list.");
