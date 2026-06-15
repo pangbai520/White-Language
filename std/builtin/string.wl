@@ -19,10 +19,12 @@ extern "C" {
 // ==========================================================
 // String methods (Built-in 'str.length()')
 // ==========================================================
+@CompilerLink
 func string_at(self -> String, idx -> Int) -> Char { // str.at()
     return self[idx];
 }
 
+@CompilerLink
 func string_slice(self -> String, start -> Int, end -> Int) -> String { // str.slice()
     let self_len -> Int = self.length();
 
@@ -44,6 +46,7 @@ func string_slice(self -> String, start -> Int, end -> Int) -> String { // str.s
     return new_str;
 }
 
+@CompilerLink
 func string_ends_with(s -> String, suffix -> String) -> Bool {
     let s_len -> Int = s.length();
     let sub_len -> Int = suffix.length();
@@ -60,6 +63,7 @@ func string_ends_with(s -> String, suffix -> String) -> Bool {
     return true;
 }
 
+@CompilerLink
 func string_starts_with(s -> String, prefix -> String) -> Bool {
     let s_len -> Int = s.length();
     let pre_len -> Int = prefix.length();

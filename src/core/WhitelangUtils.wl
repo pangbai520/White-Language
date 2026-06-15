@@ -154,12 +154,13 @@ struct Compiler(
     loaded_files -> Dict,
     current_dir -> String,
     current_file_visible_prefixes -> Dict,
-    current_file_type_aliases     -> Dict,
-    current_file_func_aliases     -> Dict,
-    current_file_global_aliases   -> Dict,
-    global_type_aliases           -> Dict,
-    global_func_aliases           -> Dict,
-    global_var_aliases            -> Dict,
+    current_file_type_aliases -> Dict,
+    current_file_func_aliases -> Dict,
+    current_file_global_aliases -> Dict,
+    global_type_aliases -> Dict,
+    global_func_aliases -> Dict,
+    global_var_aliases -> Dict,
+    compiler_link -> Dict,
     curr_func -> FuncInfo,
     expected_type -> Int,
     type_drop_list -> Vector(Struct),
@@ -227,6 +228,7 @@ func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
         global_type_aliases = Dict(32),
         global_func_aliases = Dict(32),
         global_var_aliases = Dict(32),
+        compiler_link = Dict(16),
         current_package_prefix = "",
         loaded_packages = Dict(32),
         loaded_files = Dict(32),
@@ -371,6 +373,54 @@ func export_module_symbols(c -> Compiler, prefix -> String, as_submodule -> Bool
         }
         k += 1;
     }
+
+    let af_cap -> Int = c.global_func_aliases.capacity;
+    k = 0;
+    while (k < af_cap) {
+        if (c.global_func_aliases.hashes[k] >= 2) { 
+            let a_key -> String = c.global_func_aliases.keys[k];
+            if (a_key.starts_with(prefix)) {
+                let bare_name -> String = a_key.slice(p_len, a_key.length());
+                if (!bare_name.starts_with("__")) {
+                    let real_target -> String = c.global_func_aliases.values[k];
+                    c.global_func_aliases.put(export_prefix + bare_name, real_target);
+                }
+            }
+        }
+        k += 1;
+    }
+
+    let at_cap -> Int = c.global_type_aliases.capacity;
+    k = 0;
+    while (k < at_cap) {
+        if (c.global_type_aliases.hashes[k] >= 2) { 
+            let a_key -> String = c.global_type_aliases.keys[k];
+            if (a_key.starts_with(prefix)) {
+                let bare_name -> String = a_key.slice(p_len, a_key.length());
+                if (!bare_name.starts_with("__")) {
+                    let real_target -> String = c.global_type_aliases.values[k];
+                    c.global_type_aliases.put(export_prefix + bare_name, real_target);
+                }
+            }
+        }
+        k += 1;
+    }
+
+    let av_cap -> Int = c.global_var_aliases.capacity;
+    k = 0;
+    while (k < av_cap) {
+        if (c.global_var_aliases.hashes[k] >= 2) { 
+            let a_key -> String = c.global_var_aliases.keys[k];
+            if (a_key.starts_with(prefix)) {
+                let bare_name -> String = a_key.slice(p_len, a_key.length());
+                if (!bare_name.starts_with("__")) {
+                    let real_target -> String = c.global_var_aliases.values[k];
+                    c.global_var_aliases.put(export_prefix + bare_name, real_target);
+                }
+            }
+        }
+        k += 1;
+    }
 }
 
 func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) -> Void {
@@ -454,6 +504,69 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
                 k += 1;
             }
 
+            let g_f_cap -> Int = c.global_func_aliases.capacity;
+            k = 0;
+            while (k < g_f_cap) {
+                if (c.global_func_aliases.hashes[k] >= 2) { 
+                    let f_key -> String = c.global_func_aliases.keys[k];
+                    if (f_key.starts_with(prefix)) {
+                        let bare_name -> String = f_key.slice(p_len, f_key.length());
+                        if (!bare_name.starts_with("__")) {
+                            let existing_f -> String = c.current_file_func_aliases.get(bare_name);
+                            let val -> String = c.global_func_aliases.get(f_key);
+                            if (existing_f is !null && existing_f != val) {
+                                WhitelangExceptions.throw_import_error(node.pos, "Name collision for function '" + bare_name + "'. Please use explicit alias.");
+                            } else {
+                                c.current_file_func_aliases.put(bare_name, val);
+                            }
+                        }
+                    }
+                }
+                k += 1;
+            }
+
+            let g_s_cap -> Int = c.global_type_aliases.capacity;
+            k = 0;
+            while (k < g_s_cap) {
+                if (c.global_type_aliases.hashes[k] >= 2) { 
+                    let s_key -> String = c.global_type_aliases.keys[k];
+                    if (s_key.starts_with(prefix)) {
+                        let bare_name -> String = s_key.slice(p_len, s_key.length());
+                        if (!bare_name.starts_with("__")) {
+                            let existing_s -> String = c.current_file_type_aliases.get(bare_name);
+                            let val -> String = c.global_type_aliases.get(s_key);
+                            if (existing_s is !null && existing_s != val) {
+                                WhitelangExceptions.throw_import_error(node.pos, "Name collision for type '" + bare_name + "'. Please use explicit alias.");
+                            } else {
+                                c.current_file_type_aliases.put(bare_name, val);
+                            }
+                        }
+                    }
+                }
+                k += 1;
+            }
+
+            let g_v_cap -> Int = c.global_var_aliases.capacity;
+            k = 0;
+            while (k < g_v_cap) {
+                if (c.global_var_aliases.hashes[k] >= 2) { 
+                    let v_key -> String = c.global_var_aliases.keys[k];
+                    if (v_key.starts_with(prefix)) {
+                        let bare_name -> String = v_key.slice(p_len, v_key.length());
+                        if (!bare_name.starts_with("__")) {
+                            let existing_v -> String = c.current_file_global_aliases.get(bare_name);
+                            let val -> String = c.global_var_aliases.get(v_key);
+                            if (existing_v is !null && existing_v != val) {
+                                WhitelangExceptions.throw_import_error(node.pos, "Name collision for global '" + bare_name + "'. Please use explicit alias.");
+                            } else {
+                                c.current_file_global_aliases.put(bare_name, val);
+                            }
+                        }
+                    }
+                }
+                k += 1;
+            }
+            
             i += 1;
             continue;
         }
@@ -480,17 +593,35 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
             if (existing_f is !null && existing_f != lookup_name) { WhitelangExceptions.throw_import_error(node.pos, "Name collision for function '" + target_name + "'. Please use explicit alias."); }
             else { c.current_file_func_aliases.put(target_name, lookup_name); }
             found = true;
+        } else if (c.global_func_aliases.get(lookup_name) is !null) {
+            let real_name -> String = c.global_func_aliases.get(lookup_name);
+            let existing_f -> String = c.current_file_func_aliases.get(target_name);
+            if (existing_f is !null && existing_f != real_name) { WhitelangExceptions.throw_import_error(node.pos, "Name collision for function '" + target_name + "'. Please use explicit alias."); }
+            else { c.current_file_func_aliases.put(target_name, real_name); }
+            found = true;
         }
         if (c.struct_table.get(lookup_name) is !null) {
             let existing_s -> String = c.current_file_type_aliases.get(target_name);
             if (existing_s is !null && existing_s != lookup_name) { WhitelangExceptions.throw_import_error(node.pos, "Name collision for type '" + target_name + "'. Please use explicit alias."); }
             else { c.current_file_type_aliases.put(target_name, lookup_name); }
             found = true;
+        } else if (c.global_type_aliases.get(lookup_name) is !null) {
+            let real_name -> String = c.global_type_aliases.get(lookup_name);
+            let existing_s -> String = c.current_file_type_aliases.get(target_name);
+            if (existing_s is !null && existing_s != real_name) { WhitelangExceptions.throw_import_error(node.pos, "Name collision for type '" + target_name + "'. Please use explicit alias."); }
+            else { c.current_file_type_aliases.put(target_name, real_name); }
+            found = true;
         }
         if (c.global_symbol_table.get(lookup_name) is !null) {
             let existing_g -> String = c.current_file_global_aliases.get(target_name);
             if (existing_g is !null && existing_g != lookup_name) { WhitelangExceptions.throw_import_error(node.pos, "Name collision for global '" + target_name + "'. Please use explicit alias."); }
             else { c.current_file_global_aliases.put(target_name, lookup_name); }
+            found = true;
+        } else if (c.global_var_aliases.get(lookup_name) is !null) {
+            let real_name -> String = c.global_var_aliases.get(lookup_name);
+            let existing_g -> String = c.current_file_global_aliases.get(target_name);
+            if (existing_g is !null && existing_g != real_name) { WhitelangExceptions.throw_import_error(node.pos, "Name collision for global '" + target_name + "'. Please use explicit alias."); }
+            else { c.current_file_global_aliases.put(target_name, real_name); }
             found = true;
         }
 
@@ -1078,6 +1209,14 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
                 if (base_info is !null) { obj_type = base_info.type; }
             }
 
+            if (obj_type == TYPE_STRING) {
+                let str_link -> String = c.compiler_link.get("string_" + f.field_name);
+                if (str_link is !null) {
+                    let f_info -> FuncInfo = c.func_table.get(str_link);
+                    if (f_info is !null) { return f_info.ret_type; }
+                }
+            }
+
             if (f.field_name == "length") { return TYPE_INT; }
             if (f.field_name == "append") { return TYPE_VOID; }
             if (f.field_name == "drop") {
@@ -1495,7 +1634,7 @@ func analyze_annotations(c -> Compiler, anns -> Vector(Struct)) -> Dict {
         let ann_node -> AnnotationNode = anns[i];
         let name -> String = ann_node.name;
 
-        if (name == "Attribute" || name == "ExportLib" || name == "CompilerIntrinsic") {
+        if (name == "Attribute" || name == "ExportLib" || name == "CompilerIntrinsic" || name == "CompilerLink") {
             res.put(name, ann_node);
             i += 1;
             continue;

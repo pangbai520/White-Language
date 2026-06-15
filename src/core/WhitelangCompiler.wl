@@ -856,6 +856,23 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
             let f_info -> FuncInfo = FuncInfo(name=llvm_func_name, base_name=raw_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=false);
             c.func_table.put(func_key, f_info);
 
+            let intr_ann -> AnnotationNode = active_anns.get("CompilerLink");
+            if (intr_ann is !null) {
+                let intr_name -> String = raw_name;
+                let intr_args -> Vector(Struct) = intr_ann.args;
+                if (intr_args is !null && intr_args.length() > 0) {
+                    let a_node -> ArgNode = intr_args[0];
+                    if (a_node.val is !null) {
+                        let base_val -> BaseNode = a_node.val;
+                        if (base_val.type == NODE_STRING) {
+                            let str_node -> StringNode = a_node.val;
+                            intr_name = str_node.tok.value;
+                        }
+                    }
+                }
+                c.compiler_link.put(intr_name, func_key);
+            }
+
         } else if (base.type == NODE_CLASS_DEF) {
             let c_node -> ClassDefNode = stmts[i];
             let raw_name -> String = c_node.name_tok.value;
@@ -4234,10 +4251,8 @@ func compile_slice_access(c -> Compiler, node -> SliceAccessNode) -> CompileResu
     if (target_res.type == TYPE_STRING) {
         let call_reg -> String = next_reg(c);
 
-        let real_func_name -> String = "string_slice";
-        if (c.func_table.get("string_slice") is !null) { real_func_name = "string_slice"; }
-        else if (c.func_table.get("string.string_slice") is !null) { real_func_name = "string.string_slice"; }
-        else if (c.func_table.get("builtin.string_slice") is !null) { real_func_name = "builtin.string_slice"; }
+        let real_func_name -> String = c.compiler_link.get("string_slice");
+        if (real_func_name is null) { real_func_name = "string_slice"; }
 
         let slice_info -> FuncInfo = c.func_table.get(real_func_name);
         let slice_llvm -> String = "string_slice";
@@ -5696,7 +5711,14 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             let check_built -> FuncInfo = c.func_table.get(func_name);
             if (check_built is !null) { target_func_name = check_built.base_name; }
 
-            if (target_func_name == "print" || target_func_name == "builtin.print") {
+            let intr_print -> String = c.compiler_link.get("print");
+            let is_print -> Bool = false;
+            if (intr_print is !null) {
+                if (func_name == intr_print) { is_print = true; }
+            } else {
+                if (target_func_name == "print") { is_print = true; }
+            }
+            if is_print {
                 let args -> Vector(Struct) = n_call.args;
                 let a_len -> Int = 0;
                 if (args is !null) { a_len = args.length(); }
@@ -6674,19 +6696,9 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
 
 func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -> String, call_node -> CallNode) -> CompileResult {
     let target_func -> String = "string_" + method_name;
-    let real_func_name -> String = "";
+    let real_func_name -> String = c.compiler_link.get(target_func);
 
-    if (c.func_table.get(target_func) is !null) {
-        real_func_name = target_func;
-    } else if (c.func_table.get("string." + target_func) is !null) {
-        real_func_name = "string." + target_func;
-    } else if (c.func_table.get("builtin." + target_func) is !null) {
-        real_func_name = "builtin." + target_func;
-    } else if (c.current_package_prefix != "" && c.func_table.get(c.current_package_prefix + target_func) is !null) {
-        real_func_name = c.current_package_prefix + target_func;
-    }
-
-    if (real_func_name == "") {
+    if (real_func_name is null) {
         return null;
     }
 
