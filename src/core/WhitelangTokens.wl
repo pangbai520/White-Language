@@ -105,6 +105,8 @@ const TOK_T_CHAR        -> Int = 86;
 const TOK_CHAR_LIT      -> Int = 87;
 
 const TOK_ENUM          -> Int = 88; // enum
+const TOK_INTERFACE     -> Int = 89; // interface
+const TOK_WITH          -> Int = 90; // with
 
 
 func get_token_name(type -> Int) -> String {
@@ -207,6 +209,8 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_T_VOID) { return "Void"; }
 
     if (type == TOK_ENUM) { return "enum"; }
+    if (type == TOK_INTERFACE) { return "interface"; }
+    if (type == TOK_WITH) { return "with"; }
 
     return "EOF";
 }

@@ -108,7 +108,9 @@ struct StructInfo(
     parent_id   -> Int,
     vtable      -> Vector(Struct),
     annotations -> Vector(Struct),
-    is_enum     -> Bool
+    is_enum     -> Bool,
+    is_interface -> Bool,
+    interfaces  -> Vector(Struct)
 )
 
 struct ArrayInfo(
@@ -683,6 +685,7 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
         let s_info -> StructInfo = c.struct_id_map.get("" + type_id);
         if (s_info is !null) { 
             if (s_info.is_enum) { return "i32"; }
+            if (s_info.is_interface) { return "{ i8*, i8* }"; }
             return s_info.llvm_name + "*"; 
         }
 
@@ -1240,6 +1243,17 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
                         }
                         m_idx += 1;
                     }
+                } else if (s_info is !null && s_info.is_interface) {
+                    let vtable -> Vector(Struct) = s_info.vtable;
+                    let v_len -> Int = 0; if (vtable is !null) { v_len = vtable.length(); }
+                    let m_idx -> Int = 0;
+                    while (m_idx < v_len) {
+                        let m_node -> MethodDefNode = vtable[m_idx];
+                        if (m_node.name_tok.value == f.field_name) {
+                            return resolve_type(c, m_node.return_type);
+                        }
+                        m_idx += 1;
+                    }
                 }
             }
         }
@@ -1576,6 +1590,25 @@ func get_func_sig_str(c -> Compiler, info -> FuncInfo) -> String {
     if (info.is_varargs) {
         if (len > 0) { args_str = args_str + ", ..."; }
         else { args_str = "..."; }
+    }
+    
+    return ret_str + " (" + args_str + ")*";
+}
+
+func get_method_def_sig_str(c -> Compiler, m_node -> MethodDefNode) -> String {
+    let ret_type -> Int = resolve_type(c, m_node.return_type);
+    let ret_str -> String = get_llvm_type_str(c, ret_type);
+    let args_str -> String = "i8*"; // self pointer is always i8* for interfaces
+    
+    let params -> Vector(Struct) = m_node.params;
+    let len -> Int = 0; if (params is !null) { len = params.length(); }
+    let i -> Int = 0;
+    
+    while (i < len) {
+        let p_node -> ParamNode = params[i];
+        let p_type -> Int = resolve_type(c, p_node.type_tok);
+        args_str = args_str + ", " + get_llvm_type_str(c, p_type);
+        i += 1;
     }
     
     return ret_str + " (" + args_str + ")*";

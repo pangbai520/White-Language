@@ -53,6 +53,7 @@ const NODE_ANNOTATION     -> Int = 49; // @XXX
 const NODE_CHAR           -> Int = 50;
 const NODE_ENUM_DEF       -> Int = 51;
 const NODE_ENUM_FIELD     -> Int = 52;
+const NODE_INTERFACE_DEF  -> Int = 53;
 
 struct BaseNode(type -> Int) // Used to read node type
 
@@ -338,6 +339,7 @@ struct ClassDefNode(
     pos -> Position,
     name_tok -> Token,
     parent_tok -> Token,
+    interfaces -> Vector(Struct),
     fields -> Vector(Struct),
     methods -> Vector(Struct),
     annotations -> Vector(Struct)
@@ -421,5 +423,12 @@ struct EnumFieldNode(
     type     -> Int, // NODE_ENUM_FIELD
     name_tok -> Token,
     value    -> Struct,
+    pos      -> Position
+)
+
+struct InterfaceDefNode(
+    type     -> Int, // NODE_INTERFACE_DEF
+    name_tok -> Token,
+    methods  -> Vector(Struct),
     pos      -> Position
 )

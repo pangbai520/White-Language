@@ -78,6 +78,8 @@ func parse(p -> Parser) -> Struct {
             stmt = parse_class_def(p, anns);
         } else if (p.current_tok.type == TOK_ENUM) {
             stmt = parse_enum_def(p, anns);
+        } else if (p.current_tok.type == TOK_INTERFACE) {
+            stmt = parse_interface_def(p, anns);
         } else if (p.current_tok.type == TOK_IMPORT) { 
             if (anns.length() > 0) { 
                 let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -1017,7 +1019,7 @@ func parse_block(p -> Parser) -> Struct {
         let stmt -> Struct = statement(p);
         let base -> BaseNode = stmt;
         let is_compound -> Bool = false;
-        if (base.type == NODE_IF || base.type == NODE_BLOCK || base.type == NODE_WHILE || base.type == NODE_FOR || base.type == NODE_FUNC_DEF) {
+        if (base is !null && (base.type == NODE_IF || base.type == NODE_BLOCK || base.type == NODE_WHILE || base.type == NODE_FOR || base.type == NODE_FUNC_DEF)) {
             is_compound = true;
         }
 
@@ -1529,6 +1531,82 @@ func parse_import(p -> Parser) -> Struct {
     return ImportNode(type=NODE_IMPORT, path_tok=path_tok, symbols=symbols, alias_tok=alias_tok, pos=start_pos);
 }
 
+func parse_interface_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
+    let pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+    parser_advance(p); // skip 'interface'
+
+    if (p.current_tok.type != TOK_IDENTIFIER) {
+        let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected interface name.");
+    }
+    let name_tok -> Token = p.current_tok;
+    parser_advance(p);
+
+    if (p.current_tok.type != TOK_LBRACE) {
+        let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '{' before interface body.");
+    }
+    parser_advance(p); // skip '{'
+
+    let methods -> Vector(Struct) = [];
+
+    while (p.current_tok.type != TOK_RBRACE && p.current_tok.type != TOK_EOF) {
+        let member_anns -> Vector(Struct) = [];
+        if (p.current_tok.type == TOK_AT) {
+            member_anns = parse_annotations(p);
+        }
+
+        if (p.current_tok.type == TOK_METHOD) {
+            let m_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            parser_advance(p); // skip 'method'
+            let m_name -> Token = p.current_tok;
+            parser_advance(p);
+
+            if (p.current_tok.type != TOK_LPAREN) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '(' after method name.");
+            }
+            parser_advance(p); // skip '('
+
+            let params -> Vector(Struct) = parse_params(p); 
+
+            if (p.current_tok.type != TOK_RPAREN) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ')' after parameters.");
+            }
+            parser_advance(p); // skip ')'
+
+            let void_tok -> Token = Token(type=TOK_T_VOID, value="Void", line=m_pos.ln, col=m_pos.col);
+            let ret_type -> Struct = VarAccessNode(type=NODE_VAR_ACCESS, name_tok=void_tok, pos=m_pos);
+            if (p.current_tok.type == TOK_TYPE_ARROW) {
+                parser_advance(p);
+                ret_type = parse_return_type(p);
+            }
+
+            if (p.current_tok.type != TOK_SEMICOLON) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ';' after interface method declaration. Interface methods cannot have bodies.");
+            }
+            parser_advance(p); // skip ';'
+
+            methods.append(MethodDefNode(type=NODE_METHOD_DEF, pos=m_pos, name_tok=m_name, params=params, return_type=ret_type, body=null, is_override=false, annotations=member_anns));
+
+        } else {
+            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Interfaces can only contain method declarations.");
+            break;
+        }
+    }
+
+    if (p.current_tok.type != TOK_RBRACE) {
+        let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '}' after interface body.");
+    }
+    parser_advance(p); // skip '}'
+
+    return InterfaceDefNode(type=NODE_INTERFACE_DEF, name_tok=name_tok, methods=methods, pos=pos);
+}
+
 func parse_class_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
     let pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
     parser_advance(p); // skip 'class'
@@ -1554,6 +1632,27 @@ func parse_class_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
             WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ')' after parent class name.");
         }
         parser_advance(p); // skip ')'
+    }
+
+    let interfaces -> Vector(Struct) = [];
+    if (p.current_tok.type == TOK_WITH) {
+        parser_advance(p); // skip 'with'
+        if (p.current_tok.type != TOK_IDENTIFIER) {
+            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected interface name after 'with'.");
+        }
+        interfaces.append(p.current_tok);
+        parser_advance(p);
+        
+        while (p.current_tok.type == TOK_COMMA) {
+            parser_advance(p); // skip ','
+            if (p.current_tok.type != TOK_IDENTIFIER) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected interface name after ','.");
+            }
+            interfaces.append(p.current_tok);
+            parser_advance(p);
+        }
     }
 
     if (p.current_tok.type != TOK_LBRACE) {
@@ -1698,7 +1797,7 @@ func parse_class_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
     }
     parser_advance(p); // skip '}'
 
-    return ClassDefNode(type=NODE_CLASS_DEF, pos=pos, name_tok=name_tok, parent_tok=parent_tok, fields=fields, methods=methods, annotations=anns);
+    return ClassDefNode(type=NODE_CLASS_DEF, pos=pos, name_tok=name_tok, parent_tok=parent_tok, interfaces=interfaces, fields=fields, methods=methods, annotations=anns);
 }
 
 func parse_enum_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
