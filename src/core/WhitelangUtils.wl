@@ -110,7 +110,8 @@ struct StructInfo(
     annotations -> Vector(Struct),
     is_enum     -> Bool,
     is_interface -> Bool,
-    interfaces  -> Vector(Struct)
+    interfaces  -> Vector(Struct),
+    is_compiler_link_error -> Bool
 )
 
 struct ArrayInfo(
@@ -154,9 +155,10 @@ struct Compiler(
     current_package_prefix -> String,
     loaded_packages -> Dict,
     loaded_files -> Dict,
-    current_dir -> String,
     current_file_visible_prefixes -> Dict,
     current_file_type_aliases -> Dict,
+    alloc_map -> Dict,
+    current_dir -> String,
     current_file_func_aliases -> Dict,
     current_file_global_aliases -> Dict,
     global_type_aliases -> Dict,
@@ -170,7 +172,11 @@ struct Compiler(
     string_pool -> Dict,
     is_shared -> Bool,
     all_modules -> Vector(Struct),
-    is_precompile_phase -> Bool
+    is_precompile_phase -> Bool,
+    fallible_cache -> Dict,
+    fallible_base_map -> Dict,
+    current_catch_label -> String,
+    current_catch_err_ptr -> String
 )
 
 struct ParsedModule(
@@ -225,6 +231,8 @@ func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
         imported_modules=Dict(32),
         current_file_visible_prefixes = Dict(32),
         current_file_type_aliases = Dict(32),
+        alloc_map = Dict(128),
+        current_dir = ".",
         current_file_func_aliases = Dict(32),
         current_file_global_aliases = Dict(32),
         global_type_aliases = Dict(32),
@@ -244,7 +252,11 @@ func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
         array_type_cache = Dict(32),
         is_shared = is_shared,
         all_modules = [],
-        is_precompile_phase = true
+        is_precompile_phase = true,
+        fallible_cache = Dict(32),
+        fallible_base_map = Dict(32),
+        current_catch_label = "",
+        current_catch_err_ptr = ""
     );
 
     comp.type_drop_list.append(TypeListNode(type=TYPE_GENERIC_FUNCTION));
@@ -694,6 +706,15 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
             let elem_ty -> String = get_llvm_type_str(c, v_info.type);
             return "{ i64, i64, " + elem_ty + "* }*";
         }
+
+        let fll_info -> SymbolInfo = c.fallible_base_map.get("" + type_id);
+        if (fll_info is !null) {
+            if (fll_info.type == TYPE_VOID) {
+                return "{ i1, i32 }";
+            }
+            let elem_ty -> String = get_llvm_type_str(c, fll_info.type);
+            return "{ i1, i32, " + elem_ty + " }";
+        }
     }
 
     return "i8*"; // unknown type
@@ -778,6 +799,11 @@ func get_type_name(c -> Compiler, type_id -> Int) -> String {
             return "Vector(" + get_type_name(c, v_info.type) + ")";
         }
 
+        let fll_info -> SymbolInfo = c.fallible_base_map.get("" + type_id);
+        if (fll_info is !null) {
+            return get_type_name(c, fll_info.type) + "?";
+        }
+
         let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
         if (arr_info is !null) {
             return get_type_name(c, arr_info.base_type) + "[" + arr_info.size + "]";
@@ -797,6 +823,24 @@ func is_pointer_type(c -> Compiler, type_id -> Int) -> Bool {
     }
     
     return false;
+}
+
+func is_fallible_type(c -> Compiler, type_id -> Int) -> Bool {
+    if (type_id >= 100) {
+        let key -> String = "" + type_id;
+        let info -> SymbolInfo = c.fallible_base_map.get(key);
+        if (info is !null) { return true; }
+    }
+    return false;
+}
+
+func get_inner_fallible_type(c -> Compiler, type_id -> Int) -> Int {
+    if (type_id >= 100) {
+        let key -> String = "" + type_id;
+        let info -> SymbolInfo = c.fallible_base_map.get(key);
+        if (info is !null) { return info.type; }
+    }
+    return TYPE_POISON;
 }
 
 func is_void_ptr(c -> Compiler, type_id -> Int) -> Bool {
@@ -904,6 +948,25 @@ func get_ptr_type_id(c -> Compiler, base_id -> Int) -> Int {
 
     c.ptr_cache.put(key, SymbolInfo(reg="", type=new_id, origin_type=0));
     c.ptr_base_map.put("" + new_id, SymbolInfo(reg="", type=base_id));
+    
+    return new_id;
+}
+
+func get_fallible_type_id(c -> Compiler, base_id -> Int) -> Int {
+    let key -> String = "" + base_id;
+    let existing -> SymbolInfo = c.fallible_cache.get(key);
+    if (existing is !null) {
+        return existing.type;
+    }
+    
+    let new_id -> Int = c.type_counter;
+    c.type_counter += 1;
+    
+    let sym -> SymbolInfo = SymbolInfo(reg="", type=new_id, origin_type=0, is_const=false, func_arg_types=null);
+    let base_sym -> SymbolInfo = SymbolInfo(reg="", type=base_id, origin_type=0, is_const=false, func_arg_types=null);
+    
+    c.fallible_cache.put(key, sym);
+    c.fallible_base_map.put("" + new_id, base_sym);
     
     return new_id;
 }
@@ -1115,6 +1178,16 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
             c.array_info_map.put("" + slice_type_id, ArrayInfo(base_type=elem_type, size=-1, llvm_name=llvm_name));
             return slice_type_id;
         }
+        return 0;
+    }
+
+    if (base.type == NODE_TRY_UNWRAP) {
+        let t_node -> TryUnwrapNode = node;
+        let base_type -> Int = get_expr_type(c, t_node.expr);
+        if (is_fallible_type(c, base_type)) {
+            return get_inner_fallible_type(c, base_type);
+        }
+        WhitelangExceptions.throw_invalid_syntax(t_node.pos, "Cannot use '?' on a non-fallible type.");
         return 0;
     }
 
@@ -1359,6 +1432,14 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         }
         return get_method_type_id(c, arg_types, ret_id);
     }
+    if (base.type == NODE_FALLIBLE_TYPE) {
+        let fll_node -> FallibleTypeNode = node;
+        let base_id -> Int = resolve_type(c, fll_node.base_type);
+        if (is_fallible_type(c, base_id)) {
+            WhitelangExceptions.throw_type_error(fll_node.pos, "Cannot create a nested fallible type (e.g. T??).");
+        }
+        return get_fallible_type_id(c, base_id);
+    }
 
     // Pointer Type (ptr*N Type)
     if (base.type == NODE_PTR_TYPE) {
@@ -1598,7 +1679,7 @@ func get_func_sig_str(c -> Compiler, info -> FuncInfo) -> String {
 func get_method_def_sig_str(c -> Compiler, m_node -> MethodDefNode) -> String {
     let ret_type -> Int = resolve_type(c, m_node.return_type);
     let ret_str -> String = get_llvm_type_str(c, ret_type);
-    let args_str -> String = "i8*"; // self pointer is always i8* for interfaces
+    let args_str -> String = "i8*"; // Self pointer is always i8* for interfaces
     
     let params -> Vector(Struct) = m_node.params;
     let len -> Int = 0; if (params is !null) { len = params.length(); }
@@ -2022,12 +2103,12 @@ func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> 
 
     let pkg_entry -> String = wl_path + "/std/" + raw_path + "/_pkg.wl";
     if (file_exists(pkg_entry)) {
-        return pkg_entry;
+        return to_normpath(pkg_entry);
     }
 
     let file_entry -> String = wl_path + "/std/" + raw_path + ".wl";
     if (file_exists(file_entry)) {
-        return file_entry;
+        return to_normpath(file_entry);
     }
 
     WhitelangExceptions.throw_import_error(pos, "Cannot find module '" + raw_path + "'. Searched:\n - " + pkg_entry + "\n - " + file_entry);

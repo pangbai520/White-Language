@@ -365,6 +365,17 @@ func parse_return_type(p -> Parser) -> Struct {
         s_i -= 1;
     }
 
+    if (p.current_tok.type == TOK_QUESTION) {
+        let q_tok -> Token = p.current_tok;
+        parser_advance(p);
+        let pos -> Position = WhitelangExceptions.Position(idx=0, ln=q_tok.line, col=q_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        type_node = FallibleTypeNode(
+            type=NODE_FALLIBLE_TYPE,
+            base_type=type_node,
+            pos=pos
+        );
+    }
+
     return type_node;
 }
 
@@ -622,13 +633,20 @@ func postfix_expr(p -> Parser) -> Struct {
     let node -> Struct = atom(p);
 
     while (p.current_tok.type == TOK_INC || p.current_tok.type == TOK_DEC || p.current_tok.type == TOK_LPAREN ||
-           p.current_tok.type == TOK_DOT || p.current_tok.type == TOK_LBRACKET) {
+           p.current_tok.type == TOK_DOT || p.current_tok.type == TOK_LBRACKET || p.current_tok.type == TOK_QUESTION) {
         // ++ / --
         if (p.current_tok.type == TOK_INC || p.current_tok.type == TOK_DEC) {
             let op_tok -> Token = p.current_tok;
             parser_advance(p);
             let pos -> Position = WhitelangExceptions.Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             node = PostfixOpNode(type=NODE_POSTFIX, node=node, op_tok=op_tok, pos=pos);
+        }
+
+        else if (p.current_tok.type == TOK_QUESTION) {
+            let op_tok -> Token = p.current_tok;
+            parser_advance(p);
+            let pos -> Position = WhitelangExceptions.Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            node = TryUnwrapNode(type=NODE_TRY_UNWRAP, expr=node, pos=pos);
         }
 
         else if (p.current_tok.type == TOK_LPAREN) {
@@ -988,13 +1006,21 @@ func var_decl_core(p -> Parser, is_const -> Bool, anns -> Vector(Struct)) -> Str
 
     let tid -> TypedIdent = parse_typed_identifier_param(p);
 
+    if (tid.type_node is !null) {
+        let t_base -> BaseNode = tid.type_node;
+        if (t_base.type == NODE_FALLIBLE_TYPE) {
+            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=tid.name_tok.line, col=tid.name_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Variables cannot be declared with fallible types (?). Did you forget to try unwrap '?' or use a catch block?");
+        }
+    }
+
     let val_node -> Struct = null;
     if (p.current_tok.type == TOK_ASSIGN) {
         parser_advance(p);
         val_node = expression(p);
     }
     
-    return VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=val_node, is_const=is_const, alloc_reg = "", annotations=anns, pos=start_pos);
+    return VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=val_node, is_const=is_const, annotations=anns, pos=start_pos);
 }
 
 func var_decl(p -> Parser, anns -> Vector(Struct)) -> Struct {
@@ -1019,7 +1045,7 @@ func parse_block(p -> Parser) -> Struct {
         let stmt -> Struct = statement(p);
         let base -> BaseNode = stmt;
         let is_compound -> Bool = false;
-        if (base is !null && (base.type == NODE_IF || base.type == NODE_BLOCK || base.type == NODE_WHILE || base.type == NODE_FOR || base.type == NODE_FUNC_DEF)) {
+        if (base is !null && (base.type == NODE_IF || base.type == NODE_BLOCK || base.type == NODE_WHILE || base.type == NODE_FOR || base.type == NODE_FUNC_DEF || base.type == NODE_CATCH)) {
             is_compound = true;
         }
 
@@ -1032,6 +1058,36 @@ func parse_block(p -> Parser) -> Struct {
                 synchronize(p);
             }
         }
+        
+        if (p.current_tok.type == TOK_CATCH) {
+            let catch_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            parser_advance(p); // skip catch
+            
+            if (p.current_tok.type != TOK_LPAREN) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '(' after 'catch'. ");
+            }
+            parser_advance(p);
+            
+            let err_name -> Token = null;
+            if (p.current_tok.type == TOK_IDENTIFIER) {
+                err_name = p.current_tok;
+                parser_advance(p);
+            } else {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected identifier for catch variable. ");
+            }
+            
+            if (p.current_tok.type != TOK_RPAREN) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ')' after catch variable. ");
+            }
+            parser_advance(p);
+            
+            let catch_body -> Struct = parse_block(p);
+            stmt = CatchNode(type=NODE_CATCH, stmt=stmt, err_name=err_name, body=catch_body, pos=catch_pos);
+        }
+
         if (stmt is !null) {
             stmts.append(stmt);
         }
@@ -1690,7 +1746,7 @@ func parse_class_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
             }
             parser_advance(p); // skip ';'
 
-            fields.append(VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=default_val, is_const=false, alloc_reg="", annotations=member_anns, pos=f_pos));
+            fields.append(VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=default_val, is_const=false, annotations=member_anns, pos=f_pos));
             
         } else if (p.current_tok.type == TOK_METHOD) {
             let m_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -1855,10 +1911,5 @@ func parse_enum_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
         WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '}' to close enum definition.");
     }
 
-    if (anns.length() > 0) {
-        let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-        WhitelangExceptions.throw_invalid_syntax(err_pos, "Annotations not allowed on enums.");
-    }
-
-    return EnumDefNode(type=NODE_ENUM_DEF, name_tok=name_tok, fields=fields, pos=start_pos);
+    return EnumDefNode(type=NODE_ENUM_DEF, name_tok=name_tok, fields=fields, pos=start_pos, annotations=anns);
 }

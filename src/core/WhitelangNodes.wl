@@ -54,6 +54,9 @@ const NODE_CHAR           -> Int = 50;
 const NODE_ENUM_DEF       -> Int = 51;
 const NODE_ENUM_FIELD     -> Int = 52;
 const NODE_INTERFACE_DEF  -> Int = 53;
+const NODE_TRY_UNWRAP     -> Int = 54;
+const NODE_CATCH          -> Int = 55;
+const NODE_FALLIBLE_TYPE  -> Int = 56;
 
 struct BaseNode(type -> Int) // Used to read node type
 
@@ -110,7 +113,6 @@ struct VarDeclareNode(
     type_node    -> Struct,  // Type Name Token
     value        -> Struct, 
     is_const     -> Bool, 
-    alloc_reg    -> String, 
     annotations  -> Vector(Struct),
     pos          -> Position    // Error position
 )
@@ -416,14 +418,35 @@ struct EnumDefNode(
     type     -> Int, // NODE_ENUM_DEF
     name_tok -> Token,
     fields   -> Vector(Struct),
+    annotations -> Vector(Struct),
     pos      -> Position
 )
 
 struct EnumFieldNode(
     type     -> Int, // NODE_ENUM_FIELD
     name_tok -> Token,
-    value    -> Struct,
+    value    -> Struct, // optional explicit Int value
     pos      -> Position
+)
+
+struct TryUnwrapNode(
+    type -> Int,
+    expr -> Struct,
+    pos  -> Position
+)
+
+struct CatchNode(
+    type     -> Int,
+    stmt     -> Struct,
+    err_name -> Token,
+    body     -> Struct,
+    pos      -> Position
+)
+
+struct FallibleTypeNode(
+    type      -> Int,
+    base_type -> Struct,
+    pos       -> Position
 )
 
 struct InterfaceDefNode(

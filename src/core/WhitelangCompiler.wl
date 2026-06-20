@@ -755,7 +755,8 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 annotations=n.annotations,
                 is_enum=false,
                 is_interface=false,
-                interfaces=null
+                interfaces=null,
+                is_compiler_link_error=false
             );
             c.struct_table.put(s_name, info);
             c.struct_id_map.put("" + new_id, info);
@@ -779,7 +780,8 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 annotations=c_node.annotations,
                 is_enum=false,
                 is_interface=false,
-                interfaces=c_node.interfaces
+                interfaces=c_node.interfaces,
+                is_compiler_link_error=false
             );
             c.struct_table.put(c_name, info);
             c.struct_id_map.put("" + new_id, info);
@@ -802,7 +804,8 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 annotations=null,
                 is_enum=false,
                 is_interface=true,
-                interfaces=null
+                interfaces=null,
+                is_compiler_link_error=false
             );
             c.struct_table.put(i_name, info);
             c.struct_id_map.put("" + new_id, info);
@@ -812,6 +815,15 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             let e_name -> String = c.current_package_prefix + raw_name;
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
+            
+            let is_err -> Bool = false;
+            if (e_node.annotations is !null) {
+                let active_anns -> Dict = analyze_annotations(c, e_node.annotations);
+                if (active_anns.get("CompilerLink") is !null) {
+                    is_err = true;
+                }
+            }
+            
             let info -> StructInfo = StructInfo(
                 name=e_name, 
                 type_id=new_id, 
@@ -822,10 +834,11 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 vtable_name="", 
                 parent_id=0, 
                 vtable=null,
-                annotations=null,
+                annotations=e_node.annotations,
                 is_enum=true,
                 is_interface=false,
-                interfaces=null
+                interfaces=null,
+                is_compiler_link_error=is_err
             );
             c.struct_table.put(e_name, info);
             c.struct_id_map.put("" + new_id, info);
@@ -1126,6 +1139,15 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
         let f_n -> ForNode = node;
         hoist_allocas(c, f_n.init);
         hoist_allocas(c, f_n.body);
+    } else if (base.type == NODE_CATCH) {
+        let c_node -> CatchNode = node;
+        let err_reg -> String = next_reg(c);
+        let pos_key -> String = c_node.pos.fn + ":" + c_node.pos.ln + ":" + c_node.pos.col + ":" + c_node.err_name.value;
+        c.alloc_map.put(pos_key, err_reg);
+        c.output_file.write(c.indent + err_reg + " = alloca i32\n");
+        
+        hoist_allocas(c, c_node.stmt);
+        hoist_allocas(c, c_node.body);
     } else if (base.type == NODE_VAR_DECL) {
         let v_node -> VarDeclareNode = node;
         if (c.scope_depth > 0) {
@@ -1139,17 +1161,12 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
                 }
             }
 
+            let var_reg -> String = next_reg(c);
+            let pos_key -> String = v_node.pos.fn + ":" + v_node.pos.ln + ":" + v_node.pos.col + ":" + v_node.name_tok.value;
+            c.alloc_map.put(pos_key, var_reg);
+            
             let llvm_ty_str -> String = get_llvm_type_str(c, target_type_id);
-            let ptr_reg -> String = next_reg(c);
-            c.output_file.write(c.indent + ptr_reg + " = alloca " + llvm_ty_str + "\n");
-            v_node.alloc_reg = ptr_reg;
-
-            let curr_scope -> Scope = c.symbol_table;
-            let origin_type -> Int = target_type_id;
-            if (target_type_id == TYPE_GENERIC_STRUCT || target_type_id == TYPE_GENERIC_CLASS) {
-                // Not perfectly accurate but enough for hoisting
-            }
-            curr_scope.table.put(v_node.name_tok.value, SymbolInfo(reg=ptr_reg, type=target_type_id, origin_type=origin_type, is_const=v_node.is_const));
+            c.output_file.write(c.indent + var_reg + " = alloca " + llvm_ty_str + "\n");
         }
     }
 }
@@ -1941,7 +1958,8 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         return void_result();
     }
 
-    let ptr_reg -> String = node.alloc_reg;
+    let pos_key -> String = node.pos.fn + ":" + node.pos.ln + ":" + node.pos.col + ":" + var_name;
+    let ptr_reg -> String = c.alloc_map.get(pos_key);
     let origin_id -> Int = target_type_id;
 
     if (node.value is null) {
@@ -2584,11 +2602,11 @@ func compile_class_method_call(c -> Compiler, s_info -> StructInfo, obj_res -> C
     
     let args -> Vector(Struct) = n_call.args;
     let a_len -> Int = 0; if (args is !null) { a_len = args.length(); }
-
+    
     let exp_len -> Int = 0;
     if (expected_types is !null) { exp_len = expected_types.length(); }
     if (!s_info.is_interface && exp_len > 0) { exp_len -= 1; }
-
+    
     if (a_len != exp_len) {
         WhitelangExceptions.throw_type_error(n_call.pos, "Argument count mismatch in method call. Expected " + exp_len + ", got " + a_len);
         return CompileResult(reg="0", type=ret_type, origin_type=0);
@@ -2686,7 +2704,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     }
     let llvm_env_name -> String = "{ " + env_body + " }";
 
-    let env_info -> StructInfo = StructInfo(name=env_struct_name, type_id=env_id, fields=env_fields, llvm_name=llvm_env_name, init_body=null, is_class=false, vtable_name="", parent_id=0, vtable=null, is_enum=false, is_interface=false, interfaces=null);
+    let env_info -> StructInfo = StructInfo(name=env_struct_name, type_id=env_id, fields=env_fields, llvm_name=llvm_env_name, init_body=null, is_class=false, vtable_name="", parent_id=0, vtable=null, annotations=null, is_enum=false, is_interface=false, interfaces=null, is_compiler_link_error=false);
     c.struct_id_map.put("" + env_id, env_info);
     c.type_drop_list.append(TypeListNode(type=env_id));
 
@@ -2877,11 +2895,60 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
             res.type = c.current_ret_type;
         }
 
-        res = emit_implicit_cast(c, res, c.current_ret_type, node.pos);
-        let ret_val_reg -> String = res.reg;
+        let is_ret_fallible -> Bool = is_fallible_type(c, c.current_ret_type);
+        let inner_ret_type -> Int = c.current_ret_type;
+        if is_ret_fallible {
+            inner_ret_type = get_inner_fallible_type(c, c.current_ret_type);
+        }
 
-        if (is_ref_type(c, c.current_ret_type)) {
-            emit_retain(c, ret_val_reg, c.current_ret_type);
+        let returning_error -> Bool = false;
+        
+        if (is_ret_fallible) {
+            let res_s_info -> StructInfo = c.struct_id_map.get("" + res.type);
+            if (res_s_info is null) { res_s_info = c.struct_id_map.get("" + res.origin_type); }
+            
+            if (res_s_info is !null && res_s_info.is_enum) {
+                if (res_s_info.is_compiler_link_error) {
+                    returning_error = true;
+                }
+            }
+        }
+
+        if (is_ret_fallible && !returning_error) {
+            res = emit_implicit_cast(c, res, inner_ret_type, node.pos);
+        } else if (!is_ret_fallible) {
+            res = emit_implicit_cast(c, res, c.current_ret_type, node.pos);
+        }
+
+        let ret_val_reg -> String = res.reg;
+        let target_ty -> String = get_llvm_type_str(c, c.current_ret_type);
+
+        if is_ret_fallible {
+            if (returning_error) {
+                let ret_val_1 -> String = next_reg(c);
+                c.output_file.write(c.indent + ret_val_1 + " = insertvalue " + target_ty + " undef, i1 true, 0\n");
+                let ret_val_2 -> String = next_reg(c);
+                c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + target_ty + " " + ret_val_1 + ", i32 " + ret_val_reg + ", 1\n");
+                ret_val_reg = ret_val_2;
+            } else {
+                let ret_val_1 -> String = next_reg(c);
+                c.output_file.write(c.indent + ret_val_1 + " = insertvalue " + target_ty + " undef, i1 false, 0\n");
+                let ret_val_2 -> String = next_reg(c);
+                c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + target_ty + " " + ret_val_1 + ", i32 0, 1\n");
+                
+                if (inner_ret_type != TYPE_VOID) {
+                    let ret_val_3 -> String = next_reg(c);
+                    let inner_llvm_ty -> String = get_llvm_type_str(c, inner_ret_type);
+                    c.output_file.write(c.indent + ret_val_3 + " = insertvalue " + target_ty + " " + ret_val_2 + ", " + inner_llvm_ty + " " + ret_val_reg + ", 2\n");
+                    ret_val_reg = ret_val_3;
+                } else {
+                    ret_val_reg = ret_val_2;
+                }
+            }
+        }
+
+        if (is_ref_type(c, inner_ret_type) && !returning_error) {
+            emit_retain(c, res.reg, inner_ret_type);
         }
 
         cleanup_all_scopes(c);
@@ -2889,6 +2956,19 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
         c.output_file.write(c.indent + "ret " + target_ty + " " + ret_val_reg + "\n");
     } else {
         if (c.current_ret_type != TYPE_VOID) {
+            if (is_fallible_type(c, c.current_ret_type)) {
+                let inner -> Int = get_inner_fallible_type(c, c.current_ret_type);
+                if (inner == TYPE_VOID) {
+                    let target_ty -> String = get_llvm_type_str(c, c.current_ret_type);
+                    let ret_val_1 -> String = next_reg(c);
+                    c.output_file.write(c.indent + ret_val_1 + " = insertvalue " + target_ty + " undef, i1 false, 0\n");
+                    let ret_val_2 -> String = next_reg(c);
+                    c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + target_ty + " " + ret_val_1 + ", i32 0, 1\n");
+                    cleanup_all_scopes(c);
+                    c.output_file.write(c.indent + "ret " + target_ty + " " + ret_val_2 + "\n");
+                    return void_result();
+                }
+            }
             WhitelangExceptions.throw_type_error(node.pos, "Non-void function must return a value. ");
             return void_result();
         }
@@ -3379,7 +3459,12 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
                 full_name = full_path + node.field_name;
                 is_module = true;
             } else {
-                full_name = root_name + ".";
+                let mapped_root -> String = c.current_file_type_aliases.get(root_name);
+                if (mapped_root is !null) {
+                    full_name = mapped_root + ".";
+                } else {
+                    full_name = root_name + ".";
+                }
                 let p_idx -> Int = path_parts.length() - 1;
                 while (p_idx >= 0) {
                     full_name = full_name + path_parts[p_idx] + ".";
@@ -4664,6 +4749,105 @@ func compile_enum_def(c -> Compiler, node -> EnumDefNode) -> CompileResult {
     return void_result();
 }
 
+func compile_try_unwrap(c -> Compiler, node -> TryUnwrapNode) -> CompileResult {
+    let expr_res -> CompileResult = compile_node(c, node.expr);
+    let fallible_type -> Int = expr_res.type;
+    
+    if (!is_fallible_type(c, fallible_type)) {
+        WhitelangExceptions.throw_invalid_syntax(node.pos, "Cannot use '?' on a non-fallible type.");
+    }
+    
+    let inner_type -> Int = get_inner_fallible_type(c, fallible_type);
+    let fallible_llvm_ty -> String = get_llvm_type_str(c, fallible_type);
+    
+    let is_err_reg -> String = next_reg(c);
+    c.output_file.write(c.indent + is_err_reg + " = extractvalue " + fallible_llvm_ty + " " + expr_res.reg + ", 0\n");
+    
+    let success_label -> String = next_label(c);
+    let fail_label -> String = next_label(c);
+    
+    c.output_file.write(c.indent + "br i1 " + is_err_reg + ", label %" + fail_label + ", label %" + success_label + "\n\n");
+    c.output_file.write(fail_label + ":\n");
+    
+    let err_val_reg -> String = next_reg(c);
+    c.output_file.write(c.indent + err_val_reg + " = extractvalue " + fallible_llvm_ty + " " + expr_res.reg + ", 1\n");
+    
+    if (c.current_catch_label is !null && c.current_catch_label != "") {
+        c.output_file.write(c.indent + "store i32 " + err_val_reg + ", i32* " + c.current_catch_err_ptr + "\n");
+        c.output_file.write(c.indent + "br label %" + c.current_catch_label + "\n\n");
+    } else {
+        if (!is_fallible_type(c, c.current_ret_type)) {
+            WhitelangExceptions.throw_invalid_syntax(node.pos, "Cannot use '?' without catch in a function that does not return a fallible type.");
+        }
+        let cur_ret_llvm_ty -> String = get_llvm_type_str(c, c.current_ret_type);
+        let ret_val_1 -> String = next_reg(c);
+        c.output_file.write(c.indent + ret_val_1 + " = insertvalue " + cur_ret_llvm_ty + " undef, i1 true, 0\n");
+        let ret_val_2 -> String = next_reg(c);
+        c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + cur_ret_llvm_ty + " " + ret_val_1 + ", i32 " + err_val_reg + ", 1\n");
+        
+        cleanup_all_scopes(c);
+        
+        c.output_file.write(c.indent + "ret " + cur_ret_llvm_ty + " " + ret_val_2 + "\n\n");
+    }
+    
+    c.output_file.write(success_label + ":\n");
+    
+    if (inner_type != TYPE_VOID) {
+        let inner_val_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + inner_val_reg + " = extractvalue " + fallible_llvm_ty + " " + expr_res.reg + ", 2\n");
+        return CompileResult(reg=inner_val_reg, type=inner_type, origin_type=0);
+    } else {
+        return void_result();
+    }
+}
+
+func compile_catch(c -> Compiler, node -> CatchNode) -> CompileResult {
+    let fail_label -> String = next_label(c);
+    let success_label -> String = next_label(c);
+    
+    let pos_key -> String = node.pos.fn + ":" + node.pos.ln + ":" + node.pos.col + ":" + node.err_name.value;
+    let err_reg_ptr -> String = c.alloc_map.get(pos_key);
+    
+    let old_catch_label -> String = c.current_catch_label;
+    let old_err_ptr -> String = c.current_catch_err_ptr;
+    
+    c.current_catch_label = fail_label;
+    c.current_catch_err_ptr = err_reg_ptr;
+    
+    let res -> CompileResult = compile_node(c, node.stmt);
+    
+    c.current_catch_label = old_catch_label;
+    c.current_catch_err_ptr = old_err_ptr;
+    
+    c.output_file.write(c.indent + "br label %" + success_label + "\n\n");
+    c.output_file.write(fail_label + ":\n");
+    
+    enter_scope(c);
+    c.symbol_table.table.put(node.err_name.value, SymbolInfo(reg=err_reg_ptr, type=TYPE_INT, origin_type=0, is_const=false, func_arg_types=null));
+    
+    compile_node(c, node.body);
+    
+    let last_stmt_returns -> Bool = false;
+    let b_node -> BlockNode = node.body;
+    if (b_node.stmts is !null && b_node.stmts.length() > 0) {
+        let last -> BaseNode = b_node.stmts[b_node.stmts.length() - 1];
+        if (last.type == NODE_RETURN || last.type == NODE_BREAK || last.type == NODE_CONTINUE) {
+            last_stmt_returns = true;
+        }
+    }
+    
+    let stmt_base -> BaseNode = node.stmt;
+    if (stmt_base.type == NODE_VAR_DECL && !last_stmt_returns) {
+        WhitelangExceptions.throw_invalid_syntax(node.pos, "Catch block for a fallible variable declaration must diverge (return/break/continue) because the variable could be uninitialized.");
+    }
+    exit_scope(c);
+    
+    c.output_file.write(c.indent + "br label %" + success_label + "\n\n");
+    c.output_file.write(success_label + ":\n");
+    
+    return res;
+}
+
 func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> CompileResult {
     if (node is null) { return null; }
     let base -> BaseNode = node;
@@ -5375,6 +5559,8 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_SLICE_ACCESS) { return compile_slice_access(c, node); }
     if (base.type == NODE_MAP_LIT) { return compile_map_lit(c, node); }
     if (base.type == NODE_ENUM_DEF) { return compile_enum_def(c, node); }
+    if (base.type == NODE_TRY_UNWRAP) { return compile_try_unwrap(c, node); }
+    if (base.type == NODE_CATCH) { return compile_catch(c, node); }
 
     // function and closure
     if (base.type == NODE_FUNC_DEF) {
@@ -7079,7 +7265,8 @@ func compile_start(c -> Compiler) -> Void {
         annotations=null,
         is_enum=false,
         is_interface=false,
-        interfaces=null
+        interfaces=null,
+        is_compiler_link_error=false
     );
     c.struct_table.put("$Variant", variant_info);
     c.struct_id_map.put("" + variant_id, variant_info);

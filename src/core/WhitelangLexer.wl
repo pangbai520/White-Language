@@ -197,6 +197,7 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "enum") { return WhitelangTokens.Token(type=TOK_ENUM, value=value, line=start_line, col=start_col); }
     if (value == "interface") { return WhitelangTokens.Token(type=TOK_INTERFACE, value=value, line=start_line, col=start_col); }
     if (value == "with") { return WhitelangTokens.Token(type=TOK_WITH, value=value, line=start_line, col=start_col); }
+    if (value == "catch") { return WhitelangTokens.Token(type=TOK_CATCH, value=value, line=start_line, col=start_col); }
 
     return WhitelangTokens.Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }
@@ -411,6 +412,7 @@ func get_next_token(l -> Lexer) -> Token {
         if (char == '[') { lexer_advance(l); return WhitelangTokens.Token(type=TOK_LBRACKET, value="[", line=char_line, col=char_col); }
         if (char == ']') { lexer_advance(l); return WhitelangTokens.Token(type=TOK_RBRACKET, value="]", line=char_line, col=char_col); }
         if (char == ':') { lexer_advance(l); return WhitelangTokens.Token(type=TOK_COLON, value=":", line=char_line, col=char_col); }
+        if (char == '?') { lexer_advance(l); return WhitelangTokens.Token(type=TOK_QUESTION, value="?", line=char_line, col=char_col); }
 
         WhitelangExceptions.throw_illegal_char(l.pos, "unknown character '" + char + "'. ");
         lexer_advance(l);
