@@ -6,8 +6,8 @@ import "builtin"
 import Error from "builtin/errors"
 
 func may_fail(x -> Int) -> Int? {
-    if (x < 0) { return Error.PermissionDenied; }
-    if (x == 0) { return Error.DivisionByZero; }
+    if (x < 0) { throw Error.PermissionDenied; }
+    if (x == 0) { throw Error.DivisionByZero; }
     return x * 2;
 }
 
@@ -35,7 +35,7 @@ func test_complex_type() -> Vector(Int)? {
     let v -> Vector(Int) = [];
     v.append(100);
     // simulate error forcing
-    return Error.OutOfMemory; 
+    throw Error.OutOfMemory; 
 }
 
 func main() -> Int {

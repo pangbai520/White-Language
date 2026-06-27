@@ -1228,6 +1228,7 @@ func statement(p -> Parser) -> Struct {
     if (p.current_tok.type == TOK_CONTINUE) { return continue_stmt(p); }
     if (p.current_tok.type == TOK_FOR) { return for_stmt(p); }
     if (p.current_tok.type == TOK_RETURN) { return return_stmt(p); }
+    if (p.current_tok.type == TOK_THROW) { return throw_stmt(p); }
 
     return expression(p);
 }
@@ -1309,6 +1310,16 @@ func return_stmt(p -> Parser) -> Struct {
     
     let pos -> Position = WhitelangExceptions.Position(idx=0, ln=ret_tok.line, col=ret_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
     return ReturnNode(type=NODE_RETURN, value=val, pos=pos);
+}
+
+func throw_stmt(p -> Parser) -> Struct {
+    let throw_tok -> Token = p.current_tok;
+    parser_advance(p);
+    
+    let val -> Struct = expression(p);
+    
+    let pos -> Position = WhitelangExceptions.Position(idx=0, ln=throw_tok.line, col=throw_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+    return ThrowNode(type=NODE_THROW, value=val, pos=pos);
 }
 
 func parse_struct_def(p -> Parser, anns -> Vector(Struct)) -> Struct {

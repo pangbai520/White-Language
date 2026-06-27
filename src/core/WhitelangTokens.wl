@@ -109,6 +109,7 @@ const TOK_INTERFACE     -> Int = 89; // interface
 const TOK_WITH          -> Int = 90; // with
 const TOK_CATCH         -> Int = 91; // catch
 const TOK_QUESTION      -> Int = 92; // ?
+const TOK_THROW         -> Int = 93; // throw
 
 
 func get_token_name(type -> Int) -> String {
@@ -215,6 +216,7 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_WITH) { return "with"; }
     if (type == TOK_CATCH) { return "catch"; }
     if (type == TOK_QUESTION) { return "?"; }
+    if (type == TOK_THROW) { return "throw"; }
 
     return "EOF";
 }

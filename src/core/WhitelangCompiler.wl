@@ -2354,7 +2354,9 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         } else {
             let zero_val -> String = "0";
             if (ret_type_id == TYPE_FLOAT) { zero_val = "0.0"; }
+            else if (is_fallible_type(c, ret_type_id)) { zero_val = "undef"; }
             else if (is_nullable_reference_type(c, ret_type_id)) { zero_val = "null"; }
+            else if (is_pointer_type(c, ret_type_id)) { zero_val = "null"; }
             
             c.output_file.write(c.indent + "ret " + llvm_ret_type + " " + zero_val + "\n");
         }
@@ -2453,7 +2455,9 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
         } else {
             let zero_val -> String = "0";
             if (ret_type_id == TYPE_FLOAT) { zero_val = "0.0"; }
+            else if (is_fallible_type(c, ret_type_id)) { zero_val = "undef"; }
             else if (is_nullable_reference_type(c, ret_type_id)) { zero_val = "null"; }
+            else if (is_pointer_type(c, ret_type_id)) { zero_val = "null"; }
             c.output_file.write(c.indent + "ret " + llvm_ret_type + " " + zero_val + "\n");
         }
     }
@@ -2901,22 +2905,9 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
             inner_ret_type = get_inner_fallible_type(c, c.current_ret_type);
         }
 
-        let returning_error -> Bool = false;
-        
-        if (is_ret_fallible) {
-            let res_s_info -> StructInfo = c.struct_id_map.get("" + res.type);
-            if (res_s_info is null) { res_s_info = c.struct_id_map.get("" + res.origin_type); }
-            
-            if (res_s_info is !null && res_s_info.is_enum) {
-                if (res_s_info.is_compiler_link_error) {
-                    returning_error = true;
-                }
-            }
-        }
-
-        if (is_ret_fallible && !returning_error) {
+        if is_ret_fallible {
             res = emit_implicit_cast(c, res, inner_ret_type, node.pos);
-        } else if (!is_ret_fallible) {
+        } else {
             res = emit_implicit_cast(c, res, c.current_ret_type, node.pos);
         }
 
@@ -2924,30 +2915,22 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
         let target_ty -> String = get_llvm_type_str(c, c.current_ret_type);
 
         if is_ret_fallible {
-            if (returning_error) {
-                let ret_val_1 -> String = next_reg(c);
-                c.output_file.write(c.indent + ret_val_1 + " = insertvalue " + target_ty + " undef, i1 true, 0\n");
-                let ret_val_2 -> String = next_reg(c);
-                c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + target_ty + " " + ret_val_1 + ", i32 " + ret_val_reg + ", 1\n");
-                ret_val_reg = ret_val_2;
+            let ret_val_1 -> String = next_reg(c);
+            c.output_file.write(c.indent + ret_val_1 + " = insertvalue " + target_ty + " undef, i1 false, 0\n");
+            let ret_val_2 -> String = next_reg(c);
+            c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + target_ty + " " + ret_val_1 + ", i32 0, 1\n");
+            
+            if (inner_ret_type != TYPE_VOID) {
+                let ret_val_3 -> String = next_reg(c);
+                let inner_llvm_ty -> String = get_llvm_type_str(c, inner_ret_type);
+                c.output_file.write(c.indent + ret_val_3 + " = insertvalue " + target_ty + " " + ret_val_2 + ", " + inner_llvm_ty + " " + ret_val_reg + ", 2\n");
+                ret_val_reg = ret_val_3;
             } else {
-                let ret_val_1 -> String = next_reg(c);
-                c.output_file.write(c.indent + ret_val_1 + " = insertvalue " + target_ty + " undef, i1 false, 0\n");
-                let ret_val_2 -> String = next_reg(c);
-                c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + target_ty + " " + ret_val_1 + ", i32 0, 1\n");
-                
-                if (inner_ret_type != TYPE_VOID) {
-                    let ret_val_3 -> String = next_reg(c);
-                    let inner_llvm_ty -> String = get_llvm_type_str(c, inner_ret_type);
-                    c.output_file.write(c.indent + ret_val_3 + " = insertvalue " + target_ty + " " + ret_val_2 + ", " + inner_llvm_ty + " " + ret_val_reg + ", 2\n");
-                    ret_val_reg = ret_val_3;
-                } else {
-                    ret_val_reg = ret_val_2;
-                }
+                ret_val_reg = ret_val_2;
             }
         }
 
-        if (is_ref_type(c, inner_ret_type) && !returning_error) {
+        if (is_ref_type(c, inner_ret_type)) {
             emit_retain(c, res.reg, inner_ret_type);
         }
 
@@ -4848,6 +4831,41 @@ func compile_catch(c -> Compiler, node -> CatchNode) -> CompileResult {
     return res;
 }
 
+func compile_throw(c -> Compiler, node -> ThrowNode) -> CompileResult {
+    let res -> CompileResult = compile_node(c, node.value);
+    
+    let res_s_info -> StructInfo = c.struct_id_map.get("" + res.type);
+    if (res_s_info is null) { res_s_info = c.struct_id_map.get("" + res.origin_type); }
+    
+    if (res_s_info is null || !res_s_info.is_enum || !res_s_info.is_compiler_link_error) {
+        WhitelangExceptions.throw_type_error(node.pos, "Only Enums marked with @CompilerLink(\"Error\") can be thrown.");
+        return void_result();
+    }
+    
+    let err_val_reg -> String = res.reg;
+    
+    if (c.current_catch_label is !null && c.current_catch_label != "") {
+        c.output_file.write(c.indent + "store i32 " + err_val_reg + ", i32* " + c.current_catch_err_ptr + "\n");
+        c.output_file.write(c.indent + "br label %" + c.current_catch_label + "\n\n");
+    } else {
+        if (!is_fallible_type(c, c.current_ret_type)) {
+            WhitelangExceptions.throw_invalid_syntax(node.pos, "Cannot use 'throw' without a catch block in a function that does not return a fallible type.");
+            return void_result();
+        }
+        
+        let target_ty -> String = get_llvm_type_str(c, c.current_ret_type);
+        let ret_val_1 -> String = next_reg(c);
+        c.output_file.write(c.indent + ret_val_1 + " = insertvalue " + target_ty + " undef, i1 true, 0\n");
+        let ret_val_2 -> String = next_reg(c);
+        c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + target_ty + " " + ret_val_1 + ", i32 " + err_val_reg + ", 1\n");
+        
+        cleanup_all_scopes(c);
+        c.output_file.write(c.indent + "ret " + target_ty + " " + ret_val_2 + "\n\n");
+    }
+    
+    return void_result();
+}
+
 func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> CompileResult {
     if (node is null) { return null; }
     let base -> BaseNode = node;
@@ -5561,6 +5579,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_ENUM_DEF) { return compile_enum_def(c, node); }
     if (base.type == NODE_TRY_UNWRAP) { return compile_try_unwrap(c, node); }
     if (base.type == NODE_CATCH) { return compile_catch(c, node); }
+    if (base.type == NODE_THROW) { return compile_throw(c, node); }
 
     // function and closure
     if (base.type == NODE_FUNC_DEF) {

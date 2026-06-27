@@ -56,7 +56,8 @@ const NODE_ENUM_FIELD     -> Int = 52;
 const NODE_INTERFACE_DEF  -> Int = 53;
 const NODE_TRY_UNWRAP     -> Int = 54;
 const NODE_CATCH          -> Int = 55;
-const NODE_FALLIBLE_TYPE  -> Int = 56;
+const NODE_THROW          -> Int = 56;
+const NODE_FALLIBLE_TYPE  -> Int = 57;
 
 struct BaseNode(type -> Int) // Used to read node type
 
@@ -262,6 +263,12 @@ struct DerefNode(
     type  -> Int, // NODE_DEREF
     node  -> Struct,
     level -> Int,
+    pos   -> Position
+)
+
+struct ThrowNode(
+    type  -> Int, // NODE_THROW
+    value -> Struct,
     pos   -> Position
 )
 struct PtrAssignNode(

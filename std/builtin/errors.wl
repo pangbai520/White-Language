@@ -1,4 +1,4 @@
-@CompilerLink("Error")
+@CompilerLink
 enum Error {
     None,
     Unknown,
