@@ -115,7 +115,8 @@ struct VarDeclareNode(
     value        -> Struct, 
     is_const     -> Bool, 
     annotations  -> Vector(Struct),
-    pos          -> Position    // Error position
+    pos          -> Position,    // Error position
+    alloc_id     -> Int
 )
 
 struct VarAccessNode(
@@ -437,21 +438,22 @@ struct EnumFieldNode(
 )
 
 struct TryUnwrapNode(
-    type -> Int,
+    type -> Int, // NODE_TRY_UNWRAP
     expr -> Struct,
     pos  -> Position
 )
 
 struct CatchNode(
-    type     -> Int,
+    type     -> Int, // NODE_CATCH
     stmt     -> Struct,
-    err_name -> Token,
-    body     -> Struct,
-    pos      -> Position
+    err_name -> Token, 
+    body     -> Struct, // BlockNode
+    pos      -> Position,
+    alloc_id -> Int
 )
 
 struct FallibleTypeNode(
-    type      -> Int,
+    type      -> Int, // NODE_FALLIBLE_TYPE
     base_type -> Struct,
     pos       -> Position
 )
