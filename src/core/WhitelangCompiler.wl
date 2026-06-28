@@ -723,8 +723,8 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             let s_name -> String = c.current_package_prefix + raw_name;
 
             // for dict.wl
-            let active_anns -> Dict = analyze_annotations(c, n.annotations);
-            if (active_anns.get("CompilerIntrinsic") is !null) {
+            let sys_anns -> SystemAnnResult = consume_annotations(n.annotations, raw_name);
+            if ((sys_anns.ann_flags & FLAG_ANN_INTRINSIC) != 0) {
                 if (c.current_package_prefix != "dict." && c.current_package_prefix != "") {
                     WhitelangExceptions.throw_internal_compiler_error(n.pos, "@CompilerIntrinsic is restricted to compiler internal libraries.");
                     return; 
@@ -752,11 +752,11 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 vtable_name="", 
                 parent_id=0, 
                 vtable=null,
-                annotations=n.annotations,
+                ann_flags=sys_anns.ann_flags,
+                compiler_link_name=sys_anns.compiler_link_name,
                 is_enum=false,
                 is_interface=false,
-                interfaces=null,
-                is_compiler_link_error=false
+                interfaces=null
             );
             c.struct_table.put(s_name, info);
             c.struct_id_map.put("" + new_id, info);
@@ -765,6 +765,7 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             let c_node -> ClassDefNode = stmts[i];
             let raw_name -> String = c_node.name_tok.value;
             let c_name -> String = c.current_package_prefix + raw_name;
+            let sys_anns -> SystemAnnResult = consume_annotations(c_node.annotations, raw_name);
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
             let info -> StructInfo = StructInfo(
@@ -777,11 +778,11 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 vtable_name="@vtable." + c_name, 
                 parent_id=0, 
                 vtable=null,
-                annotations=c_node.annotations,
+                ann_flags=sys_anns.ann_flags,
+                compiler_link_name=sys_anns.compiler_link_name,
                 is_enum=false,
                 is_interface=false,
-                interfaces=c_node.interfaces,
-                is_compiler_link_error=false
+                interfaces=c_node.interfaces
             );
             c.struct_table.put(c_name, info);
             c.struct_id_map.put("" + new_id, info);
@@ -789,6 +790,7 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             let i_node -> InterfaceDefNode = stmts[i];
             let raw_name -> String = i_node.name_tok.value;
             let i_name -> String = c.current_package_prefix + raw_name;
+            let sys_anns -> SystemAnnResult = consume_annotations(null, raw_name);
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
             let info -> StructInfo = StructInfo(
@@ -801,11 +803,11 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 vtable_name="", 
                 parent_id=0, 
                 vtable=i_node.methods,
-                annotations=null,
+                ann_flags=sys_anns.ann_flags,
+                compiler_link_name=sys_anns.compiler_link_name,
                 is_enum=false,
                 is_interface=true,
-                interfaces=null,
-                is_compiler_link_error=false
+                interfaces=null
             );
             c.struct_table.put(i_name, info);
             c.struct_id_map.put("" + new_id, info);
@@ -813,16 +815,9 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             let e_node -> EnumDefNode = stmts[i];
             let raw_name -> String = e_node.name_tok.value;
             let e_name -> String = c.current_package_prefix + raw_name;
+            let sys_anns -> SystemAnnResult = consume_annotations(e_node.annotations, raw_name);
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
-            
-            let is_err -> Bool = false;
-            if (e_node.annotations is !null) {
-                let active_anns -> Dict = analyze_annotations(c, e_node.annotations);
-                if (active_anns.get("CompilerLink") is !null) {
-                    is_err = true;
-                }
-            }
             
             let info -> StructInfo = StructInfo(
                 name=e_name, 
@@ -834,11 +829,11 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 vtable_name="", 
                 parent_id=0, 
                 vtable=null,
-                annotations=e_node.annotations,
+                ann_flags=sys_anns.ann_flags,
+                compiler_link_name=sys_anns.compiler_link_name,
                 is_enum=true,
                 is_interface=false,
-                interfaces=null,
-                is_compiler_link_error=is_err
+                interfaces=null
             );
             c.struct_table.put(e_name, info);
             c.struct_id_map.put("" + new_id, info);
@@ -904,14 +899,14 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                 p_idx += 1;
             }
 
-            let active_anns -> Dict = analyze_annotations(c, f_node.annotations);
+            let sys_anns -> SystemAnnResult = consume_annotations(f_node.annotations, raw_name);
             let func_key -> String = raw_name;
             if (raw_name != "main") {
                 func_key = c.current_package_prefix + raw_name;
             }
 
             let llvm_func_name -> String = func_key;
-            if (active_anns.get("ExportLib") is !null || raw_name == "main") {
+            if ((sys_anns.ann_flags & FLAG_ANN_EXPORT) != 0 || raw_name == "main") {
                 llvm_func_name = raw_name;
             } else {
                 llvm_func_name = mangle_wl_name(c.current_package_prefix, raw_name, arg_types);
@@ -922,24 +917,11 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                 return;
             }
 
-            let f_info -> FuncInfo = FuncInfo(name=llvm_func_name, base_name=raw_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=false);
+            let f_info -> FuncInfo = FuncInfo(name=llvm_func_name, base_name=raw_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=false, ann_flags=sys_anns.ann_flags, compiler_link_name=sys_anns.compiler_link_name);
             c.func_table.put(func_key, f_info);
 
-            let intr_ann -> AnnotationNode = active_anns.get("CompilerLink");
-            if (intr_ann is !null) {
-                let intr_name -> String = raw_name;
-                let intr_args -> Vector(Struct) = intr_ann.args;
-                if (intr_args is !null && intr_args.length() > 0) {
-                    let a_node -> ArgNode = intr_args[0];
-                    if (a_node.val is !null) {
-                        let base_val -> BaseNode = a_node.val;
-                        if (base_val.type == NODE_STRING) {
-                            let str_node -> StringNode = a_node.val;
-                            intr_name = str_node.tok.value;
-                        }
-                    }
-                }
-                c.compiler_link.put(intr_name, func_key);
+            if ((sys_anns.ann_flags & FLAG_ANN_COMP_LINK) != 0) {
+                c.compiler_link.put(sys_anns.compiler_link_name, func_key);
             }
 
         } else if (base.type == NODE_CLASS_DEF) {
@@ -1832,7 +1814,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
     let var_name -> String = node.name_tok.value;
 
     if (c.scope_depth == 0) {
-        let active_anns -> Dict = analyze_annotations(c, node.annotations);
+        let sys_anns -> SystemAnnResult = consume_annotations(node.annotations, var_name);
 
         let full_var_name -> String = var_name;
         if (c.current_package_prefix != "") {
@@ -1841,7 +1823,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
 
         let global_name -> String = "@" + full_var_name;
 
-        if (active_anns.get("ExportLib") is !null) {
+        if ((sys_anns.ann_flags & FLAG_ANN_EXPORT) != 0) {
             global_name = "@" + var_name; 
         }
 
@@ -1946,7 +1928,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
 
         let linkage -> String = "";
         if (c.is_shared && is_windows() == 1) {
-            if (active_anns.get("ExportLib") is !null) {
+            if ((sys_anns.ann_flags & FLAG_ANN_EXPORT) != 0) {
                 linkage = "dllexport ";
             } else {
                 linkage = "hidden ";
@@ -2274,8 +2256,6 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
 
     c.current_ret_type = ret_type_id;
 
-    let active_anns -> Dict = analyze_annotations(c, node.annotations);
-
     let params_str -> String = "";
     let params -> Vector(Struct) = node.params;
     let p_len -> Int = 0;
@@ -2293,7 +2273,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
 
     let linkage -> String = "";
     if (c.is_shared) {
-        if (active_anns.get("ExportLib") is !null) {
+        if ((f_info.ann_flags & FLAG_ANN_EXPORT) != 0) {
             if (is_windows() == 1) {
                 linkage = "dllexport ";
             }
@@ -2708,7 +2688,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     }
     let llvm_env_name -> String = "{ " + env_body + " }";
 
-    let env_info -> StructInfo = StructInfo(name=env_struct_name, type_id=env_id, fields=env_fields, llvm_name=llvm_env_name, init_body=null, is_class=false, vtable_name="", parent_id=0, vtable=null, annotations=null, is_enum=false, is_interface=false, interfaces=null, is_compiler_link_error=false);
+    let env_info -> StructInfo = StructInfo(name=env_struct_name, type_id=env_id, fields=env_fields, llvm_name=llvm_env_name, init_body=null, is_class=false, vtable_name="", parent_id=0, vtable=null, is_enum=false, is_interface=false, interfaces=null, ann_flags=0, compiler_link_name="");
     c.struct_id_map.put("" + env_id, env_info);
     c.type_drop_list.append(TypeListNode(type=env_id));
 
@@ -2966,21 +2946,19 @@ func compile_struct_def(c -> Compiler, node -> StructDefNode) -> CompileResult {
     let raw_name -> String = node.name_tok.value;
     let struct_name -> String = c.current_package_prefix + raw_name;
 
-    // for dict.wl
-    let active_anns -> Dict = analyze_annotations(c, node.annotations);
-    if (active_anns.get("CompilerIntrinsic") is !null) {
+    let info -> StructInfo = c.struct_table.get(struct_name);
+    if (info is null) {
+        WhitelangExceptions.throw_type_error(node.pos, "Struct info missing for '" + struct_name + "'.");
+        return void_result();
+    }
+
+    if ((info.ann_flags & FLAG_ANN_INTRINSIC) != 0) {
         return void_result();
     }
 
     let full_name -> String = "struct." + struct_name;
     if (c.struct_table.get(full_name) is !null) {
         WhitelangExceptions.throw_import_error(node.pos, "Struct '" + struct_name + "' is already defined in another module.");
-        return void_result();
-    }
-
-    let info -> StructInfo = c.struct_table.get(struct_name);
-    if (info is null) {
-        WhitelangExceptions.throw_type_error(node.pos, "Struct info missing for '" + struct_name + "'.");
         return void_result();
     }
 
@@ -3171,8 +3149,6 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
     let raw_name -> String = node.name_tok.value;
     let class_name -> String = c.current_package_prefix + raw_name;
     let full_name -> String = "class." + class_name;
-
-    analyze_annotations(c, node.annotations);
 
     if (c.struct_table.get(full_name) is !null) {
         WhitelangExceptions.throw_import_error(node.pos, "Class '" + class_name + "' is already defined.");
@@ -4837,7 +4813,7 @@ func compile_throw(c -> Compiler, node -> ThrowNode) -> CompileResult {
     let res_s_info -> StructInfo = c.struct_id_map.get("" + res.type);
     if (res_s_info is null) { res_s_info = c.struct_id_map.get("" + res.origin_type); }
     
-    if (res_s_info is null || !res_s_info.is_enum || !res_s_info.is_compiler_link_error) {
+    if (res_s_info is null || !res_s_info.is_enum || res_s_info.compiler_link_name != "Error") {
         WhitelangExceptions.throw_type_error(node.pos, "Only Enums marked with @CompilerLink(\"Error\") can be thrown.");
         return void_result();
     }
@@ -7281,11 +7257,11 @@ func compile_start(c -> Compiler) -> Void {
         vtable_name="", 
         parent_id=0, 
         vtable=null, 
-        annotations=null,
+        ann_flags=FLAG_ANN_INTRINSIC,
+        compiler_link_name="",
         is_enum=false,
         is_interface=false,
-        interfaces=null,
-        is_compiler_link_error=false
+        interfaces=null
     );
     c.struct_table.put("$Variant", variant_info);
     c.struct_id_map.put("" + variant_id, variant_info);

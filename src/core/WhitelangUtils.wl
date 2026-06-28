@@ -50,6 +50,12 @@ const TYPE_POISON -> Int = 98;
 const TYPE_NULLPTR -> Int = 99;
 
 
+// Annotation Flags
+const FLAG_ANN_INTRINSIC  -> Int = 0x001;
+const FLAG_ANN_COMP_LINK  -> Int = 0x002;
+const FLAG_ANN_EXPORT     -> Int = 0x004;
+
+
 // Core data structures
 struct GCTracker(
     reg  -> String,
@@ -60,6 +66,24 @@ struct CompileResult(
     reg  -> String,
     type -> Int,
     origin_type -> Int
+)
+
+struct SystemAnnResult(
+    ann_flags -> Int,
+    compiler_link_name -> String
+)
+
+struct TypeListNode(type -> Int)
+
+struct Scope(
+    table  -> Dict, // symbol table of the current level
+    parent -> Struct,  // parent scope or null
+    gc_vars -> Vector(Struct)
+)
+
+struct StringConstant(
+    id    -> Int,
+    value -> String
 )
 
 struct SymbolInfo(
@@ -75,20 +99,9 @@ struct FuncInfo(
     base_name  -> String,
     ret_type -> Int, 
     arg_types -> Vector(Struct),
-    is_varargs -> Bool
-)
-
-struct TypeListNode(type -> Int)
-
-struct Scope(
-    table  -> Dict, // symbol table of the current level
-    parent -> Struct,  // parent scope or null
-    gc_vars -> Vector(Struct)
-)
-
-struct StringConstant(
-    id    -> Int,
-    value -> String
+    is_varargs -> Bool,
+    ann_flags  -> Int,
+    compiler_link_name -> String
 )
 
 struct FieldInfo(
@@ -107,11 +120,11 @@ struct StructInfo(
     vtable_name -> String,
     parent_id   -> Int,
     vtable      -> Vector(Struct),
-    annotations -> Vector(Struct),
+    ann_flags   -> Int,
     is_enum     -> Bool,
     is_interface -> Bool,
     interfaces  -> Vector(Struct),
-    is_compiler_link_error -> Bool
+    compiler_link_name -> String
 )
 
 struct ArrayInfo(
@@ -1726,20 +1739,8 @@ func mangle_wl_name(prefix -> String, base_name -> String, arg_types -> Vector(S
     return mangled;
 }
 
-func has_attribute_annotation(anns -> Vector(Struct)) -> Bool {
-    if (anns is null) { return false; }
-    let len -> Int = anns.length();
-    let i -> Int = 0;
-    while (i < len) {
-        let a -> AnnotationNode = anns[i];
-        if (a.name == "Attribute") { return true; }
-        i += 1;
-    }
-    return false;
-}
-
-func analyze_annotations(c -> Compiler, anns -> Vector(Struct)) -> Dict {
-    let res -> Dict = Dict(16);
+func consume_annotations(anns -> Vector(Struct), default_name -> String) -> SystemAnnResult {
+    let res -> SystemAnnResult = SystemAnnResult(ann_flags=0, compiler_link_name="");
     if (anns is null) { return res; }
     
     let len -> Int = anns.length();
@@ -1747,29 +1748,30 @@ func analyze_annotations(c -> Compiler, anns -> Vector(Struct)) -> Dict {
     while (i < len) {
         let ann_node -> AnnotationNode = anns[i];
         let name -> String = ann_node.name;
-
-        if (name == "Attribute" || name == "ExportLib" || name == "CompilerIntrinsic" || name == "CompilerLink") {
-            res.put(name, ann_node);
-            i += 1;
-            continue;
-        }
-
-        let target_struct -> StructInfo = c.struct_table.get(name);
-        if (target_struct is null && c.current_package_prefix != "") {
-            target_struct = c.struct_table.get(c.current_package_prefix + name);
-        }
-
-        if (target_struct is null) {
-            WhitelangExceptions.throw_name_error(ann_node.pos, "Cannot find attribute '" + name + "'. Please define or import it first.");
-            return res;
-        }
-
-        if (target_struct.annotations is null || !has_attribute_annotation(target_struct.annotations)) {
-            WhitelangExceptions.throw_type_error(ann_node.pos, "Struct '" + name + "' is not a valid attribute. Missing @Attribute annotation.");
-            return res;
-        }
         
-        res.put(name, ann_node);
+        if (name == "ExportLib" || name == "CompilerIntrinsic") {
+            if (ann_node.args is !null && ann_node.args.length() > 0) {
+                WhitelangExceptions.throw_invalid_syntax(ann_node.pos, "@" + name + " annotation cannot have arguments.");
+            }
+            if (name == "ExportLib") { res.ann_flags = res.ann_flags | FLAG_ANN_EXPORT; }
+            else if (name == "CompilerIntrinsic") { res.ann_flags = res.ann_flags | FLAG_ANN_INTRINSIC; }
+        } else if (name == "CompilerLink") {
+            let link_name -> String = default_name;
+            if (ann_node.args is !null && ann_node.args.length() > 0) {
+                let a_node -> ArgNode = ann_node.args[0];
+                let base_val -> BaseNode = a_node.val;
+                if (base_val is null || base_val.type != NODE_STRING) {
+                    WhitelangExceptions.throw_invalid_syntax(ann_node.pos, "@CompilerLink argument must be a string literal.");
+                } else {
+                    let str_node -> StringNode = a_node.val;
+                    link_name = str_node.tok.value;
+                }
+            }
+            res.compiler_link_name = link_name;
+            res.ann_flags = res.ann_flags | FLAG_ANN_COMP_LINK;
+        } else {
+            WhitelangExceptions.throw_type_error(ann_node.pos, "Unknown system annotation: @" + name + ". User-defined annotations are not supported.");
+        }
         i += 1;
     }
     return res;
