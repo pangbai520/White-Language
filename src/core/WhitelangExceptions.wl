@@ -8,6 +8,7 @@ let GLOBAL_ERROR_COUNT -> Int = 0;
 let LAST_ERROR_FILE -> String = "";
 let CLEAN_TMP_LL -> String = "";
 let ACTIVE_FILE -> file_io.File = null;
+let ERROR_BUFFER -> Vector(String) = null;
 
 struct Position(
     idx  -> Int,
@@ -43,11 +44,13 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
     let ln -> Int = pos.ln + 1;
     let col -> Int = pos.col + 1;
 
+    if (ERROR_BUFFER is null) { ERROR_BUFFER = []; }
+    let err_msg -> String = "";
+
     if (LAST_ERROR_FILE != pos.fn) {
-        builtin.print("In file:");
-        
+        err_msg += "In file:\n";
     }
-    builtin.print("   " + pos.fn + ":" + ln + ":" + col);
+    err_msg += "   " + pos.fn + ":" + ln + ":" + col + "\n   | \n";
     LAST_ERROR_FILE = pos.fn;
 
     let text -> String = pos.text;
@@ -79,8 +82,7 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
         let p1 -> Int = 0;
         while (p1 < ln_width) { empty_prefix = empty_prefix + " "; p1 += 1; }
         
-        builtin.print(empty_prefix + "| ");
-        builtin.print(" " + ln_str + " | " + line_text);
+        err_msg += " " + ln_str + " | " + line_text + "\n";
 
         let err_len -> Int = 1;
         let line_len -> Int = line_text.length();
@@ -120,14 +122,15 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
             k += 1;
         }
         
-        builtin.print(caret_line);
+        err_msg += caret_line + "\n";
     }
 
-    builtin.print(name + ": " + details + "\n");
+    err_msg += name + ": " + details + "\n\n";
+    ERROR_BUFFER.append(err_msg);
 
     if (GLOBAL_ERROR_COUNT > 50) {
-        builtin.print("fatal error: too many errors emitted, stopping now");
-        abort_and_clean(1);
+        ERROR_BUFFER.append("fatal error: too many errors emitted, stopping now\n");
+        check_errors_and_abort();
     }
 }
 
@@ -191,8 +194,16 @@ func throw_environment_error(details -> String) -> Void { // special
 
 func check_errors_and_abort() -> Void {
     if (GLOBAL_ERROR_COUNT > 0) {
-        let suffix -> String = " error.";
-        if (GLOBAL_ERROR_COUNT > 1) { suffix = " errors."; }
+        let i -> Int = 0;
+        let buf_len -> Int = 0;
+        if (ERROR_BUFFER is !null) { buf_len = ERROR_BUFFER.length(); }
+        while (i < buf_len) {
+            builtin.print(ERROR_BUFFER[i]);
+            i += 1;
+        }
+
+        let suffix -> String = " error.\n";
+        if (GLOBAL_ERROR_COUNT > 1) { suffix = " errors.\n"; }
         builtin.print("Found " + GLOBAL_ERROR_COUNT + suffix);
         abort_and_clean(1);
     }
