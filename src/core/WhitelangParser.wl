@@ -1020,7 +1020,7 @@ func var_decl_core(p -> Parser, is_const -> Bool, anns -> Vector(Struct)) -> Str
         val_node = expression(p);
     }
     
-    return VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=val_node, is_const=is_const, annotations=anns, pos=start_pos);
+    return VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=val_node, is_const=is_const, annotations=anns, pos=start_pos, alloc_id=0);
 }
 
 func var_decl(p -> Parser, anns -> Vector(Struct)) -> Struct {
@@ -1085,7 +1085,7 @@ func parse_block(p -> Parser) -> Struct {
             parser_advance(p);
             
             let catch_body -> Struct = parse_block(p);
-            stmt = CatchNode(type=NODE_CATCH, stmt=stmt, err_name=err_name, body=catch_body, pos=catch_pos);
+            stmt = CatchNode(type=NODE_CATCH, stmt=stmt, err_name=err_name, body=catch_body, pos=catch_pos, alloc_id=0);
         }
 
         if (stmt is !null) {
@@ -1757,7 +1757,7 @@ func parse_class_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
             }
             parser_advance(p); // skip ';'
 
-            fields.append(VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=default_val, is_const=false, annotations=member_anns, pos=f_pos));
+            fields.append(VarDeclareNode(type=NODE_VAR_DECL, name_tok=tid.name_tok, type_node=tid.type_node, value=default_val, is_const=false, annotations=member_anns, pos=f_pos, alloc_id=0));
             
         } else if (p.current_tok.type == TOK_METHOD) {
             let m_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);

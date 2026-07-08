@@ -1102,6 +1102,9 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
     let base -> BaseNode = node;
     if (base.type == NODE_BLOCK) {
         let block -> BlockNode = node;
+        let old_scope -> Scope = c.hoist_scope;
+        c.hoist_scope = Scope(parent=old_scope, table=Dict(32));
+
         let stmts -> Vector(Struct) = block.stmts;
         let len -> Int = 0;
         if (stmts is !null) { len = stmts.length(); }
@@ -1110,6 +1113,8 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
             hoist_allocas(c, stmts[i]);
             i += 1;
         }
+
+        c.hoist_scope = old_scope;
     } else if (base.type == NODE_IF) {
         let if_n -> IfNode = node;
         hoist_allocas(c, if_n.body);
@@ -1124,8 +1129,8 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
     } else if (base.type == NODE_CATCH) {
         let c_node -> CatchNode = node;
         let err_reg -> String = next_reg(c);
-        let pos_key -> String = c_node.pos.fn + ":" + c_node.pos.ln + ":" + c_node.pos.col + ":" + c_node.err_name.value;
-        c.alloc_map.put(pos_key, err_reg);
+        c_node.alloc_id = c.alloc_regs.length();
+        c.alloc_regs.append(err_reg);
         c.output_file.write(c.indent + err_reg + " = alloca i32\n");
         
         hoist_allocas(c, c_node.stmt);
@@ -1143,9 +1148,13 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
                 }
             }
 
+            if (c.hoist_scope is !null) {
+                c.hoist_scope.table.put(v_node.name_tok.value, SymbolInfo(reg="", type=target_type_id, origin_type=target_type_id, is_const=v_node.is_const));
+            }
+
             let var_reg -> String = next_reg(c);
-            let pos_key -> String = v_node.pos.fn + ":" + v_node.pos.ln + ":" + v_node.pos.col + ":" + v_node.name_tok.value;
-            c.alloc_map.put(pos_key, var_reg);
+            v_node.alloc_id = c.alloc_regs.length();
+            c.alloc_regs.append(var_reg);
             
             let llvm_ty_str -> String = get_llvm_type_str(c, target_type_id);
             c.output_file.write(c.indent + var_reg + " = alloca " + llvm_ty_str + "\n");
@@ -1940,8 +1949,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         return void_result();
     }
 
-    let pos_key -> String = node.pos.fn + ":" + node.pos.ln + ":" + node.pos.col + ":" + var_name;
-    let ptr_reg -> String = c.alloc_map.get(pos_key);
+    let ptr_reg -> String = c.alloc_regs[node.alloc_id];
     let origin_id -> Int = target_type_id;
 
     if (node.value is null) {
@@ -2307,6 +2315,8 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         arg_idx += 1;
     }
 
+    c.hoist_scope = Scope(parent=null, table=Dict(32));
+    c.alloc_regs = [];
     hoist_allocas(c, node.body);
 
     compile_node(c, node.body);
@@ -2412,6 +2422,8 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
         arg_idx += 1;
     }
 
+    c.hoist_scope = Scope(parent=null, table=Dict(32));
+    c.alloc_regs = [];
     hoist_allocas(c, node.body);
     compile_node(c, node.body);
 
@@ -2765,6 +2777,8 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     let old_depth -> Int = c.scope_depth;
     let old_reg -> Int = c.reg_count;
     let old_ret -> Int = c.current_ret_type;
+    let old_alloc_regs -> Vector(String) = c.alloc_regs;
+    let old_hoist_scope -> Scope = c.hoist_scope;
     
     c.symbol_table = Scope(table=Dict(32), parent=null, gc_vars=[]);
     c.scope_depth = 1;
@@ -2800,6 +2814,8 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
         p_i += 1;
     }
     
+    c.hoist_scope = Scope(parent=null, table=Dict(32));
+    c.alloc_regs = [];
     hoist_allocas(c, func_def.body);
     compile_node(c, func_def.body);
     
@@ -2817,6 +2833,8 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     c.scope_depth = old_depth;
     c.reg_count = old_reg;
     c.current_ret_type = old_ret;
+    c.alloc_regs = old_alloc_regs;
+    c.hoist_scope = old_hoist_scope;
     
     c.output_file.close();
     c.output_file = old_file;
@@ -4764,8 +4782,7 @@ func compile_catch(c -> Compiler, node -> CatchNode) -> CompileResult {
     let fail_label -> String = next_label(c);
     let success_label -> String = next_label(c);
     
-    let pos_key -> String = node.pos.fn + ":" + node.pos.ln + ":" + node.pos.col + ":" + node.err_name.value;
-    let err_reg_ptr -> String = c.alloc_map.get(pos_key);
+    let err_reg_ptr -> String = c.alloc_regs[node.alloc_id];
     
     let old_catch_label -> String = c.current_catch_label;
     let old_err_ptr -> String = c.current_catch_err_ptr;

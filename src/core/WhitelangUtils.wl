@@ -170,7 +170,7 @@ struct Compiler(
     loaded_files -> Dict,
     current_file_visible_prefixes -> Dict,
     current_file_type_aliases -> Dict,
-    alloc_map -> Dict,
+    alloc_regs -> Vector(String),
     current_dir -> String,
     current_file_func_aliases -> Dict,
     current_file_global_aliases -> Dict,
@@ -180,6 +180,7 @@ struct Compiler(
     compiler_link -> Dict,
     curr_func -> FuncInfo,
     expected_type -> Int,
+    hoist_scope -> Scope,
     type_drop_list -> Vector(Struct),
     global_buffer -> String,
     string_pool -> Dict,
@@ -244,7 +245,7 @@ func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
         imported_modules=Dict(32),
         current_file_visible_prefixes = Dict(32),
         current_file_type_aliases = Dict(32),
-        alloc_map = Dict(128),
+        alloc_regs = [],
         current_dir = ".",
         current_file_func_aliases = Dict(32),
         current_file_global_aliases = Dict(32),
@@ -258,6 +259,7 @@ func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
         current_dir = ".",
         curr_func = null,
         expected_type = 0,
+        hoist_scope = null,
         type_drop_list = [],
         global_buffer = "",
         string_pool = Dict(128),
@@ -1071,6 +1073,13 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
         let v -> VarAccessNode = node;
         let info -> SymbolInfo = find_symbol(c, v.name_tok.value);
         if (info is !null) { return info.type; }
+
+        let h_curr -> Scope = c.hoist_scope;
+        while (h_curr is !null) {
+            let h_info -> SymbolInfo = h_curr.table.get(v.name_tok.value);
+            if (h_info is !null) { return h_info.type; }
+            h_curr = h_curr.parent;
+        }
 
         let f_info -> FuncInfo = c.func_table.get(v.name_tok.value);
         if (f_info is null && c.current_package_prefix != "") { f_info = c.func_table.get(c.current_package_prefix + v.name_tok.value); }
