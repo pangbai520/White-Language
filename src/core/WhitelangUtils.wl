@@ -78,7 +78,8 @@ struct TypeListNode(type -> Int)
 struct Scope(
     table  -> Dict, // symbol table of the current level
     parent -> Struct,  // parent scope or null
-    gc_vars -> Vector(Struct)
+    gc_vars -> Vector(Struct),
+    depth  -> Int
 )
 
 struct StringConstant(
@@ -190,7 +191,8 @@ struct Compiler(
     fallible_cache -> Dict,
     fallible_base_map -> Dict,
     current_catch_label -> String,
-    current_catch_err_ptr -> String
+    current_catch_err_ptr -> String,
+    current_catch_scope -> Struct
 )
 
 struct ParsedModule(
@@ -209,7 +211,8 @@ struct ParsedModule(
 struct LoopScope(
     label_continue -> String,
     label_break    -> String,
-    parent         -> Struct
+    parent         -> Struct,
+    loop_scope     -> Struct
 )
 
 
@@ -217,7 +220,7 @@ struct LoopScope(
 func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
     let f -> File = File(out_path, "w");
     // initialize empty scope
-    let root_scope -> Scope = Scope(table=Dict(32), parent=null, gc_vars=[]);
+    let root_scope -> Scope = Scope(table=Dict(32), parent=null, gc_vars=[], depth=0);
 
     let comp -> Compiler = Compiler(
         output_file = f,
@@ -271,7 +274,8 @@ func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
         fallible_cache = Dict(32),
         fallible_base_map = Dict(32),
         current_catch_label = "",
-        current_catch_err_ptr = ""
+        current_catch_err_ptr = "",
+        current_catch_scope = null
     );
 
     comp.type_drop_list.append(TypeListNode(type=TYPE_GENERIC_FUNCTION));

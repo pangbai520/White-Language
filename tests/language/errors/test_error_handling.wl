@@ -21,7 +21,8 @@ func test_loop() -> Int {
     let i -> Int = -2;
     // expected behavior: i=-2,-1,0 fail, loop continues. i=1,2 succeed.
     while (i <= 2) {
-        let val -> Int = deep_fail(i)?; catch(err) {
+        let val -> Int = deep_fail(i)?;
+        catch(err) {
             i += 1;
             continue; 
         }
@@ -48,7 +49,8 @@ func main() -> Int {
     let my_vec -> Vector(Int) = [];
     
     // attempt to handle complex return
-    my_vec = test_complex_type()?; catch(err2) {
+    my_vec = test_complex_type()?;
+    catch(err2) {
         vec_catch_hit = true;
     }
 

@@ -741,6 +741,9 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 }
             }
 
+            // TODO: Generics monomorphization is blowing up the binary size.
+            // We need to implement a recursion limit for instantiation depth, or 
+            // use pointer-tagging monomorphization to deduplicate underlying types.
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
             let info -> StructInfo = StructInfo(
@@ -981,7 +984,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
 
 // === SCOPE ===
 func enter_scope(c -> Compiler) -> Void {
-    let new_scope -> Scope = Scope(table=Dict(32), parent=c.symbol_table, gc_vars=[]);
+    let new_scope -> Scope = Scope(table=Dict(32), parent=c.symbol_table, gc_vars=[], depth=c.scope_depth + 1);
     c.symbol_table = new_scope;
     c.scope_depth += 1;
 }
@@ -1023,7 +1026,27 @@ func cleanup_all_scopes(c -> Compiler) -> Void {
     }
 }
 
+func cleanup_scopes_until(c -> Compiler, target_scope -> Scope) -> Void {
+    let curr -> Scope = c.symbol_table;
+    while (curr is !null && curr.depth > target_scope.depth) { 
+        let gc_vec -> Vector(Struct) = curr.gc_vars;
+        let gc_len -> Int = 0; if (gc_vec is !null) { gc_len = gc_vec.length(); }
+        let gc_idx -> Int = 0;
+        while (gc_idx < gc_len) {
+            let gc_node -> GCTracker = gc_vec[gc_idx];
+            let ty_str -> String = get_llvm_type_str(c, gc_node.type);
+            let val_reg -> String = next_reg(c);
+            c.output_file.write(c.indent + val_reg + " = load " + ty_str + ", " + ty_str + "* " + gc_node.reg + "\n");
+            emit_release(c, val_reg, gc_node.type);
+            gc_idx += 1;
+        }
+        curr = curr.parent;
+    }
+}
 
+
+// TODO: Current RC mechanism fails on strong reference cycles.
+// Need to introduce WeakRef or bolt on a cycle collector / tracing GC to clean up the mess at boundaries.
 func emit_retain(c -> Compiler, reg -> String, type_id -> Int) -> Void {
     if (!is_ref_type(c, type_id)) { return; }
     
@@ -1103,7 +1126,7 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
     if (base.type == NODE_BLOCK) {
         let block -> BlockNode = node;
         let old_scope -> Scope = c.hoist_scope;
-        c.hoist_scope = Scope(parent=old_scope, table=Dict(32));
+        c.hoist_scope = Scope(parent=old_scope, table=Dict(32), gc_vars=[], depth=0);
 
         let stmts -> Vector(Struct) = block.stmts;
         let len -> Int = 0;
@@ -1306,6 +1329,10 @@ func emit_slice_bounds_check(c -> Compiler, start_reg -> String, end_reg -> Stri
 
 // === COMPILE ===
 func compile_arc_hooks(c -> Compiler) -> Void {
+// TODO: ARC operations are currently non-atomic. 
+// Once we go multi-threaded, we must upgrade these to atomicrmw (or proper LLVM atomics) 
+// to prevent catastrophic races, though we'll need to watch out for the performance hit.
+
     // --- __wl_retain(i8* ptr) ---
     c.output_file.write("define void @__wl_retain(i8* %ptr) {\n");
     c.output_file.write("entry:\n");
@@ -2116,7 +2143,7 @@ func compile_while(c -> Compiler, node -> WhileNode) -> CompileResult {
     let label_body -> String = next_label(c);
     let label_end  -> String = next_label(c);
 
-    let current_scope -> LoopScope = LoopScope(label_continue=label_cond, label_break=label_end, parent=c.loop_stack);
+    let current_scope -> LoopScope = LoopScope(label_continue=label_cond, label_break=label_end, parent=c.loop_stack, loop_scope=c.symbol_table);
     c.loop_stack = current_scope;
 
     c.output_file.write(c.indent + "br label %" + label_cond + "\n");
@@ -2148,7 +2175,7 @@ func compile_for(c -> Compiler, node -> ForNode) -> CompileResult {
     let label_step -> String = next_label(c);
     let label_end  -> String = next_label(c);
 
-    let current_scope -> LoopScope = LoopScope(label_continue=label_step, label_break=label_end, parent=c.loop_stack);
+    let current_scope -> LoopScope = LoopScope(label_continue=label_step, label_break=label_end, parent=c.loop_stack, loop_scope=c.symbol_table);
     c.loop_stack = current_scope;
     
     c.output_file.write(c.indent + "br label %" + label_cond + "\n");
@@ -2294,7 +2321,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     c.output_file.write("entry:\n");
 
     let old_sym -> Scope = c.symbol_table;
-    c.symbol_table = Scope(table=Dict(32), parent=null, gc_vars=[]);
+    c.symbol_table = Scope(table=Dict(32), parent=null, gc_vars=[], depth=0);
     
     c.reg_count = 0; 
     c.scope_depth = 1;
@@ -2315,7 +2342,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         arg_idx += 1;
     }
 
-    c.hoist_scope = Scope(parent=null, table=Dict(32));
+    c.hoist_scope = Scope(parent=null, table=Dict(32), gc_vars=[], depth=0);
     c.alloc_regs = [];
     hoist_allocas(c, node.body);
 
@@ -2396,7 +2423,7 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
     c.output_file.write("entry:\n");
 
     let old_sym -> Scope = c.symbol_table;
-    c.symbol_table = Scope(table=Dict(32), parent=null, gc_vars=[]);
+    c.symbol_table = Scope(table=Dict(32), parent=null, gc_vars=[], depth=0);
     
     c.reg_count = 0; 
     c.scope_depth = 1;
@@ -2422,7 +2449,7 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
         arg_idx += 1;
     }
 
-    c.hoist_scope = Scope(parent=null, table=Dict(32));
+    c.hoist_scope = Scope(parent=null, table=Dict(32), gc_vars=[], depth=0);
     c.alloc_regs = [];
     hoist_allocas(c, node.body);
     compile_node(c, node.body);
@@ -2780,7 +2807,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     let old_alloc_regs -> Vector(String) = c.alloc_regs;
     let old_hoist_scope -> Scope = c.hoist_scope;
     
-    c.symbol_table = Scope(table=Dict(32), parent=null, gc_vars=[]);
+    c.symbol_table = Scope(table=Dict(32), parent=null, gc_vars=[], depth=0);
     c.scope_depth = 1;
     c.reg_count = 1;
     c.current_ret_type = ret_type_id;
@@ -2814,7 +2841,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
         p_i += 1;
     }
     
-    c.hoist_scope = Scope(parent=null, table=Dict(32));
+    c.hoist_scope = Scope(parent=null, table=Dict(32), gc_vars=[], depth=0);
     c.alloc_regs = [];
     hoist_allocas(c, func_def.body);
     compile_node(c, func_def.body);
@@ -4786,14 +4813,17 @@ func compile_catch(c -> Compiler, node -> CatchNode) -> CompileResult {
     
     let old_catch_label -> String = c.current_catch_label;
     let old_err_ptr -> String = c.current_catch_err_ptr;
+    let old_catch_scope -> Struct = c.current_catch_scope;
     
     c.current_catch_label = fail_label;
     c.current_catch_err_ptr = err_reg_ptr;
+    c.current_catch_scope = c.symbol_table;
     
     let res -> CompileResult = compile_node(c, node.stmt);
     
     c.current_catch_label = old_catch_label;
     c.current_catch_err_ptr = old_err_ptr;
+    c.current_catch_scope = old_catch_scope;
     
     c.output_file.write(c.indent + "br label %" + success_label + "\n\n");
     c.output_file.write(fail_label + ":\n");
@@ -4838,6 +4868,7 @@ func compile_throw(c -> Compiler, node -> ThrowNode) -> CompileResult {
     let err_val_reg -> String = res.reg;
     
     if (c.current_catch_label is !null && c.current_catch_label != "") {
+        cleanup_scopes_until(c, c.current_catch_scope);
         c.output_file.write(c.indent + "store i32 " + err_val_reg + ", i32* " + c.current_catch_err_ptr + "\n");
         c.output_file.write(c.indent + "br label %" + c.current_catch_label + "\n\n");
     } else {
@@ -6505,6 +6536,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             return void_result();
         }
         let scope -> LoopScope = c.loop_stack;
+        cleanup_scopes_until(c, scope.loop_scope);
         c.output_file.write(c.indent + "br label %" + scope.label_break + "\n");
 
         return void_result();
@@ -6517,6 +6549,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             return void_result();
         }
         let scope -> LoopScope = c.loop_stack;
+        cleanup_scopes_until(c, scope.loop_scope);
         c.output_file.write(c.indent + "br label %" + scope.label_continue + "\n");
 
         return void_result();
