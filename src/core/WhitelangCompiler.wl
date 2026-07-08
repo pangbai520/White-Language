@@ -3514,10 +3514,14 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
         if (g_info is !null) {
             let llvm_ty_str -> String = get_llvm_type_str(c, g_info.type);
             let val_reg -> String = next_reg(c);
-                c.output_file.write(c.indent + val_reg + " = load " + llvm_ty_str + ", " + llvm_ty_str + "* " + g_info.reg + "\n");
-                return CompileResult(reg=val_reg, type=g_info.type, origin_type=g_info.origin_type);
-            }
+            c.output_file.write(c.indent + val_reg + " = load " + llvm_ty_str + ", " + llvm_ty_str + "* " + g_info.reg + "\n");
+            return CompileResult(reg=val_reg, type=g_info.type, origin_type=g_info.origin_type);
+        } else {
+            let mod_name -> String = format_ast_path(node.obj);
+            WhitelangExceptions.throw_name_error(node.pos, "Undefined field, function or enum variant '" + node.field_name + "' in module '" + mod_name + "'.");
+            return void_result();
         }
+    }
 
     let obj_res -> CompileResult = compile_node(c, node.obj);
     if (obj_res is !null && obj_res.type == TYPE_POISON) { return CompileResult(reg="poison", type=TYPE_POISON); }

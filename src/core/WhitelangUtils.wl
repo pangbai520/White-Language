@@ -666,6 +666,19 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
     }
 }
 
+func format_ast_path(node_raw -> Struct) -> String {
+    let node -> BaseNode = node_raw;
+    if (node.type == NODE_VAR_ACCESS) {
+        let v -> VarAccessNode = node_raw;
+        return v.name_tok.value;
+    }
+    if (node.type == NODE_FIELD_ACCESS) {
+        let f -> FieldAccessNode = node_raw;
+        return format_ast_path(f.obj) + "." + f.field_name;
+    }
+    return "<unknown_path>";
+}
+
 
 // type system & mapping utils
 func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
