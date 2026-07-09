@@ -12,7 +12,89 @@ import File from "file_io"
 
 
 extern func is_windows() -> Int from "C";
+extern func is_macos() -> Int from "C";
 extern func wl_getenv(name -> String) -> String from "C";
+
+
+
+func get_target_os() -> String {
+    if (is_windows() == 1) { return "WINDOWS"; }
+    if (is_macos() == 1) { return "MACOS"; }
+    return "LINUX";
+}
+func is_os_expr(c -> Compiler, node -> Struct) -> Bool {
+    if (node is null) { return false; }
+    let base -> BaseNode = node;
+
+    if (base.type == NODE_FIELD_ACCESS) {
+        if (format_ast_path(node) == "sys.OS") { return true; }
+    }
+
+    if (base.type == NODE_VAR_ACCESS) {
+        let access -> VarAccessNode = node;
+        let info -> SymbolInfo = find_symbol(c, access.name_tok.value);
+        if (info is !null && info.reg == "$intrinsic.target_os") { return true; }
+    }
+    return false;
+}
+func fold_os_cond(c -> Compiler, node -> Struct) -> Int {
+// -1 means the expression is not a platform condition.  0 and 1 are
+// compile-time false/true.  Only expressions proven here are allowed to erase
+// a branch; ordinary conditions continue through normal code generation.
+
+    if (node is null) { return -1; }
+    let base -> BaseNode = node;
+
+    if (base.type == NODE_UNARYOP) {
+        let unary -> UnaryOpNode = node;
+        if (unary.op_tok.value == "!") {
+            let value -> Int = fold_os_cond(c, unary.node);
+            if (value == 0) { return 1; }
+            if (value == 1) { return 0; }
+        }
+        return -1;
+    }
+
+    if (base.type != NODE_BINOP) { return -1; }
+    let binary -> BinOpNode = node;
+    let op -> String = binary.op_tok.value;
+
+    if (op == "&&" || op == "||") {
+        let left_value -> Int = fold_os_cond(c, binary.left);
+        let right_value -> Int = fold_os_cond(c, binary.right);
+        if (left_value == -1 || right_value == -1) { return -1; }
+        if (op == "&&") {
+            if (left_value == 1 && right_value == 1) { return 1; }
+            return 0;
+        }
+        if (left_value == 1 || right_value == 1) { return 1; }
+        return 0;
+    }
+
+    if (op != "==" && op != "!=") { return -1; }
+
+    let literal_node -> Struct = null;
+    if (is_os_expr(c, binary.left)) {
+        literal_node = binary.right;
+    } else if (is_os_expr(c, binary.right)) {
+        literal_node = binary.left;
+    } else {
+        return -1;
+    }
+
+    let literal_base -> BaseNode = literal_node;
+    if (literal_base is null || literal_base.type != NODE_STRING) { return -1; }
+    let literal -> StringNode = literal_node;
+    let equal -> Bool = get_target_os() == literal.tok.value;
+
+    if (op == "==") {
+        if equal { return 1; }
+        return 0;
+    }
+    if equal { return 0; }
+    return 1;
+}
+
 
 
 func promote_to_float(c -> Compiler, res -> CompileResult) -> CompileResult {
@@ -191,7 +273,6 @@ func eval_const_bool(c -> Compiler, node -> Struct, pos -> Position) -> Int {
     WhitelangExceptions.throw_invalid_syntax(pos, "Expression is not a compile-time constant boolean.");
     return 0;
 }
-
 
 func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -> Int, pos -> Position) -> CompileResult {
     if (val_res is null || val_res.reg == "") {
@@ -583,6 +664,15 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
 
     WhitelangExceptions.throw_type_error(pos, "Type mismatch. Expected " + get_type_name(c, expected_type) + ", got " + get_type_name(c, val_res.type));
     return CompileResult(reg="0", type=expected_type, origin_type=expected_type);
+}
+
+func emit_os(c -> Compiler) -> CompileResult {
+    let value -> String = get_target_os();
+    let id -> Int = register_string_constant(c, value);
+    let len -> Int = value.length() + 1;
+    let result -> String = next_reg(c);
+    c.output_file.write(c.indent + result + " = getelementptr inbounds { i32, i32, [" + len + " x i8] }, { i32, i32, [" + len + " x i8] }* @.str." + id + ", i32 0, i32 2, i32 0\n");
+    return CompileResult(reg=result, type=TYPE_STRING, origin_type=0);
 }
 
 func register_string_constant(c -> Compiler, val -> String) -> Int {
@@ -1186,13 +1276,26 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
 }
 
 func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
-    let header_fmt -> String = "RuntimeError: " + msg + "\n    at Line %d, Column %d\n\n";
-    let header_id -> Int = register_string_constant(c, header_fmt);
-    let header_ptr -> String = get_string_ptr(header_id, header_fmt);
+    let header_1 -> String = "RuntimeError: " + msg + "\n    at Line ";
+    let header_1_id -> Int = register_string_constant(c, header_1);
+    let header_1_ptr -> String = get_string_ptr(header_1_id, header_1);
+    
+    let header_2 -> String = ", Column ";
+    let header_2_id -> Int = register_string_constant(c, header_2);
+    let header_2_ptr -> String = get_string_ptr(header_2_id, header_2);
+
+    let header_3 -> String = "\n\n";
+    let header_3_id -> Int = register_string_constant(c, header_3);
+    let header_3_ptr -> String = get_string_ptr(header_3_id, header_3);
     
     let ln -> Int = pos.ln + 1;
     let col -> Int = pos.col + 1;
-    c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* " + header_ptr + ", i32 " + ln + ", i32 " + col + ")\n");
+    
+    c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_raw_string") + "(i8* " + header_1_ptr + ")\n");
+    c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_int") + "(i32 " + ln + ")\n");
+    c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_raw_string") + "(i8* " + header_2_ptr + ")\n");
+    c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_int") + "(i32 " + col + ")\n");
+    c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_raw_string") + "(i8* " + header_3_ptr + ")\n");
 
     let full_text -> String = pos.text;
     if (full_text.length() > 0) {
@@ -1219,7 +1322,7 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
     
         let code_id -> Int = register_string_constant(c, code_content);
         let code_ptr -> String = get_string_ptr(code_id, code_content);
-        c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* " + code_ptr + ")\n");
+        c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_raw_string") + "(i8* " + code_ptr + ")\n");
 
         let err_len -> Int = 1;
         let line_len -> Int = raw_line.length();
@@ -1253,7 +1356,7 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
         arrow_str += "\n";
         let arrow_id -> Int = register_string_constant(c, arrow_str);
         let arrow_ptr -> String = get_string_ptr(arrow_id, arrow_str);
-        c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* " + arrow_ptr + ")\n");
+        c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_raw_string") + "(i8* " + arrow_ptr + ")\n");
     }
 
     c.output_file.write(c.indent + "call void @exit(i32 1)\n");
@@ -1581,6 +1684,7 @@ func precompile_ast(c -> Compiler, node -> Struct, final_path -> String, import_
 
     pre_register_structs(c, node);
     pre_register_funcs(c, node);
+    pre_register_globals(c, node);
 
     let p_mod -> ParsedModule = ParsedModule(
         path = final_path,
@@ -1779,6 +1883,41 @@ func compile_ast_pass(c -> Compiler, p_mod -> ParsedModule) -> Void {
     p_mod.ast = null;
 }
 
+func must_terminate(c -> Compiler, node -> Struct) -> Bool {
+    if (node is null) { return false; }
+    let base -> BaseNode = node;
+
+    if (base.type == NODE_RETURN || base.type == NODE_BREAK || base.type == NODE_CONTINUE) {
+        return true;
+    }
+
+    if (base.type == NODE_BLOCK) {
+        let block -> BlockNode = node;
+        if (block.stmts is null || block.stmts.length() == 0) { return false; }
+        return must_terminate(c, block.stmts[block.stmts.length() - 1]);
+    }
+
+    if (base.type == NODE_IF) {
+        let if_node -> IfNode = node;
+        let platform_value -> Int = fold_os_cond(c, if_node.condition);
+        if (platform_value == 1) {
+            return must_terminate(c, if_node.body);
+        }
+        if (platform_value == 0 && if_node.else_body is !null) {
+            return must_terminate(c, if_node.else_body);
+        }
+
+        // for a runtime condition, execution terminates only if both paths do
+        if (platform_value == -1 && if_node.else_body is !null) {
+            if (must_terminate(c, if_node.body) &&
+                must_terminate(c, if_node.else_body)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 func compile_block(c -> Compiler, node -> BlockNode) -> CompileResult {
     let is_root -> Bool = false;
     if (c.scope_depth == 0) {
@@ -1799,7 +1938,7 @@ func compile_block(c -> Compiler, node -> BlockNode) -> CompileResult {
     while (i < len) {
         let stmt -> BaseNode = stmts[i];
         last_res = compile_node(c, stmts[i]);
-        if (stmt.type == NODE_RETURN || stmt.type == NODE_BREAK || stmt.type == NODE_CONTINUE) { 
+        if (must_terminate(c, stmts[i])) {
             terminated = true;
             break;
         }
@@ -1855,6 +1994,19 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         let full_var_name -> String = var_name;
         if (c.current_package_prefix != "") {
             full_var_name = c.current_package_prefix + var_name;
+        }
+
+        if ((sys_anns.ann_flags & FLAG_ANN_INTRINSIC) != 0) {
+            if (full_var_name != "platform.OS") {
+                WhitelangExceptions.throw_internal_compiler_error(node.pos, "Unknown intrinsic global '" + full_var_name + "'.");
+                return void_result();
+            }
+            if (target_type_id != TYPE_STRING || !node.is_const) {
+                WhitelangExceptions.throw_type_error(node.pos, "Intrinsic 'sys.OS' must be declared as const String.");
+                return void_result();
+            }
+            c.global_symbol_table.put(full_var_name, SymbolInfo(reg="$intrinsic.target_os", type=TYPE_STRING, origin_type=TYPE_STRING, is_const=true));
+            return void_result();
         }
 
         let global_name -> String = "@" + full_var_name;
@@ -2106,6 +2258,16 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
 }
 
 func compile_if(c -> Compiler, node -> IfNode) -> CompileResult {
+    let platform_value -> Int = fold_os_cond(c, node.condition);
+    if (platform_value == 1) {
+        compile_node(c, node.body);
+        return void_result();
+    }
+    if (platform_value == 0) {
+        if (node.else_body is !null) { compile_node(c, node.else_body); }
+        return void_result();
+    }
+
     let cond_res -> CompileResult = compile_node(c, node.condition);
     if (cond_res is !null && cond_res.type == TYPE_POISON) { return CompileResult(reg="poison", type=TYPE_POISON); }
     if (cond_res.type != TYPE_BOOL) {
@@ -2116,6 +2278,17 @@ func compile_if(c -> Compiler, node -> IfNode) -> CompileResult {
     let label_then -> String = next_label(c);
     let label_else -> String = next_label(c);
     let label_merge -> String = next_label(c);
+
+    let then_terminates -> Bool = must_terminate(c, node.body);
+    let else_terminates -> Bool = false;
+    if (node.else_body is !null) {
+        else_terminates = must_terminate(c, node.else_body);
+    }
+
+    let needs_merge -> Bool = true;
+    if (node.else_body is !null && then_terminates && else_terminates) {
+        needs_merge = false;
+    }
     
     let target_else -> String = label_else;
     if (node.else_body is null) {
@@ -2126,15 +2299,21 @@ func compile_if(c -> Compiler, node -> IfNode) -> CompileResult {
     
     c.output_file.write("\n" + label_then + ":\n");
     compile_node(c, node.body);
-    c.output_file.write(c.indent + "br label %" + label_merge + "\n");
+    if (!then_terminates) {
+        c.output_file.write(c.indent + "br label %" + label_merge + "\n");
+    }
     
     if (node.else_body is !null) {
         c.output_file.write("\n" + label_else + ":\n");
         compile_node(c, node.else_body);
-        c.output_file.write(c.indent + "br label %" + label_merge + "\n");
+        if (!else_terminates) {
+            c.output_file.write(c.indent + "br label %" + label_merge + "\n");
+        }
     }
 
-    c.output_file.write("\n" + label_merge + ":\n");
+    if needs_merge {
+        c.output_file.write("\n" + label_merge + ":\n");
+    }
     return void_result();
 }
 
@@ -3512,6 +3691,9 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
         }
 
         if (g_info is !null) {
+            if (g_info.reg == "$intrinsic.target_os") {
+                return emit_os(c);
+            }
             let llvm_ty_str -> String = get_llvm_type_str(c, g_info.type);
             let val_reg -> String = next_reg(c);
             c.output_file.write(c.indent + val_reg + " = load " + llvm_ty_str + ", " + llvm_ty_str + "* " + g_info.reg + "\n");
@@ -3861,12 +4043,29 @@ func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult
         params_str = params_str + "...";
     }
 
-    c.func_table.put(func_name, FuncInfo(name=func_name, base_name=func_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=node.is_varargs));
+    let full_func_name -> String = func_name;
+    if (c.current_package_prefix.length() > 0) {
+        full_func_name = c.current_package_prefix + func_name;
+    }
+    c.func_table.put(full_func_name, FuncInfo(name=func_name, base_name=func_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=node.is_varargs));
     if (c.declared_externs.get(func_name) is null) {
         let ret_llvm -> String = get_llvm_type_str(c, ret_type_id);
         c.output_file.write("declare " + ret_llvm + " @" + func_name + "(" + params_str + ")\n");
 
         c.declared_externs.put(func_name, StringConstant(id=0, value="")); 
+    }
+
+    let lib_name -> String = node.lib_name;
+    if (lib_name is !null && lib_name.length() > 0 && lib_name != "c" && lib_name != "C") {
+        let i -> Int = 0;
+        let found -> Bool = false;
+        let libs_len -> Int = c.extra_libs.length();
+        while (i < libs_len) {
+            let lib -> String = c.extra_libs[i];
+            if (lib == lib_name) { found = true; break; }
+            i += 1;
+        }
+        if (!found) { c.extra_libs.append(lib_name); }
     }
     return void_result();
 }
@@ -5919,6 +6118,10 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         
         if (info.type == TYPE_POISON) { return CompileResult(reg="poison", type=TYPE_POISON); }
 
+        if (info.reg == "$intrinsic.target_os") {
+            return emit_os(c);
+        }
+
         let llvm_ty_str -> String = get_llvm_type_str(c, info.type);
         if (llvm_ty_str == "") {
             WhitelangExceptions.throw_type_error(v.pos, "Variable '" + var_name + "' has invalid internal type ID. ");
@@ -6206,7 +6409,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
                 if (a_len == 0) {
                     let fmt_ptr -> String = next_reg(c);
-                    c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
+                    c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_raw_string") + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
                     return void_result();
                 }
                 
@@ -6218,7 +6421,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                     a_idx += 1;
                 }
 
-                c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
+                c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_raw_string") + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
                 return void_result();
             }
 
@@ -6789,34 +6992,93 @@ func compile_type_cast(c -> Compiler, val_res -> CompileResult, target_type -> I
 
 // BUILTIN HELPER
 func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position, origin_id -> Int) -> Void {
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string");
+    let hook_char -> String = get_mangled_symbol(c, "print_char");
+    let hook_int -> String = get_mangled_symbol(c, "print_int");
+    let hook_long -> String = get_mangled_symbol(c, "print_long");
+    let hook_float -> String = get_mangled_symbol(c, "print_float");
+    let hook_bool -> String = get_mangled_symbol(c, "print_bool");
+
     if (type_id == TYPE_STRING) {
-        c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + reg + ")\n");
+        if (hook_raw_str is !null) {
+            c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + reg + ")\n");
+        } else {
+            WhitelangExceptions.throw_type_error(pos, "Missing CompilerLink hook 'print_raw_string'. Did you import 'builtin'?");
+        }
         return;
     }
 
     if (type_id == TYPE_CHAR) {
-        c.output_file.write(c.indent + "call i32 @putchar(i32 " + reg + ")\n");
+        if (hook_char is !null) {
+            c.output_file.write(c.indent + "call void @" + hook_char + "(i32 " + reg + ")\n");
+        } else {
+            WhitelangExceptions.throw_type_error(pos, "Missing CompilerLink hook 'print_char'.");
+        }
         return;
     }
 
-    else if (is_primitive_type(type_id)) {
-        let temp_res -> CompileResult = CompileResult(reg=reg, type=type_id, origin_type=origin_id);
-        let str_res -> CompileResult = convert_to_string(c, temp_res);
-        c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + str_res.reg + ")\n");
+    if (is_primitive_type(type_id)) {
+        if (type_id == TYPE_INT || type_id == TYPE_INT8 || type_id == TYPE_INT16 || type_id == TYPE_UINT16) {
+            let temp_res -> CompileResult = CompileResult(reg=reg, type=type_id, origin_type=origin_id);
+            if (type_id != TYPE_INT) { temp_res = promote_to_int(c, temp_res); }
+            if (hook_int is !null) {
+                c.output_file.write(c.indent + "call void @" + hook_int + "(i32 " + temp_res.reg + ")\n");
+            } else {
+                WhitelangExceptions.throw_type_error(pos, "Missing CompilerLink hook 'print_int'.");
+            }
+            return;
+        }
+        if (type_id == TYPE_LONG || type_id == TYPE_UINT32 || type_id == TYPE_INTSIZE) {
+            let temp_res -> CompileResult = CompileResult(reg=reg, type=type_id, origin_type=origin_id);
+            if (type_id != TYPE_LONG) { temp_res = promote_to_long(c, temp_res); }
+            if (hook_long is !null) {
+                c.output_file.write(c.indent + "call void @" + hook_long + "(i64 " + temp_res.reg + ")\n");
+            } else {
+                WhitelangExceptions.throw_type_error(pos, "Missing CompilerLink hook 'print_long'.");
+            }
+            return;
+        }
+        if (type_id == TYPE_FLOAT || type_id == TYPE_FLOAT32) {
+            let temp_res -> CompileResult = CompileResult(reg=reg, type=type_id, origin_type=origin_id);
+            if (type_id != TYPE_FLOAT) { temp_res = promote_to_float(c, temp_res); }
+            if (hook_float is !null) {
+                c.output_file.write(c.indent + "call void @" + hook_float + "(double " + temp_res.reg + ")\n");
+            } else {
+                WhitelangExceptions.throw_type_error(pos, "Missing CompilerLink hook 'print_float'.");
+            }
+            return;
+        }
+        if (type_id == TYPE_BOOL) {
+            if (hook_bool is !null) {
+                c.output_file.write(c.indent + "call void @" + hook_bool + "(i1 " + reg + ")\n");
+            } else {
+                WhitelangExceptions.throw_type_error(pos, "Missing CompilerLink hook 'print_bool'.");
+            }
+            return;
+        }
+        WhitelangExceptions.throw_type_error(pos, "Unsupported primitive type for printing.");
         return;
     }
 
     if (type_id == TYPE_NULL || type_id == TYPE_NULLPTR) {
-        c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
+        if (hook_raw_str is !null) {
+            c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
+        }
         return;
     }
 
     if (is_pointer_type(c, type_id)) {
         let base_info -> SymbolInfo = c.ptr_base_map.get("" + type_id);
         if (base_info is !null && base_info.type == TYPE_BYTE) {
-            c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + reg + ")\n");
+            if (hook_raw_str is !null) {
+                c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + reg + ")\n");
+            }
         } else {
-            c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_hex_ptr, i32 0, i32 0), i8* " + reg + ")\n");
+            if (hook_long is !null) {
+                let p_to_i -> String = next_reg(c);
+                c.output_file.write(c.indent + p_to_i + " = ptrtoint i8* " + reg + " to i64\n");
+                c.output_file.write(c.indent + "call void @" + hook_long + "(i64 " + p_to_i + ")\n");
+            }
         }
         return;
     }
@@ -6831,7 +7093,10 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
                 return;
             }
         }
-        c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_hex_ptr, i32 0, i32 0), i8* " + reg + ")\n");
+        // Fallback for pointers: convert ptrtoint to i64 then print_long
+            let ptr_i64 -> String = next_reg(c);
+            c.output_file.write(c.indent + ptr_i64 + " = ptrtoint i8* " + reg + " to i64\n");
+            c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_long") + "(i64 " + ptr_i64 + ")\n");
         return;
     }
     
@@ -6865,6 +7130,7 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
 }
 
 func compile_print_enum_internal(c -> Compiler, enum_reg -> String, s_info -> StructInfo, pos -> Position) -> Void {
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string");
     let default_label -> String = next_label(c);
     let end_label -> String = next_label(c);
     
@@ -6892,7 +7158,7 @@ func compile_print_enum_internal(c -> Compiler, enum_reg -> String, s_info -> St
         let name_str -> String = s_info.name + "." + f.name;
         let id -> Int = register_string_constant(c, name_str);
         let ptr_ -> String = get_string_ptr(id, name_str);
-        c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + ptr_ + ")\n");
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + ptr_ + ")\n");
         c.output_file.write(c.indent + "br label %" + end_label + "\n");
         i += 1;
     }
@@ -6901,18 +7167,19 @@ func compile_print_enum_internal(c -> Compiler, enum_reg -> String, s_info -> St
     let unk_str -> String = s_info.name + "(<unknown>)";
     let unk_id -> Int = register_string_constant(c, unk_str);
     let unk_ptr -> String = get_string_ptr(unk_id, unk_str);
-    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + unk_ptr + ")\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + unk_ptr + ")\n");
     c.output_file.write(c.indent + "br label %" + end_label + "\n");
     
     c.output_file.write("\n" + end_label + ":\n");
 }
 
 func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> StructInfo, pos -> Position) -> Void {
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string");
     let header -> String = s_info.name + "(";
     let header_id -> Int = register_string_constant(c, header);
     let header_ptr -> String = get_string_ptr(header_id, header);
     
-    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + header_ptr + ")\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + header_ptr + ")\n");
 
     let fields_vec -> Vector(Struct) = s_info.fields;
     let f_len -> Int = 0;
@@ -6929,7 +7196,7 @@ func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> S
         let fn_id -> Int = register_string_constant(c, f_name_eq);
         let fn_ptr -> String = get_string_ptr(fn_id, f_name_eq);
     
-        c.output_file.write(c.indent + "call void @wl_write_utf8(i8* " + fn_ptr + ")\n");
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + fn_ptr + ")\n");
         
         let f_ptr -> String = next_reg(c);
         c.output_file.write(c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_reg + ", i32 0, i32 " + f_curr.offset + "\n");
@@ -6939,13 +7206,14 @@ func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> S
 
         f_idx += 1;
         if (f_idx < f_len) {
-            c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
+            c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
         }
     }
-    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_paren, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_paren, i32 0, i32 0))\n");
 }
 
 func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> SymbolInfo, pos -> Position) -> Void {
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string");
     let elem_type -> Int = v_info.type;
     let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
     let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
@@ -6960,7 +7228,7 @@ func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> S
     let data_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_ptr_ptr + "\n");
 
-    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_open_bracket, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_open_bracket, i32 0, i32 0))\n");
 
     let label_cond -> String = next_label(c);
     let label_body -> String = next_label(c);
@@ -6996,18 +7264,19 @@ func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> S
     c.output_file.write(c.indent + "br i1 " + is_not_last + ", label %" + label_sep + ", label %" + label_cond + "\n");
 
     c.output_file.write("\n" + label_sep + ":\n");
-    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
     c.output_file.write(c.indent + "br label %" + label_cond + "\n");
 
     c.output_file.write("\n" + label_end + ":\n");
-    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0))\n");
 }
 
 func compile_print_array_internal(c -> Compiler, arr_reg -> String, arr_info -> ArrayInfo, pos -> Position) -> Void {
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string");
     let elem_type -> Int = arr_info.base_type;
     let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
 
-    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_open_bracket, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_open_bracket, i32 0, i32 0))\n");
 
     let size_val -> String = next_reg(c);
     if (arr_info.size == -1) {
@@ -7069,14 +7338,15 @@ func compile_print_array_internal(c -> Compiler, arr_reg -> String, arr_info -> 
     c.output_file.write(c.indent + "br i1 " + is_not_last + ", label %" + label_sep + ", label %" + label_cond + "\n");
 
     c.output_file.write("\n" + label_sep + ":\n");
-    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
     c.output_file.write(c.indent + "br label %" + label_cond + "\n");
 
     c.output_file.write("\n" + label_end + ":\n");
-    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0))\n");
 }
 
 func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info -> StructInfo, pos -> Position) -> Void {
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string");
     let variant_llvm -> String = v_info.llvm_name;
 
     let is_null -> String = next_reg(c);
@@ -7089,7 +7359,7 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
     c.output_file.write(c.indent + "br i1 " + is_null + ", label %" + label_null_print + ", label %" + label_not_null + "\n");
 
     c.output_file.write("\n" + label_null_print + ":\n");
-    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
     c.output_file.write("\n" + label_not_null + ":\n");
@@ -7126,7 +7396,7 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
 
     // null
     c.output_file.write("\n" + label_null + ":\n");
-    c.output_file.write(c.indent + "call void @wl_write_utf8(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
     // Int
@@ -7171,7 +7441,7 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
 
     // other object
     c.output_file.write("\n" + label_default + ":\n");
-    c.output_file.write(c.indent + "call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.fmt_hex_ptr, i32 0, i32 0), i64 " + payload_i64 + ")\n");
+    c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_long") + "(i64 " + payload_i64 + ")\n");
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
     c.output_file.write("\n" + label_end + ":\n");
@@ -7222,12 +7492,6 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
 // --------------
 
 func compile_start(c -> Compiler) -> Void {
-    c.output_file.write("declare i32 @printf(i8*, ...)\n");
-    c.declared_externs.put("printf", StringConstant(id=0, value=""));
-
-    c.output_file.write("declare i32 @putchar(i32)\n");
-    c.declared_externs.put("putchar", StringConstant(id=0, value=""));
-
     c.output_file.write("declare i32 @snprintf(i8*, i64, i8*, ...)\n");
     c.declared_externs.put("snprintf", StringConstant(id=0, value="")); 
 
@@ -7256,9 +7520,6 @@ func compile_start(c -> Compiler) -> Void {
 
     c.output_file.write("declare i8* @realloc(i8*, i64)\n");
     c.declared_externs.put("realloc", StringConstant(id=0, value=""));
-
-    c.output_file.write("declare void @wl_write_utf8(i8*)\n");
-    c.declared_externs.put("wl_write_utf8", StringConstant(id=0, value=""));
 
     c.output_file.write("declare void @wl_format_i128(i8*, i64, i64)\n");
     c.declared_externs.put("wl_format_i128", StringConstant(id=0, value=""));

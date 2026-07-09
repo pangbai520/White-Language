@@ -1425,13 +1425,10 @@ func parse_extern(p -> Parser) -> Struct {
     let start_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
     parser_advance(p); // skip 'extern'
 
-    // extern "C" { func ...; }
+    // extern "XXX" { func ...; }
     if (p.current_tok.type == TOK_STR_LIT) {
-        if (p.current_tok.value != "C") {
-            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-            WhitelangExceptions.throw_invalid_syntax(err_pos, "Only extern \"C\" is supported.");
-        }
-        parser_advance(p); // skip "C"
+        let lib_name -> String = p.current_tok.value;
+        parser_advance(p); // skip string
         
         if (p.current_tok.type != TOK_LBRACE) {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -1463,10 +1460,10 @@ func parse_extern(p -> Parser) -> Struct {
         }
         parser_advance(p); // skip '}'
         
-        return ExternBlockNode(type=NODE_EXTERN_BLOCK, funcs=funcs, pos=start_pos);
+        return ExternBlockNode(type=NODE_EXTERN_BLOCK, funcs=funcs, lib_name=lib_name, pos=start_pos);
     }
 
-    // extern func foo() -> Void from "C";
+    // extern func foo() -> Void from "XXX";
     else if (p.current_tok.type == TOK_FUNC) {
         let func_node -> Struct = parse_extern_func(p);
 
@@ -1488,21 +1485,19 @@ func parse_extern(p -> Parser) -> Struct {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected library name string (e.g. \"C\") after 'from'.");
         }
-        if (p.current_tok.value != "C") {
-            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-            WhitelangExceptions.throw_invalid_syntax(err_pos, "Only \"C\" is supported.");
-        }
-        parser_advance(p); // skip "C"
+        let lib_name -> String = p.current_tok.value;
+        parser_advance(p); // skip string
         
         if (p.current_tok.type != TOK_SEMICOLON) {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ';' at the end of extern declaration.");
         }
         parser_advance(p); // skip ';'
+        let f_node -> ExternFuncNode = func_node;
+        f_node.lib_name = lib_name;
         
-        let funcs -> Vector(Struct) = [];
-        funcs.append(func_node);
-        return ExternBlockNode(type=NODE_EXTERN_BLOCK, funcs=funcs, pos=start_pos);
+        let funcs -> Vector(Struct) = [func_node];
+        return ExternBlockNode(type=NODE_EXTERN_BLOCK, funcs=funcs, lib_name=lib_name, pos=start_pos);
     }
     
     let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);

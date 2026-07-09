@@ -300,6 +300,7 @@ struct ExternFuncNode(
     params       -> Vector(Struct),
     ret_type_tok -> Struct,
     is_varargs   -> Bool,    // 1 if has '...', else 0
+    lib_name     -> String,
     pos          -> Position
 )
 

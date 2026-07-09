@@ -192,7 +192,8 @@ struct Compiler(
     fallible_base_map -> Dict,
     current_catch_label -> String,
     current_catch_err_ptr -> String,
-    current_catch_scope -> Struct
+    current_catch_scope -> Struct,
+    extra_libs -> Vector(String)
 )
 
 struct ParsedModule(
@@ -275,7 +276,8 @@ func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
         fallible_base_map = Dict(32),
         current_catch_label = "",
         current_catch_err_ptr = "",
-        current_catch_scope = null
+        current_catch_scope = null,
+        extra_libs = []
     );
 
     comp.type_drop_list.append(TypeListNode(type=TYPE_GENERIC_FUNCTION));
@@ -1763,6 +1765,14 @@ func mangle_wl_name(prefix -> String, base_name -> String, arg_types -> Vector(S
         i += 1;
     }
     return mangled;
+}
+
+func get_mangled_symbol(c -> Compiler, link_name -> String) -> String {
+    let func_key -> String = c.compiler_link.get(link_name);
+    if (func_key is null) { return null; }
+    let f_info -> FuncInfo = c.func_table.get(func_key);
+    if (f_info is null) { return null; }
+    return f_info.name;
 }
 
 func consume_annotations(anns -> Vector(Struct), default_name -> String) -> SystemAnnResult {

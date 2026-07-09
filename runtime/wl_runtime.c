@@ -85,62 +85,6 @@ char* wl_alloc_string(long long size) {
     return str;
 }
 
-
-// native io handling
-void wl_write_utf8(const char* str) {
-    if (!str) return;
-
-#ifdef _WIN32
-    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hOut == INVALID_HANDLE_VALUE || !hOut) {
-        printf("%s", str); // fallback
-        return;
-    }
-
-    DWORD dwMode = 0;
-    // check if it's an actual console or piped/redirected
-    if (!GetConsoleMode(hOut, &dwMode)) {
-        printf("%s", str);
-        return;
-    }
-
-    // convert to utf16 for windows console api
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, str, -1, NULL, 0);
-    if (wlen == 0) return;
-
-    wchar_t* wstr = (wchar_t*)malloc(wlen * sizeof(wchar_t));
-    if (!wstr) return;
-
-    MultiByteToWideChar(CP_UTF8, 0, str, -1, wstr, wlen);
-
-    DWORD written = 0;
-    // wlen - 1 to drop the null terminator
-    WriteConsoleW(hOut, wstr, wlen - 1, &written, NULL);
-
-    free(wstr);
-#else
-    printf("%s", str);
-#endif
-}
-
-void wl_print_utf8(const char* str) {
-    if (!str) str = "null";
-    wl_write_utf8(str);
-
-#ifdef _WIN32
-    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    DWORD dwMode = 0;
-    if (hOut != INVALID_HANDLE_VALUE && hOut && GetConsoleMode(hOut, &dwMode)) {
-        DWORD written = 0;
-        WriteConsoleW(hOut, L"\n", 1, &written, NULL);
-    } else {
-        printf("\n");
-    }
-#else
-    printf("\n");
-#endif
-}
-
 void wl_format_i128(char* buf, unsigned long long low, long long high) {
     __int128 val = (__int128)(((unsigned __int128)(unsigned long long)high << 64) | low);
     if (val == 0) {
