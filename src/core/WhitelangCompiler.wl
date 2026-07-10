@@ -1276,87 +1276,92 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
 }
 
 func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
-    let header_1 -> String = "RuntimeError: " + msg + "\n    at Line ";
-    let header_1_id -> Int = register_string_constant(c, header_1);
-    let header_1_ptr -> String = get_string_ptr(header_1_id, header_1);
-    
-    let header_2 -> String = ", Column ";
-    let header_2_id -> Int = register_string_constant(c, header_2);
-    let header_2_ptr -> String = get_string_ptr(header_2_id, header_2);
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", null);
+    let hook_int -> String = get_mangled_symbol(c, "print_int", null);
 
-    let header_3 -> String = "\n\n";
-    let header_3_id -> Int = register_string_constant(c, header_3);
-    let header_3_ptr -> String = get_string_ptr(header_3_id, header_3);
-    
-    let ln -> Int = pos.ln + 1;
-    let col -> Int = pos.col + 1;
-    
-    c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_raw_string") + "(i8* " + header_1_ptr + ")\n");
-    c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_int") + "(i32 " + ln + ")\n");
-    c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_raw_string") + "(i8* " + header_2_ptr + ")\n");
-    c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_int") + "(i32 " + col + ")\n");
-    c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_raw_string") + "(i8* " + header_3_ptr + ")\n");
+    if (hook_raw_str is !null && hook_int is !null) {
+        let header_1 -> String = "RuntimeError: " + msg + "\n    at Line ";
+        let header_1_id -> Int = register_string_constant(c, header_1);
+        let header_1_ptr -> String = get_string_ptr(header_1_id, header_1);
+        
+        let header_2 -> String = ", Column ";
+        let header_2_id -> Int = register_string_constant(c, header_2);
+        let header_2_ptr -> String = get_string_ptr(header_2_id, header_2);
 
-    let full_text -> String = pos.text;
-    if (full_text.length() > 0) {
-        let current_ln -> Int = 0;
-        let scan_idx -> Int = 0;
-        let len -> Int = full_text.length();
-        let line_start_idx -> Int = 0;
+        let header_3 -> String = "\n\n";
+        let header_3_id -> Int = register_string_constant(c, header_3);
+        let header_3_ptr -> String = get_string_ptr(header_3_id, header_3);
+        
+        let ln -> Int = pos.ln + 1;
+        let col -> Int = pos.col + 1;
+        
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + header_1_ptr + ")\n");
+        c.output_file.write(c.indent + "call void @" + hook_int + "(i32 " + ln + ")\n");
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + header_2_ptr + ")\n");
+        c.output_file.write(c.indent + "call void @" + hook_int + "(i32 " + col + ")\n");
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + header_3_ptr + ")\n");
 
-        while (scan_idx < len) {
-            if (current_ln == pos.ln) { line_start_idx = scan_idx; break; }
-            if (full_text[scan_idx] == '\n') { current_ln += 1; }
-            scan_idx += 1;
-        }
+        let full_text -> String = pos.text;
+        if (full_text.length() > 0) {
+            let current_ln -> Int = 0;
+            let scan_idx -> Int = 0;
+            let len -> Int = full_text.length();
+            let line_start_idx -> Int = 0;
 
-        let line_end_idx -> Int = line_start_idx;
-        while (line_end_idx < len) {
-            let ch -> Char = full_text[line_end_idx];
-            if (ch == '\n' || ch == '\r') { break; }
-            line_end_idx += 1;
-        }
-
-        let raw_line -> String = full_text.slice(line_start_idx, line_end_idx);
-        let code_content -> String = "    " + raw_line + "\n";
-    
-        let code_id -> Int = register_string_constant(c, code_content);
-        let code_ptr -> String = get_string_ptr(code_id, code_content);
-        c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_raw_string") + "(i8* " + code_ptr + ")\n");
-
-        let err_len -> Int = 1;
-        let line_len -> Int = raw_line.length();
-        if (pos.col < line_len) {
-            let ch -> Char = raw_line[pos.col];
-            if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '_' || (ch >= '0' && ch <= '9')) {
-                let cur -> Int = pos.col + 1;
-                while (cur < line_len) {
-                    let c2 -> Char = raw_line[cur];
-                    if ((c2 >= 'A' && c2 <= 'Z') || (c2 >= 'a' && c2 <= 'z') || c2 == '_' || (c2 >= '0' && c2 <= '9')) {
-                        cur += 1;
-                    } else {
-                        break;
-                    }
-                }
-                err_len = cur - pos.col;
+            while (scan_idx < len) {
+                if (current_ln == pos.ln) { line_start_idx = scan_idx; break; }
+                if (full_text[scan_idx] == '\n') { current_ln += 1; }
+                scan_idx += 1;
             }
-        }
 
-        let arrow_str -> String = "    ";
-        let k -> Int = 0;
-        while (k < pos.col) {
-            arrow_str += " ";
-            k += 1;
+            let line_end_idx -> Int = line_start_idx;
+            while (line_end_idx < len) {
+                let ch -> Char = full_text[line_end_idx];
+                if (ch == '\n' || ch == '\r') { break; }
+                line_end_idx += 1;
+            }
+
+            let raw_line -> String = full_text.slice(line_start_idx, line_end_idx);
+            let code_content -> String = "    " + raw_line + "\n";
+        
+            let code_id -> Int = register_string_constant(c, code_content);
+            let code_ptr -> String = get_string_ptr(code_id, code_content);
+            c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + code_ptr + ")\n");
+
+            let err_len -> Int = 1;
+            let line_len -> Int = raw_line.length();
+            if (pos.col < line_len) {
+                let ch -> Char = raw_line[pos.col];
+                if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '_' || (ch >= '0' && ch <= '9')) {
+                    let cur -> Int = pos.col + 1;
+                    while (cur < line_len) {
+                        let c2 -> Char = raw_line[cur];
+                        if ((c2 >= 'A' && c2 <= 'Z') || (c2 >= 'a' && c2 <= 'z') || c2 == '_' || (c2 >= '0' && c2 <= '9')) {
+                            cur += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    err_len = cur - pos.col;
+                }
+            }
+
+            let arrow_str -> String = "    ";
+            let k -> Int = 0;
+            while (k < pos.col) {
+                arrow_str += " ";
+                k += 1;
+            }
+            let j -> Int = 0;
+            while (j < err_len) {
+                arrow_str += "^";
+                j += 1;
+            }
+            arrow_str += "\n";
+            let arrow_id -> Int = register_string_constant(c, arrow_str);
+            let arrow_ptr -> String = get_string_ptr(arrow_id, arrow_str);
+            c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + arrow_ptr + ")\n");
         }
-        let j -> Int = 0;
-        while (j < err_len) {
-            arrow_str += "^";
-            j += 1;
-        }
-        arrow_str += "\n";
-        let arrow_id -> Int = register_string_constant(c, arrow_str);
-        let arrow_ptr -> String = get_string_ptr(arrow_id, arrow_str);
-        c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_raw_string") + "(i8* " + arrow_ptr + ")\n");
     }
 
     c.output_file.write(c.indent + "call void @exit(i32 1)\n");
@@ -6407,9 +6412,15 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 let a_len -> Int = 0;
                 if (args is !null) { a_len = args.length(); }
 
+                let print_hook -> String = get_mangled_symbol(c, "print_raw_string", null);
+                if (print_hook is null) {
+                    WhitelangExceptions.throw_type_error(n_call.pos, "Missing CompilerLink hook 'print_raw_string'. Did you import 'builtin'?");
+                    return void_result();
+                }
+
                 if (a_len == 0) {
                     let fmt_ptr -> String = next_reg(c);
-                    c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_raw_string") + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
+                    c.output_file.write(c.indent + "call void @" + print_hook + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
                     return void_result();
                 }
                 
@@ -6421,7 +6432,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                     a_idx += 1;
                 }
 
-                c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_raw_string") + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
+                c.output_file.write(c.indent + "call void @" + print_hook + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
                 return void_result();
             }
 
@@ -6992,28 +7003,16 @@ func compile_type_cast(c -> Compiler, val_res -> CompileResult, target_type -> I
 
 // BUILTIN HELPER
 func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position, origin_id -> Int) -> Void {
-    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string");
-    let hook_char -> String = get_mangled_symbol(c, "print_char");
-    let hook_int -> String = get_mangled_symbol(c, "print_int");
-    let hook_long -> String = get_mangled_symbol(c, "print_long");
-    let hook_float -> String = get_mangled_symbol(c, "print_float");
-    let hook_bool -> String = get_mangled_symbol(c, "print_bool");
 
     if (type_id == TYPE_STRING) {
-        if (hook_raw_str is !null) {
-            c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + reg + ")\n");
-        } else {
-            WhitelangExceptions.throw_type_error(pos, "Missing CompilerLink hook 'print_raw_string'. Did you import 'builtin'?");
-        }
+        let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + reg + ")\n");
         return;
     }
 
     if (type_id == TYPE_CHAR) {
-        if (hook_char is !null) {
-            c.output_file.write(c.indent + "call void @" + hook_char + "(i32 " + reg + ")\n");
-        } else {
-            WhitelangExceptions.throw_type_error(pos, "Missing CompilerLink hook 'print_char'.");
-        }
+        let hook_char -> String = get_mangled_symbol(c, "print_char", pos);
+        c.output_file.write(c.indent + "call void @" + hook_char + "(i32 " + reg + ")\n");
         return;
     }
 
@@ -7021,39 +7020,27 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
         if (type_id == TYPE_INT || type_id == TYPE_INT8 || type_id == TYPE_INT16 || type_id == TYPE_UINT16) {
             let temp_res -> CompileResult = CompileResult(reg=reg, type=type_id, origin_type=origin_id);
             if (type_id != TYPE_INT) { temp_res = promote_to_int(c, temp_res); }
-            if (hook_int is !null) {
-                c.output_file.write(c.indent + "call void @" + hook_int + "(i32 " + temp_res.reg + ")\n");
-            } else {
-                WhitelangExceptions.throw_type_error(pos, "Missing CompilerLink hook 'print_int'.");
-            }
+            let hook_int -> String = get_mangled_symbol(c, "print_int", pos);
+            c.output_file.write(c.indent + "call void @" + hook_int + "(i32 " + temp_res.reg + ")\n");
             return;
         }
         if (type_id == TYPE_LONG || type_id == TYPE_UINT32 || type_id == TYPE_INTSIZE) {
             let temp_res -> CompileResult = CompileResult(reg=reg, type=type_id, origin_type=origin_id);
             if (type_id != TYPE_LONG) { temp_res = promote_to_long(c, temp_res); }
-            if (hook_long is !null) {
-                c.output_file.write(c.indent + "call void @" + hook_long + "(i64 " + temp_res.reg + ")\n");
-            } else {
-                WhitelangExceptions.throw_type_error(pos, "Missing CompilerLink hook 'print_long'.");
-            }
+            let hook_long -> String = get_mangled_symbol(c, "print_long", pos);
+            c.output_file.write(c.indent + "call void @" + hook_long + "(i64 " + temp_res.reg + ")\n");
             return;
         }
         if (type_id == TYPE_FLOAT || type_id == TYPE_FLOAT32) {
             let temp_res -> CompileResult = CompileResult(reg=reg, type=type_id, origin_type=origin_id);
             if (type_id != TYPE_FLOAT) { temp_res = promote_to_float(c, temp_res); }
-            if (hook_float is !null) {
-                c.output_file.write(c.indent + "call void @" + hook_float + "(double " + temp_res.reg + ")\n");
-            } else {
-                WhitelangExceptions.throw_type_error(pos, "Missing CompilerLink hook 'print_float'.");
-            }
+            let hook_float -> String = get_mangled_symbol(c, "print_float", pos);
+            c.output_file.write(c.indent + "call void @" + hook_float + "(double " + temp_res.reg + ")\n");
             return;
         }
         if (type_id == TYPE_BOOL) {
-            if (hook_bool is !null) {
-                c.output_file.write(c.indent + "call void @" + hook_bool + "(i1 " + reg + ")\n");
-            } else {
-                WhitelangExceptions.throw_type_error(pos, "Missing CompilerLink hook 'print_bool'.");
-            }
+            let hook_bool -> String = get_mangled_symbol(c, "print_bool", pos);
+            c.output_file.write(c.indent + "call void @" + hook_bool + "(i1 " + reg + ")\n");
             return;
         }
         WhitelangExceptions.throw_type_error(pos, "Unsupported primitive type for printing.");
@@ -7061,24 +7048,21 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
     }
 
     if (type_id == TYPE_NULL || type_id == TYPE_NULLPTR) {
-        if (hook_raw_str is !null) {
-            c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
-        }
+        let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
         return;
     }
 
     if (is_pointer_type(c, type_id)) {
         let base_info -> SymbolInfo = c.ptr_base_map.get("" + type_id);
         if (base_info is !null && base_info.type == TYPE_BYTE) {
-            if (hook_raw_str is !null) {
-                c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + reg + ")\n");
-            }
+            let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
+            c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + reg + ")\n");
         } else {
-            if (hook_long is !null) {
-                let p_to_i -> String = next_reg(c);
-                c.output_file.write(c.indent + p_to_i + " = ptrtoint i8* " + reg + " to i64\n");
-                c.output_file.write(c.indent + "call void @" + hook_long + "(i64 " + p_to_i + ")\n");
-            }
+            let hook_long -> String = get_mangled_symbol(c, "print_long", pos);
+            let p_to_i -> String = next_reg(c);
+            c.output_file.write(c.indent + p_to_i + " = ptrtoint i8* " + reg + " to i64\n");
+            c.output_file.write(c.indent + "call void @" + hook_long + "(i64 " + p_to_i + ")\n");
         }
         return;
     }
@@ -7094,9 +7078,10 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
             }
         }
         // Fallback for pointers: convert ptrtoint to i64 then print_long
-            let ptr_i64 -> String = next_reg(c);
-            c.output_file.write(c.indent + ptr_i64 + " = ptrtoint i8* " + reg + " to i64\n");
-            c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_long") + "(i64 " + ptr_i64 + ")\n");
+        let ptr_i64 -> String = next_reg(c);
+        let hook_long -> String = get_mangled_symbol(c, "print_long", pos);
+        c.output_file.write(c.indent + ptr_i64 + " = ptrtoint i8* " + reg + " to i64\n");
+        c.output_file.write(c.indent + "call void @" + hook_long + "(i64 " + ptr_i64 + ")\n");
         return;
     }
     
@@ -7130,7 +7115,7 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
 }
 
 func compile_print_enum_internal(c -> Compiler, enum_reg -> String, s_info -> StructInfo, pos -> Position) -> Void {
-    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string");
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
     let default_label -> String = next_label(c);
     let end_label -> String = next_label(c);
     
@@ -7174,7 +7159,7 @@ func compile_print_enum_internal(c -> Compiler, enum_reg -> String, s_info -> St
 }
 
 func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> StructInfo, pos -> Position) -> Void {
-    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string");
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
     let header -> String = s_info.name + "(";
     let header_id -> Int = register_string_constant(c, header);
     let header_ptr -> String = get_string_ptr(header_id, header);
@@ -7213,7 +7198,7 @@ func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> S
 }
 
 func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> SymbolInfo, pos -> Position) -> Void {
-    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string");
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
     let elem_type -> Int = v_info.type;
     let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
     let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
@@ -7272,7 +7257,7 @@ func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> S
 }
 
 func compile_print_array_internal(c -> Compiler, arr_reg -> String, arr_info -> ArrayInfo, pos -> Position) -> Void {
-    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string");
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
     let elem_type -> Int = arr_info.base_type;
     let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
 
@@ -7346,7 +7331,7 @@ func compile_print_array_internal(c -> Compiler, arr_reg -> String, arr_info -> 
 }
 
 func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info -> StructInfo, pos -> Position) -> Void {
-    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string");
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
     let variant_llvm -> String = v_info.llvm_name;
 
     let is_null -> String = next_reg(c);
@@ -7441,7 +7426,8 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
 
     // other object
     c.output_file.write("\n" + label_default + ":\n");
-    c.output_file.write(c.indent + "call void @" + get_mangled_symbol(c, "print_long") + "(i64 " + payload_i64 + ")\n");
+    let hook_long -> String = get_mangled_symbol(c, "print_long", pos);
+    c.output_file.write(c.indent + "call void @" + hook_long + "(i64 " + payload_i64 + ")\n");
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
     c.output_file.write("\n" + label_end + ":\n");

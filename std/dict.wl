@@ -98,7 +98,7 @@ class Dict {
         let idx  -> Int = hash & mask;
         let first_tombstone -> Int = -1;
 
-        while (true) {
+        while true {
             let curr_h -> Int = self.hashes[idx];
 
             // found a fresh spot

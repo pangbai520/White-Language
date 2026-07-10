@@ -1767,12 +1767,23 @@ func mangle_wl_name(prefix -> String, base_name -> String, arg_types -> Vector(S
     return mangled;
 }
 
-func get_mangled_symbol(c -> Compiler, link_name -> String) -> String {
+func get_mangled_symbol(c -> Compiler, link_name -> String, pos -> Position) -> String {
     let func_key -> String = c.compiler_link.get(link_name);
-    if (func_key is null) { return null; }
-    let f_info -> FuncInfo = c.func_table.get(func_key);
-    if (f_info is null) { return null; }
-    return f_info.name;
+    let name -> String = null;
+    
+    if (func_key is !null) {
+        let f_info -> FuncInfo = c.func_table.get(func_key);
+        if (f_info is !null) {
+            name = f_info.name;
+        }
+    }
+
+    if (name is null && pos is !null) {
+        WhitelangExceptions.throw_type_error(pos, "Missing CompilerLink hook '" + link_name + "'. Did you import 'builtin'?");
+        return "__wl_missing_hook";
+    }
+
+    return name;
 }
 
 func consume_annotations(anns -> Vector(Struct), default_name -> String) -> SystemAnnResult {
