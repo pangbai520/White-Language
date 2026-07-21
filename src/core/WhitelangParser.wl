@@ -681,30 +681,43 @@ func postfix_expr(p -> Parser) -> Struct {
         else if (p.current_tok.type == TOK_LBRACKET) {
             let bracket_tok -> Token = p.current_tok;
             parser_advance(p); // skip [
-            
-            let first_idx -> Struct = expression(p);
+
             if (p.current_tok.type == TOK_COLON) {
                 parser_advance(p); // skip ':'
-                let second_idx -> Struct = expression(p);
-                
                 if (p.current_tok.type != TOK_RBRACKET) {
                     let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ']' after slice end index.");
+                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ']' after ':' in complete slice. Partial slice bounds are not supported. ");
+                    expression(p);
                 }
-                parser_advance(p); // skip ']'
-                
+                if (p.current_tok.type == TOK_RBRACKET) { parser_advance(p); }
                 let pos -> Position = WhitelangExceptions.Position(idx=0, ln=bracket_tok.line, col=bracket_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                node = SliceAccessNode(type=NODE_SLICE_ACCESS, target=node, start_idx=first_idx, end_idx=second_idx, pos=pos);
+                node = SliceAccessNode(type=NODE_SLICE_ACCESS, target=node, start_idx=null, end_idx=null, pos=pos);
             }
             else {
-                if (p.current_tok.type != TOK_RBRACKET) {
-                    let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ']' after index.");
+                let first_idx -> Struct = expression(p);
+                if (p.current_tok.type == TOK_COLON) {
+                    parser_advance(p); // skip ':'
+                    let second_idx -> Struct = expression(p);
+
+                    if (p.current_tok.type != TOK_RBRACKET) {
+                        let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                        WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ']' after slice end index.");
+                    }
+                    parser_advance(p); // skip ']'
+
+                    let pos -> Position = WhitelangExceptions.Position(idx=0, ln=bracket_tok.line, col=bracket_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                    node = SliceAccessNode(type=NODE_SLICE_ACCESS, target=node, start_idx=first_idx, end_idx=second_idx, pos=pos);
                 }
-                parser_advance(p); // skip ']'
-                
-                let pos -> Position = WhitelangExceptions.Position(idx=0, ln=bracket_tok.line, col=bracket_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                node = IndexAccessNode(type=NODE_INDEX_ACCESS, target=node, index_node=first_idx, pos=pos);
+                else {
+                    if (p.current_tok.type != TOK_RBRACKET) {
+                        let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                        WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ']' after index.");
+                    }
+                    parser_advance(p); // skip ']'
+
+                    let pos -> Position = WhitelangExceptions.Position(idx=0, ln=bracket_tok.line, col=bracket_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                    node = IndexAccessNode(type=NODE_INDEX_ACCESS, target=node, index_node=first_idx, pos=pos);
+                }
             }
         }
     }

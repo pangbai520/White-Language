@@ -70,7 +70,8 @@ struct CompileResult(
 
 struct SystemAnnResult(
     ann_flags -> Int,
-    compiler_link_name -> String
+    compiler_link_name -> String,
+    intrinsic_name -> String
 )
 
 struct TypeListNode(type -> Int)
@@ -1179,6 +1180,15 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
 
     if (base.type == NODE_REF) {
         let ref_node -> RefNode = node;
+        let ref_base -> BaseNode = ref_node.node;
+        if (ref_base.type == NODE_SLICE_ACCESS) {
+            let slice_node -> SliceAccessNode = ref_node.node;
+            if (slice_node.start_idx is null && slice_node.end_idx is null) {
+                let target_type -> Int = get_expr_type(c, slice_node.target);
+                if (target_type == TYPE_STRING) { return TYPE_STRING; }
+                return 0;
+            }
+        }
         let base_type -> Int = get_expr_type(c, ref_node.node);
         if (base_type != 0) { return get_ptr_type_id(c, base_type); }
         return 0;
@@ -1788,7 +1798,7 @@ func get_mangled_symbol(c -> Compiler, link_name -> String, pos -> Position) -> 
 }
 
 func consume_annotations(anns -> Vector(Struct), default_name -> String) -> SystemAnnResult {
-    let res -> SystemAnnResult = SystemAnnResult(ann_flags=0, compiler_link_name="");
+    let res -> SystemAnnResult = SystemAnnResult(ann_flags=0, compiler_link_name="", intrinsic_name="");
     if (anns is null) { return res; }
     
     let len -> Int = anns.length();
@@ -1797,12 +1807,27 @@ func consume_annotations(anns -> Vector(Struct), default_name -> String) -> Syst
         let ann_node -> AnnotationNode = anns[i];
         let name -> String = ann_node.name;
         
-        if (name == "ExportLib" || name == "CompilerIntrinsic") {
+        if (name == "ExportLib") {
             if (ann_node.args is !null && ann_node.args.length() > 0) {
                 WhitelangExceptions.throw_invalid_syntax(ann_node.pos, "@" + name + " annotation cannot have arguments.");
             }
-            if (name == "ExportLib") { res.ann_flags = res.ann_flags | FLAG_ANN_EXPORT; }
-            else if (name == "CompilerIntrinsic") { res.ann_flags = res.ann_flags | FLAG_ANN_INTRINSIC; }
+            res.ann_flags = res.ann_flags | FLAG_ANN_EXPORT;
+        } else if (name == "CompilerIntrinsic") {
+            let arg_count -> Int = 0;
+            if (ann_node.args is !null) { arg_count = ann_node.args.length(); }
+            if (arg_count > 1) {
+                WhitelangExceptions.throw_invalid_syntax(ann_node.pos, "@CompilerIntrinsic accepts at most one string literal argument.");
+            } else if (arg_count == 1) {
+                let a_node -> ArgNode = ann_node.args[0];
+                let base_val -> BaseNode = a_node.val;
+                if (base_val is null || base_val.type != NODE_STRING) {
+                    WhitelangExceptions.throw_invalid_syntax(ann_node.pos, "@CompilerIntrinsic argument must be a string literal.");
+                } else {
+                    let str_node -> StringNode = a_node.val;
+                    res.intrinsic_name = str_node.tok.value;
+                }
+            }
+            res.ann_flags = res.ann_flags | FLAG_ANN_INTRINSIC;
         } else if (name == "CompilerLink") {
             let link_name -> String = default_name;
             if (ann_node.args is !null && ann_node.args.length() > 0) {

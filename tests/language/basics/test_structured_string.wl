@@ -10,11 +10,15 @@ func main() -> Int {
     let prefix -> String = "White";
     let language -> String = prefix + "Lang";
     let description -> String = language + "-" + 42 + "-" + true + '-';
+    let bounded -> String = language[0:5];
+    let whole -> String = ref language[:];
 
     let methods_ok -> Bool = language.length() == 9 &&
                               language.at(0) == 'W' &&
                               language[8] == 'g' &&
                               language.slice(5, 9) == "Lang" &&
+                              bounded == "White" &&
+                              whole == "WhiteLang" &&
                               language.starts_with("White") &&
                               language.ends_with("Lang");
     let conversions_ok -> Bool = description == "WhiteLang-42-true-";

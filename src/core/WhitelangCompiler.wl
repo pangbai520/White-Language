@@ -2172,15 +2172,15 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         }
 
         if ((sys_anns.ann_flags & FLAG_ANN_INTRINSIC) != 0) {
-            if (full_var_name != "platform.OS") {
-                WhitelangExceptions.throw_internal_compiler_error(node.pos, "Unknown intrinsic global '" + full_var_name + "'.");
+            if (sys_anns.intrinsic_name != "target_os") {
+                WhitelangExceptions.throw_internal_compiler_error(node.pos, "Unknown intrinsic global '" + sys_anns.intrinsic_name + "'.");
                 return void_result();
             }
             if (target_type_id != TYPE_STRING || !node.is_const) {
                 WhitelangExceptions.throw_type_error(node.pos, "Intrinsic 'sys.OS' must be declared as const String.");
                 return void_result();
             }
-            c.global_symbol_table.put(full_var_name, SymbolInfo(reg="$intrinsic.target_os", type=TYPE_STRING, origin_type=TYPE_STRING, is_const=true));
+            c.global_symbol_table.put(full_var_name, SymbolInfo(reg="$intrinsic." + sys_anns.intrinsic_name, type=TYPE_STRING, origin_type=TYPE_STRING, is_const=true));
             return void_result();
         }
 
@@ -4971,6 +4971,11 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
 }
 
 func compile_slice_access(c -> Compiler, node -> SliceAccessNode) -> CompileResult {
+    if (node.start_idx is null || node.end_idx is null) {
+        WhitelangExceptions.throw_invalid_syntax(node.pos, "Expected 'ref' before slice '[:]'. ");
+        return void_result();
+    }
+
     let old_exp -> Int = c.expected_type;
     c.expected_type = 0;
     let target_res -> CompileResult = compile_node(c, node.target);
@@ -4995,7 +5000,7 @@ func compile_slice_access(c -> Compiler, node -> SliceAccessNode) -> CompileResu
         let slice_len -> String = next_reg(c);
         c.output_file.write(c.indent + slice_len + " = sub i32 " + end_res.reg + ", " + start_res.reg + "\n");
 
-        // TODO: boundary checks, for now trust start < end < len
+        emit_slice_bounds_check(c, start_res.reg, end_res.reg, src_len, node.pos);
 
         let slice_len_64 -> String = next_reg(c);
         c.output_file.write(c.indent + slice_len_64 + " = zext i32 " + slice_len + " to i64\n");
@@ -6045,6 +6050,19 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     // ref
     if (base.type == NODE_REF) {
         let r_node -> RefNode = node;
+
+        let ref_base -> BaseNode = r_node.node;
+        if (ref_base.type == NODE_SLICE_ACCESS) {
+            let slice_node -> SliceAccessNode = r_node.node;
+            if (slice_node.start_idx is null && slice_node.end_idx is null) {
+                let target_type -> Int = get_expr_type(c, slice_node.target);
+                if (target_type != TYPE_STRING) {
+                    WhitelangExceptions.throw_type_error(r_node.pos, "'ref value[:]' currently only supports 'String' type. ");
+                    return void_result();
+                }
+                return compile_node(c, slice_node.target);
+            }
+        }
 
         let lval -> CompileResult = compile_lvalue_ptr(c, r_node.node, r_node.pos);
         if (lval is null) { return void_result(); }
