@@ -1,192 +1,260 @@
-
-// This file intentionally implements the legacy WhiteLang String ABI where a
-// String value is a pointer to NUL-terminated bytes preceded by the 8-byte ARC
-// header. It lets the last CString-based compiler build the first compiler that
-// emits the structured String ABI. Do not link it into structured-String builds.
-
-#include <limits.h>
-#include <stdint.h>
+// runtime/wl_runtime.c
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+#include <stdint.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+// Define WhiteLang String struct layout to ensure C compatibility
+typedef struct {
+    char* buf;
+    int len;
+    int cap;
+} wl_string;
 
 enum {
     WL_STRING_TYPE_ID = 5,
     WL_OBJECT_HEADER_SIZE = 8
 };
 
-static char* legacy_alloc_string(size_t capacity) {
-    if (capacity > INT_MAX || capacity > SIZE_MAX - WL_OBJECT_HEADER_SIZE - 1) return NULL;
-    unsigned char* mem = (unsigned char*)malloc(WL_OBJECT_HEADER_SIZE + capacity + 1);
-    if (mem == NULL) return NULL;
-    *(int*)mem = 0;
-    *(int*)(mem + sizeof(int)) = WL_STRING_TYPE_ID;
-    char* str = (char*)(mem + WL_OBJECT_HEADER_SIZE);
-    memset(str, 0, capacity + 1);
+static wl_string* wl_alloc_string_storage(size_t capacity) {
+    if (capacity > INT_MAX || capacity > SIZE_MAX - WL_OBJECT_HEADER_SIZE - sizeof(wl_string) - 1) {
+        return NULL;
+    }
+
+    const size_t total_size = WL_OBJECT_HEADER_SIZE + sizeof(wl_string) + capacity + 1;
+    unsigned char* mem = (unsigned char*)malloc(total_size);
+    if (mem == NULL) {
+        return NULL;
+    }
+
+    int* rc = (int*)mem;
+    int* type_id = (int*)(mem + sizeof(int));
+    wl_string* str = (wl_string*)(mem + WL_OBJECT_HEADER_SIZE);
+
+    *rc = 0;
+    *type_id = WL_STRING_TYPE_ID;
+    str->buf = (char*)(mem + WL_OBJECT_HEADER_SIZE + sizeof(wl_string));
+    str->len = (int)capacity;
+    str->cap = (int)capacity;
+    memset(str->buf, 0, capacity + 1);
     return str;
 }
 
 int is_windows() {
-#ifdef _WIN32
-    return 1;
-#else
-    return 0;
-#endif
+    #ifdef _WIN32
+        return 1;
+    #else
+        return 0;
+    #endif
 }
 
 int is_macos() {
-#ifdef __APPLE__
-    return 1;
-#else
-    return 0;
-#endif
+    #ifdef __APPLE__
+        return 1;
+    #else
+        return 0;
+    #endif
 }
 
-char* to_wl_str(const char* c_str) {
+wl_string* to_wl_str(const char* c_str) {
     if (c_str == NULL) return NULL;
     const size_t len = strlen(c_str);
-    char* result = legacy_alloc_string(len);
-    if (result != NULL) memcpy(result, c_str, len + 1);
-    return result;
+    wl_string* wl_str = wl_alloc_string_storage(len);
+    if (wl_str == NULL) return NULL;
+    memcpy(wl_str->buf, c_str, len + 1);
+    return wl_str;
 }
 
-char* get_arg(char** argv, int idx) {
-    if (argv == NULL || idx < 0) return NULL;
+wl_string* get_arg(char** argv, int idx) {
+    if (argv == NULL) return NULL;
     return to_wl_str(argv[idx]);
 }
 
-int system_call(char* cmd) {
-    if (cmd == NULL) return -1;
-    return system(cmd);
+int system_call(wl_string* cmd) {
+    if (cmd == NULL || cmd->buf == NULL) return -1;
+    return system(cmd->buf);
 }
 
-char* wl_getenv(char* name) {
-    if (name == NULL) return NULL;
-    return to_wl_str(getenv(name));
+wl_string* wl_getenv(wl_string* name) {
+    if (name == NULL || name->buf == NULL) return NULL;
+    char* val = getenv(name->buf);
+    if (val == NULL) return NULL;
+    return to_wl_str(val);
 }
 
-void __wl_str_set(char* s, int idx, int val) {
-    if (s != NULL && idx >= 0) s[idx] = (char)val;
+void __wl_str_set(wl_string* s, int idx, int val) {
+    if (s && s->buf && idx >= 0 && idx < s->cap) {
+        s->buf[idx] = (char)val;
+    }
 }
 
-char __wl_str_get(char* s, int idx) {
-    if (s == NULL || idx < 0) return 0;
-    return s[idx];
+char __wl_str_get(wl_string* s, int idx) {
+    if (s && s->buf && idx >= 0 && idx < s->len) {
+        return s->buf[idx];
+    }
+    return 0;
 }
 
-char* wl_alloc_string(long long size) {
-    if (size < 0) return NULL;
-    return legacy_alloc_string((size_t)size);
-}
-
-void* wl_string_data(char* s) {
-    return s;
-}
-
-int wl_string_at(char* s, int idx) {
-    if (s == NULL || idx < 0 || (size_t)idx >= strlen(s)) return 0;
-    return (unsigned char)s[idx];
-}
-
-char* wl_string_slice(char* s, int start, int end) {
+void* wl_string_data(wl_string* s) {
     if (s == NULL) return NULL;
-    const int source_len = (int)strlen(s);
+    return s->buf;
+}
+
+int wl_string_at(wl_string* s, int idx) {
+    if (s == NULL || s->buf == NULL || idx < 0 || idx >= s->len) return 0;
+    return (unsigned char)s->buf[idx];
+}
+
+wl_string* wl_string_slice(wl_string* s, int start, int end) {
+    if (s == NULL || s->buf == NULL) return NULL;
     if (start < 0) start = 0;
-    if (end > source_len) end = source_len;
+    if (end > s->len) end = s->len;
     if (start > end) start = end;
+
     const size_t len = (size_t)(end - start);
-    char* result = legacy_alloc_string(len);
-    if (result != NULL && len > 0) memcpy(result, s + start, len);
-    return result;
-}
-
-int wl_string_ends_with(char* s, char* suffix) {
-    if (s == NULL || suffix == NULL) return 0;
-    const size_t s_len = strlen(s);
-    const size_t suffix_len = strlen(suffix);
-    if (suffix_len > s_len) return 0;
-    return memcmp(s + s_len - suffix_len, suffix, suffix_len) == 0;
-}
-
-int wl_string_starts_with(char* s, char* prefix) {
-    if (s == NULL || prefix == NULL) return 0;
-    const size_t s_len = strlen(s);
-    const size_t prefix_len = strlen(prefix);
-    if (prefix_len > s_len) return 0;
-    return memcmp(s, prefix, prefix_len) == 0;
-}
-
-char* wl_string_concat(char* left, char* right) {
-    if (left == NULL || right == NULL) return NULL;
-    const size_t left_len = strlen(left);
-    const size_t right_len = strlen(right);
-    if (left_len > SIZE_MAX - right_len) return NULL;
-    char* result = legacy_alloc_string(left_len + right_len);
+    wl_string* result = wl_alloc_string_storage(len);
     if (result == NULL) return NULL;
-    memcpy(result, left, left_len);
-    memcpy(result + left_len, right, right_len + 1);
+    if (len > 0) memcpy(result->buf, s->buf + start, len);
+    result->buf[len] = '\0';
     return result;
 }
 
-int wl_string_compare(char* left, char* right) {
+int wl_string_ends_with(wl_string* s, wl_string* suffix) {
+    if (s == NULL || suffix == NULL || s->buf == NULL || suffix->buf == NULL) return 0;
+    if (suffix->len > s->len) return 0;
+    const int offset = s->len - suffix->len;
+    for (int i = 0; i < suffix->len; ++i) {
+        if (s->buf[offset + i] != suffix->buf[i]) return 0;
+    }
+    return 1;
+}
+
+int wl_string_starts_with(wl_string* s, wl_string* prefix) {
+    if (s == NULL || prefix == NULL || s->buf == NULL || prefix->buf == NULL) return 0;
+    if (prefix->len > s->len) return 0;
+    for (int i = 0; i < prefix->len; ++i) {
+        if (s->buf[i] != prefix->buf[i]) return 0;
+    }
+    return 1;
+}
+
+wl_string* wl_string_concat(wl_string* left, wl_string* right) {
+    if (left == NULL || right == NULL || left->buf == NULL || right->buf == NULL) return NULL;
+    const size_t left_len = (size_t)left->len;
+    const size_t right_len = (size_t)right->len;
+    if (left_len > SIZE_MAX - right_len) return NULL;
+
+    wl_string* result = wl_alloc_string_storage(left_len + right_len);
+    if (result == NULL) return NULL;
+    if (left_len > 0) memcpy(result->buf, left->buf, left_len);
+    if (right_len > 0) memcpy(result->buf + left_len, right->buf, right_len);
+    result->buf[left_len + right_len] = '\0';
+    return result;
+}
+
+int wl_string_compare(wl_string* left, wl_string* right) {
     if (left == right) return 0;
     if (left == NULL) return -1;
     if (right == NULL) return 1;
-    return strcmp(left, right);
+
+    const int common_len = left->len < right->len ? left->len : right->len;
+    for (int i = 0; i < common_len; ++i) {
+        const unsigned char lhs = (unsigned char)left->buf[i];
+        const unsigned char rhs = (unsigned char)right->buf[i];
+        if (lhs < rhs) return -1;
+        if (lhs > rhs) return 1;
+    }
+    if (left->len < right->len) return -1;
+    if (left->len > right->len) return 1;
+    return 0;
 }
 
-void* wl_fopen(char* filename, char* mode) {
-    if (filename == NULL || mode == NULL) return NULL;
-    return fopen(filename, mode);
+// safely allocate an empty string of a specified size
+wl_string* wl_alloc_string(long long size) {
+    if (size < 0) return NULL;
+    return wl_alloc_string_storage((size_t)size);
 }
 
-long long wl_fread(char* dest, long long size, long long count, void* stream) {
-    if (dest == NULL || stream == NULL || size < 0 || count < 0) return 0;
-    return (long long)fread(dest, (size_t)size, (size_t)count, (FILE*)stream);
+void* wl_fopen(wl_string* filename, wl_string* mode) {
+    if (filename == NULL || filename->buf == NULL || mode == NULL || mode->buf == NULL) {
+        return NULL;
+    }
+    return fopen(filename->buf, mode->buf);
 }
 
-long long wl_fwrite(char* src, long long size, long long count, void* stream) {
-    if (src == NULL || stream == NULL || size < 0 || count < 0) return 0;
-    return (long long)fwrite(src, (size_t)size, (size_t)count, (FILE*)stream);
+long long wl_fread(wl_string* dest, long long size, long long count, void* stream) {
+    if (dest == NULL || dest->buf == NULL || stream == NULL || size < 0 || count < 0) {
+        return 0;
+    }
+    if (size == 0 || count == 0) {
+        dest->len = 0;
+        if (dest->cap >= 0) dest->buf[0] = '\0';
+        return 0;
+    }
+
+    const size_t item_size = (size_t)size;
+    size_t item_count = (size_t)count;
+    const size_t max_count = (size_t)dest->cap / item_size;
+    if (item_count > max_count) item_count = max_count;
+
+    const size_t items_read = fread(dest->buf, item_size, item_count, (FILE*)stream);
+    const size_t bytes_read = items_read * item_size;
+    dest->len = (int)bytes_read;
+    dest->buf[bytes_read] = '\0';
+    return (long long)items_read;
 }
 
-int wl_remove(char* filename) {
-    if (filename == NULL) return -1;
-    return remove(filename);
+long long wl_fwrite(wl_string* src, long long size, long long count, void* stream) {
+    if (src == NULL || src->buf == NULL || stream == NULL || size < 0 || count < 0) {
+        return 0;
+    }
+    if (size == 0 || count == 0) return 0;
+
+    const size_t item_size = (size_t)size;
+    size_t item_count = (size_t)count;
+    const size_t max_count = (size_t)src->len / item_size;
+    if (item_count > max_count) item_count = max_count;
+    return (long long)fwrite(src->buf, item_size, item_count, (FILE*)stream);
+}
+
+int wl_remove(wl_string* filename) {
+    if (filename == NULL || filename->buf == NULL) return -1;
+    return remove(filename->buf);
 }
 
 void wl_format_i128(char* buf, unsigned long long low, long long high) {
     __int128 val = (__int128)(((unsigned __int128)(unsigned long long)high << 64) | low);
     if (val == 0) {
         strcpy(buf, "0");
-return;
+        return;
     }
-int is_neg = 0;
+    int is_neg = 0;
     unsigned __int128 uval;
     if (val < 0) {
-is_neg = 1;
+        is_neg = 1;
         uval = (unsigned __int128)(-val);
     } else {
         uval = (unsigned __int128)val;
-}
+    }
     
     char temp[64];
     int pos = 0;
     while (uval > 0) {
-temp[pos++] = (char)((uval % 10) + '0');
+        temp[pos++] = (char)((uval % 10) + '0');
         uval /= 10;
-}
+    }
     if (is_neg) {
-temp[pos++] = '-';
-}
+        temp[pos++] = '-';
+    }
     int i;
     for (i = 0; i < pos; i++) {
-buf[i] = temp[pos - 1 - i];
-}
+        buf[i] = temp[pos - 1 - i];
+    }
     buf[pos] = '\0';
 }
 
@@ -194,12 +262,12 @@ void wl_format_u128(char* buf, unsigned long long low, unsigned long long high) 
     unsigned __int128 val = ((unsigned __int128)high << 64) | low;
     if (val == 0) {
         strcpy(buf, "0");
-return;
-}
+        return;
+    }
     char temp[64];
     int pos = 0;
     while (val > 0) {
-temp[pos++] = (char)((val % 10) + '0');
+        temp[pos++] = (char)((val % 10) + '0');
         val /= 10;
     }
     int i;
