@@ -2,6 +2,7 @@ import "sys"
 import "sys/win32"
 
 extern func write(fd -> Int, buf -> AnyPtr, count -> Long) -> Long from "C";
+extern func wl_string_data(s -> String) -> AnyPtr from "C";
 
 let console_init_done -> Bool = false;
 
@@ -105,22 +106,24 @@ func __wl_print_float(v -> Float) -> Void {
 func __wl_print_bool(v -> Bool) -> Void {
     let s -> String = "false";
     if (v) { s = "true"; }
+    let data -> AnyPtr = wl_string_data(s);
     
     if (sys.OS == "WINDOWS") {
         let handle -> AnyPtr = win32.GetStdHandle(win32.STD_OUTPUT_HANDLE);
         if (handle is !nullptr) {
             let bytes_written -> Int = 0;
-            win32.WriteFile(handle, s, s.length(), ref bytes_written, nullptr);
+            win32.WriteFile(handle, data, s.length(), ref bytes_written, nullptr);
         }
     } else {
         let len_long -> Long = s.length();
-        write(1, s, len_long);
+        write(1, data, len_long);
     }
 }
 
 @CompilerLink
 func print(s -> String) -> Void {
     if (s is null) { s = "null"; }
+    let data -> AnyPtr = wl_string_data(s);
     if (sys.OS == "WINDOWS") {
         let handle -> AnyPtr = win32.GetStdHandle(win32.STD_OUTPUT_HANDLE);
         if (handle is !nullptr) {
@@ -129,12 +132,12 @@ func print(s -> String) -> Void {
                 console_init_done = true;
             }
             let bytes_written -> Int = 0;
-            win32.WriteFile(handle, s, s.length(), ref bytes_written, nullptr);
+            win32.WriteFile(handle, data, s.length(), ref bytes_written, nullptr);
             win32.WriteFile(handle, "\n", 1, ref bytes_written, nullptr);
         }
     } else {
         let len_long -> Long = s.length();
-        write(1, s, len_long);
+        write(1, data, len_long);
         write(1, "\n", 1);
     }
 }

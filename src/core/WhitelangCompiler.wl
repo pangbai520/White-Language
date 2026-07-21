@@ -690,7 +690,11 @@ func register_string_constant(c -> Compiler, val -> String) -> Int {
 
 func get_string_ptr(s_id -> Int, s_val -> String) -> String {
     let len -> Int = s_val.length() + 1;
-    return "getelementptr inbounds ({ i32, i32, [" + len + " x i8] }, { i32, i32, [" + len + " x i8] }* @.str." + s_id + ", i32 0, i32 2, i32 0)";
+    return "getelementptr inbounds ([" + len + " x i8], [" + len + " x i8]* @.str.bytes." + s_id + ", i32 0, i32 0)";
+}
+
+func get_string_object_ptr(s_id -> Int) -> String {
+    return "getelementptr inbounds ({ i32, i32, %struct.$String }, { i32, i32, %struct.$String }* @.str." + s_id + ", i32 0, i32 2)";
 }
 
 func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
@@ -709,8 +713,6 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
         res.type = TYPE_LONG;
     }
 
-    let buf_ptr -> String = emit_alloc_obj(c, "64", "" + TYPE_STRING, "i8*");
-
     if (res.type == TYPE_INT128 || res.type == TYPE_UINT128) {
         let fmt_func -> String = "@wl_format_i128";
         if (res.type == TYPE_UINT128) {
@@ -723,16 +725,58 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
         let high_reg -> String = next_reg(c);
         c.output_file.write(c.indent + high_reg + " = trunc i128 " + shifted + " to i64\n");
         
-        c.output_file.write(c.indent + "call void " + fmt_func + "(i8* " + buf_ptr + ", i64 " + low_reg + ", i64 " + high_reg + ")\n");
-        return CompileResult(reg=buf_ptr, type=TYPE_STRING);
+        // fix: allocate struct + 64 bytes buffer + 1 null
+        let obj_i8 -> String = emit_alloc_obj(c, "81", "" + TYPE_STRING, "i8*");
+        let new_str_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
+        
+        let buf_ptr_i8 -> String = next_reg(c);
+        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
+
+        let out_buf_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
+        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
+        
+        c.output_file.write(c.indent + "call void " + fmt_func + "(i8* " + buf_ptr_i8 + ", i64 " + low_reg + ", i64 " + high_reg + ")\n");
+
+        let actual_len -> String = next_reg(c);
+        c.output_file.write(c.indent + actual_len + " = call i32 @strlen(i8* " + buf_ptr_i8 + ")\n");
+        let out_len_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
+        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_len_field + "\n");
+        let out_cap_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
+        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_cap_field + "\n");
+
+        return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_UINT64 || res.type == TYPE_UINTSIZE) {
+        let obj_i8 -> String = emit_alloc_obj(c, "49", "" + TYPE_STRING, "i8*");
+        let new_str_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
+        
+        let buf_ptr_i8 -> String = next_reg(c);
+        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
+
+        let out_buf_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
+        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
+
         let fmt -> String = next_reg(c);
         c.output_file.write(c.indent + fmt + " = getelementptr [5 x i8], [5 x i8]* @.fmt_ulong_simple, i32 0, i32 0\n");
-        
-        c.output_file.write(c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 32, i8* " + fmt + ", i64 " + res.reg + ")\n");
-        return CompileResult(reg=buf_ptr, type=TYPE_STRING);
+        c.output_file.write(c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr_i8 + ", i64 32, i8* " + fmt + ", i64 " + res.reg + ")\n");
+
+        let actual_len -> String = next_reg(c);
+        c.output_file.write(c.indent + actual_len + " = call i32 @strlen(i8* " + buf_ptr_i8 + ")\n");
+        let out_len_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
+        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_len_field + "\n");
+        let out_cap_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
+        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_cap_field + "\n");
+
+        return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_INT || res.type == TYPE_BYTE) {
@@ -741,28 +785,88 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
             val_reg = next_reg(c);
             c.output_file.write(c.indent + val_reg + " = zext i8 " + res.reg + " to i32\n");
         }
+
+        let obj_i8 -> String = emit_alloc_obj(c, "49", "" + TYPE_STRING, "i8*");
+        let new_str_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
+        
+        let buf_ptr_i8 -> String = next_reg(c);
+        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
+
+        let out_buf_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
+        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
+
         let fmt -> String = next_reg(c);
         c.output_file.write(c.indent + fmt + " = getelementptr [3 x i8], [3 x i8]* @.fmt_int_simple, i32 0, i32 0\n");
-        
-        // call snprintf(buf_ptr, 32, "%d", val)
-        c.output_file.write(c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 32, i8* " + fmt + ", i32 " + val_reg + ")\n");
-        return CompileResult(reg=buf_ptr, type=TYPE_STRING);
+        c.output_file.write(c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr_i8 + ", i64 32, i8* " + fmt + ", i32 " + val_reg + ")\n");
+
+        let actual_len -> String = next_reg(c);
+        c.output_file.write(c.indent + actual_len + " = call i32 @strlen(i8* " + buf_ptr_i8 + ")\n");
+        let out_len_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
+        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_len_field + "\n");
+        let out_cap_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
+        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_cap_field + "\n");
+
+        return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_LONG) {
+        let obj_i8 -> String = emit_alloc_obj(c, "49", "" + TYPE_STRING, "i8*");
+        let new_str_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
+        
+        let buf_ptr_i8 -> String = next_reg(c);
+        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
+
+        let out_buf_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
+        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
+
         let fmt -> String = next_reg(c);
         c.output_file.write(c.indent + fmt + " = getelementptr [5 x i8], [5 x i8]* @.fmt_long_simple, i32 0, i32 0\n");
-        
-        c.output_file.write(c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 32, i8* " + fmt + ", i64 " + res.reg + ")\n");
-        return CompileResult(reg=buf_ptr, type=TYPE_STRING);
+        c.output_file.write(c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr_i8 + ", i64 32, i8* " + fmt + ", i64 " + res.reg + ")\n");
+
+        let actual_len -> String = next_reg(c);
+        c.output_file.write(c.indent + actual_len + " = call i32 @strlen(i8* " + buf_ptr_i8 + ")\n");
+        let out_len_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
+        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_len_field + "\n");
+        let out_cap_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
+        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_cap_field + "\n");
+
+        return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_FLOAT) {
+        let obj_i8 -> String = emit_alloc_obj(c, "49", "" + TYPE_STRING, "i8*");
+        let new_str_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
+        
+        let buf_ptr_i8 -> String = next_reg(c);
+        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
+
+        let out_buf_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
+        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
+
         let fmt -> String = next_reg(c);
         c.output_file.write(c.indent + fmt + " = getelementptr [3 x i8], [3 x i8]* @.fmt_float_simple, i32 0, i32 0\n");
-        
-        c.output_file.write(c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr + ", i64 32, i8* " + fmt + ", double " + res.reg + ")\n");
-        return CompileResult(reg=buf_ptr, type=TYPE_STRING);
+        c.output_file.write(c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr_i8 + ", i64 32, i8* " + fmt + ", double " + res.reg + ")\n");
+
+        let actual_len -> String = next_reg(c);
+        c.output_file.write(c.indent + actual_len + " = call i32 @strlen(i8* " + buf_ptr_i8 + ")\n");
+        let out_len_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
+        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_len_field + "\n");
+        let out_cap_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
+        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_cap_field + "\n");
+
+        return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_BOOL) {
@@ -774,28 +878,87 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
         let src_reg -> String = next_reg(c);
         c.output_file.write(c.indent + src_reg + " = select i1 " + res.reg + ", i8* " + ptr_true + ", i8* " + ptr_false + "\n");
         
-        c.output_file.write(c.indent + "call i8* @strcpy(i8* " + buf_ptr + ", i8* " + src_reg + ")\n");
-        return CompileResult(reg=buf_ptr, type=TYPE_STRING);
+        // allocate struct + 6 bytes + 1 null
+        let obj_i8 -> String = emit_alloc_obj(c, "23", "" + TYPE_STRING, "i8*");
+        let new_str_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
+        
+        let buf_ptr_i8 -> String = next_reg(c);
+        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
+
+        let out_buf_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
+        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
+
+        c.output_file.write(c.indent + "call i8* @strcpy(i8* " + buf_ptr_i8 + ", i8* " + src_reg + ")\n");
+
+        let actual_len -> String = next_reg(c);
+        c.output_file.write(c.indent + actual_len + " = call i32 @strlen(i8* " + buf_ptr_i8 + ")\n");
+        let out_len_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
+        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_len_field + "\n");
+        let out_cap_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
+        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_cap_field + "\n");
+
+        return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_CHAR) {
-        let buf_ptr -> String = emit_alloc_obj(c, "2", "" + TYPE_STRING, "i8*");
-        let char_i8 -> String = next_reg(c);
+        // allocate struct + 2 bytes + 1 null
+        let obj_i8 -> String = emit_alloc_obj(c, "19", "" + TYPE_STRING, "i8*");
+        let new_str_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
+        
+        let buf_ptr_i8 -> String = next_reg(c);
+        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
 
+        let char_i8 -> String = next_reg(c);
         c.output_file.write(c.indent + char_i8 + " = trunc i32 " + res.reg + " to i8\n");
-        c.output_file.write(c.indent + "store i8 " + char_i8 + ", i8* " + buf_ptr + "\n");
+        c.output_file.write(c.indent + "store i8 " + char_i8 + ", i8* " + buf_ptr_i8 + "\n");
 
         let next_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + next_ptr + " = getelementptr inbounds i8, i8* " + buf_ptr + ", i32 1\n");
+        c.output_file.write(c.indent + next_ptr + " = getelementptr inbounds i8, i8* " + buf_ptr_i8 + ", i32 1\n");
         c.output_file.write(c.indent + "store i8 0, i8* " + next_ptr + "\n");
+
+        let out_buf_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
+        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
         
-        return CompileResult(reg=buf_ptr, type=TYPE_STRING);
+        let out_len_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
+        c.output_file.write(c.indent + "store i32 1, i32* " + out_len_field + "\n");
+        let out_cap_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
+        c.output_file.write(c.indent + "store i32 1, i32* " + out_cap_field + "\n");
+
+        return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
     }
+
+    // fallback for null
+    let obj_i8 -> String = emit_alloc_obj(c, "22", "" + TYPE_STRING, "i8*"); // "null" = 4 + 1
+    let new_str_ptr -> String = next_reg(c);
+    c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
+    
+    let buf_ptr_i8 -> String = next_reg(c);
+    c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
+
+    let out_buf_field -> String = next_reg(c);
+    c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
+    c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
 
     let empty_src -> String = next_reg(c);
     c.output_file.write(c.indent + empty_src + " = getelementptr [5 x i8], [5 x i8]* @.str_null, i32 0, i32 0\n");
-    c.output_file.write(c.indent + "call i8* @strcpy(i8* " + buf_ptr + ", i8* " + empty_src + ")\n");
-    return CompileResult(reg=buf_ptr, type=TYPE_STRING);
+    c.output_file.write(c.indent + "call i8* @strcpy(i8* " + buf_ptr_i8 + ", i8* " + empty_src + ")\n");
+
+    let out_len_field -> String = next_reg(c);
+    c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
+    c.output_file.write(c.indent + "store i32 4, i32* " + out_len_field + "\n");
+    let out_cap_field -> String = next_reg(c);
+    c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
+    c.output_file.write(c.indent + "store i32 4, i32* " + out_cap_field + "\n");
+
+    return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
 }
 
 func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
@@ -1437,8 +1600,8 @@ func emit_slice_bounds_check(c -> Compiler, start_reg -> String, end_reg -> Stri
 
 // === COMPILE ===
 func compile_arc_hooks(c -> Compiler) -> Void {
-// TODO: ARC operations are currently non-atomic. 
-// Once we go multi-threaded, we must upgrade these to atomicrmw (or proper LLVM atomics) 
+// TODO: ARC operations are currently non-atomic.
+// Once we go multi-threaded, we must upgrade these to atomicrmw (or proper LLVM atomics)
 // to prevent catastrophic races, though we'll need to watch out for the performance hit.
 
     // --- __wl_retain(i8* ptr) ---
@@ -1586,23 +1749,30 @@ func compile_arc_hooks(c -> Compiler) -> Void {
         } else {
             let s_info -> StructInfo = c.struct_id_map.get("" + t_id);
             if (s_info is !null) {
-                // Struct: release each ref field
-                c.output_file.write("  %struct_cast_" + t_id + " = bitcast i8* %ptr to " + s_info.llvm_name + "*\n");
+                // String bytes are inline in the same ARC allocation.
+                if (t_id == TYPE_STRING) {
+                    // Dynamic strings keep their bytes inline with the ARC object.
+                    // Static strings have rc=-1 and never reach this block.
+                    c.output_file.write("  br label %free_default\n");
+                } else {
+                    // release each ref field
+                    c.output_file.write("  %struct_cast_" + t_id + " = bitcast i8* %ptr to " + s_info.llvm_name + "*\n");
 
-                let fields_vec -> Vector(Struct) = s_info.fields;
-                let f_len -> Int = 0; if (fields_vec is !null) { f_len = fields_vec.length(); }
-                let f_idx -> Int = 0;
-                
-                while (f_idx < f_len) {
-                    let f_curr -> FieldInfo = fields_vec[f_idx];
-                    if (is_ref_type(c, f_curr.type) && f_curr.name != "_vptr") {
-                        c.output_file.write("  %f_ptr_" + t_id + "_" + f_curr.offset + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* %struct_cast_" + t_id + ", i32 0, i32 " + f_curr.offset + "\n");
-                        c.output_file.write("  %f_val_" + t_id + "_" + f_curr.offset + " = load " + f_curr.llvm_type + ", " + f_curr.llvm_type + "* %f_ptr_" + t_id + "_" + f_curr.offset + "\n");
-                        emit_release(c, "%f_val_" + t_id + "_" + f_curr.offset, f_curr.type);
+                    let fields_vec -> Vector(Struct) = s_info.fields;
+                    let f_len -> Int = 0; if (fields_vec is !null) { f_len = fields_vec.length(); }
+                    let f_idx -> Int = 0;
+                    
+                    while (f_idx < f_len) {
+                        let f_curr -> FieldInfo = fields_vec[f_idx];
+                        if (is_ref_type(c, f_curr.type) && f_curr.name != "_vptr") {
+                            c.output_file.write("  %f_ptr_" + t_id + "_" + f_curr.offset + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* %struct_cast_" + t_id + ", i32 0, i32 " + f_curr.offset + "\n");
+                            c.output_file.write("  %f_val_" + t_id + "_" + f_curr.offset + " = load " + f_curr.llvm_type + ", " + f_curr.llvm_type + "* %f_ptr_" + t_id + "_" + f_curr.offset + "\n");
+                            emit_release(c, "%f_val_" + t_id + "_" + f_curr.offset, f_curr.type);
+                        }
+                        f_idx += 1;
                     }
-                    f_idx += 1;
+                    c.output_file.write("  br label %free_default\n");
                 }
-                c.output_file.write("  br label %free_default\n");
             } else {
                 c.output_file.write("  br label %free_default\n");
             }
@@ -2036,7 +2206,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 let s_node -> StringNode = node.value;
                 let s_val -> String = s_node.tok.value;
                 let s_id -> Int = register_string_constant(c, s_val);
-                init_val_str = get_string_ptr(s_id, s_val);
+                init_val_str = get_string_object_ptr(s_id);
             }
             else if (val_node.type == NODE_NULLPTR) {
                 if (!is_pointer_type(c, target_type_id)) {
@@ -4396,10 +4566,12 @@ func compile_length_method(c -> Compiler, obj_node -> Struct, call_node -> CallN
 
     // String.length()
     if (type_id == TYPE_STRING) {
-        let len_reg -> String = next_reg(c);
-        // strlen returns i32 in our declaration
-        c.output_file.write(c.indent + len_reg + " = call i32 @strlen(i8* " + obj_res.reg + ")\n");
-        return CompileResult(reg=len_reg, type=TYPE_INT);
+        // read len directly from struct field 1
+        let len_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + len_ptr + " = getelementptr inbounds %struct.$String, %struct.$String* " + obj_res.reg + ", i32 0, i32 1\n");
+        let len_val -> String = next_reg(c);
+        c.output_file.write(c.indent + len_val + " = load i32, i32* " + len_ptr + "\n");
+        return CompileResult(reg=len_val, type=TYPE_INT);
     }
 
     // Vector.length()
@@ -4473,10 +4645,36 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
     c.expected_type = old_exp;
     if (index_res is !null && index_res.type == TYPE_POISON) { return CompileResult(reg="poison", type=TYPE_POISON); }
     
-    // idx type
     if (index_res.type != TYPE_INT) {
         WhitelangExceptions.throw_type_error(node.pos, "Index must be an Integer.");
         return void_result();
+    }
+
+    // String index access
+    if (target_res.type == TYPE_STRING) {
+        let src_buf -> String = next_reg(c);
+        let src_struct_buf -> String = next_reg(c);
+        c.output_file.write(c.indent + src_struct_buf + " = getelementptr inbounds %struct.$String, %struct.$String* " + target_res.reg + ", i32 0, i32 0\n");
+        c.output_file.write(c.indent + src_buf + " = load i8*, i8** " + src_struct_buf + "\n");
+        
+        let src_len -> String = next_reg(c);
+        let src_struct_len -> String = next_reg(c);
+        c.output_file.write(c.indent + src_struct_len + " = getelementptr inbounds %struct.$String, %struct.$String* " + target_res.reg + ", i32 0, i32 1\n");
+        c.output_file.write(c.indent + src_len + " = load i32, i32* " + src_struct_len + "\n");
+        
+        // emit bounds check
+        emit_array_bounds_check(c, index_res.reg, src_len, node.pos);
+        
+        let addr_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + addr_reg + " = getelementptr inbounds i8, i8* " + src_buf + ", i32 " + index_res.reg + "\n");
+        
+        let load_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + load_reg + " = load i8, i8* " + addr_reg + "\n");
+        
+        let char_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + char_reg + " = zext i8 " + load_reg + " to i32\n");
+        
+        return CompileResult(reg=char_reg, type=TYPE_CHAR, origin_type=0);
     }
 
     if (is_pointer_type(c, target_res.type)) {
@@ -4550,7 +4748,6 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
         let elem_type -> Int = v_info.type;
         let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
         
-        // { i64, i64, T* }
         let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
 
         emit_vector_bounds_check(c, target_res.reg, index_res.reg, struct_ty, node.pos);
@@ -4573,24 +4770,7 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
         
         return CompileResult(reg=val_reg, type=elem_type);
     }
-    
-    // str access(-> Char)
-    if (target_res.type == TYPE_STRING) {
-        let idx_i64 -> String = next_reg(c);
-        c.output_file.write(c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
-        
-        let char_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + char_ptr + " = getelementptr inbounds i8, i8* " + target_res.reg + ", i64 " + idx_i64 + "\n");
-        
-        let char_val_i8 -> String = next_reg(c);
-        c.output_file.write(c.indent + char_val_i8 + " = load i8, i8* " + char_ptr + "\n");
-        
-        let char_val_i32 -> String = next_reg(c);
-        c.output_file.write(c.indent + char_val_i32 + " = zext i8 " + char_val_i8 + " to i32\n");
-        
-        return CompileResult(reg=char_val_i32, type=TYPE_CHAR);
-    }
-    
+
     WhitelangExceptions.throw_type_error(node.pos, "Type " + get_type_name(c, target_res.type) + " is not indexable.");
     return void_result();
 }
@@ -4728,8 +4908,14 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
             let idx_i64 -> String = next_reg(c);
             c.output_file.write(c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
 
+            // extract i8* buffer from %struct.$String*
+            let src_struct_buf -> String = next_reg(c);
+            let src_buf -> String = next_reg(c);
+            c.output_file.write(c.indent + src_struct_buf + " = getelementptr inbounds %struct.$String, %struct.$String* " + target_res.reg + ", i32 0, i32 0\n");
+            c.output_file.write(c.indent + src_buf + " = load i8*, i8** " + src_struct_buf + "\n");
+
             let ptr_reg -> String = next_reg(c);
-            c.output_file.write(c.indent + ptr_reg + " = getelementptr inbounds i8, i8* " + target_res.reg + ", i64 " + idx_i64 + "\n");
+            c.output_file.write(c.indent + ptr_reg + " = getelementptr inbounds i8, i8* " + src_buf + ", i64 " + idx_i64 + "\n");
             val_res = emit_implicit_cast(c, val_res, TYPE_CHAR, node.pos);
 
             let val_i8 -> String = next_reg(c);
@@ -4794,17 +4980,61 @@ func compile_slice_access(c -> Compiler, node -> SliceAccessNode) -> CompileResu
     c.expected_type = old_exp;
 
     if (target_res.type == TYPE_STRING) {
-        let call_reg -> String = next_reg(c);
+        // extract buffer and length from string
+        let src_buf -> String = next_reg(c);
+        let src_struct_buf -> String = next_reg(c);
+        c.output_file.write(c.indent + src_struct_buf + " = getelementptr inbounds %struct.$String, %struct.$String* " + target_res.reg + ", i32 0, i32 0\n");
+        c.output_file.write(c.indent + src_buf + " = load i8*, i8** " + src_struct_buf + "\n");
+        
+        let src_len -> String = next_reg(c);
+        let src_struct_len -> String = next_reg(c);
+        c.output_file.write(c.indent + src_struct_len + " = getelementptr inbounds %struct.$String, %struct.$String* " + target_res.reg + ", i32 0, i32 1\n");
+        c.output_file.write(c.indent + src_len + " = load i32, i32* " + src_struct_len + "\n");
 
-        let real_func_name -> String = c.compiler_link.get("string_slice");
-        if (real_func_name is null) { real_func_name = "string_slice"; }
+        // compute slice length
+        let slice_len -> String = next_reg(c);
+        c.output_file.write(c.indent + slice_len + " = sub i32 " + end_res.reg + ", " + start_res.reg + "\n");
 
-        let slice_info -> FuncInfo = c.func_table.get(real_func_name);
-        let slice_llvm -> String = "string_slice";
-        if (slice_info is !null) { slice_llvm = slice_info.name; }
+        // TODO: boundary checks, for now trust start < end < len
 
-        c.output_file.write(c.indent + call_reg + " = call i8* @" + slice_llvm + "(i8* " + target_res.reg + ", i32 " + start_res.reg + ", i32 " + end_res.reg + ")\n");
-        return CompileResult(reg=call_reg, type=TYPE_STRING, origin_type=0);
+        let slice_len_64 -> String = next_reg(c);
+        c.output_file.write(c.indent + slice_len_64 + " = zext i32 " + slice_len + " to i64\n");
+        
+        let total_size -> String = next_reg(c);
+        c.output_file.write(c.indent + total_size + " = add i64 " + slice_len_64 + ", 17\n");
+
+        // allocate
+        let obj_i8 -> String = emit_alloc_obj(c, total_size, "" + TYPE_STRING, "i8*");
+        let new_str_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
+        
+        let buf_ptr_i8 -> String = next_reg(c);
+        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
+
+        // set struct fields
+        let out_buf_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
+        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
+        
+        let out_len_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
+        c.output_file.write(c.indent + "store i32 " + slice_len + ", i32* " + out_len_field + "\n");
+
+        let out_cap_field -> String = next_reg(c);
+        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
+        c.output_file.write(c.indent + "store i32 " + slice_len + ", i32* " + out_cap_field + "\n");
+        
+        // copy bytes
+        let src_offset_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + src_offset_ptr + " = getelementptr inbounds i8, i8* " + src_buf + ", i32 " + start_res.reg + "\n");
+        c.output_file.write(c.indent + "call i8* @strncpy(i8* " + buf_ptr_i8 + ", i8* " + src_offset_ptr + ", i64 " + slice_len_64 + ")\n");
+
+        // append null terminator
+        let null_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + null_ptr + " = getelementptr inbounds i8, i8* " + buf_ptr_i8 + ", i64 " + slice_len_64 + "\n");
+        c.output_file.write(c.indent + "store i8 0, i8* " + null_ptr + "\n");
+
+        return CompileResult(reg=new_str_ptr, type=TYPE_STRING, origin_type=0);
     }
 
     let elem_type -> Int = 0;
@@ -5435,37 +5665,8 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
                 right = convert_to_string(c, right);
             }
 
-            // get str length
-            let len1 -> String = next_reg(c);
-            c.output_file.write(c.indent + len1 + " = call i32 @strlen(i8* " + left.reg + ")\n");
-            
-            let len2 -> String = next_reg(c);
-            c.output_file.write(c.indent + len2 + " = call i32 @strlen(i8* " + right.reg + ")\n");
-
-            // upgrade to i64
-            let len1_64 -> String = next_reg(c);
-            c.output_file.write(c.indent + len1_64 + " = zext i32 " + len1 + " to i64\n");
-            let len2_64 -> String = next_reg(c);
-            c.output_file.write(c.indent + len2_64 + " = zext i32 " + len2 + " to i64\n");
-            
-            // total length
-            let sum_len -> String = next_reg(c);
-            c.output_file.write(c.indent + sum_len + " = add i64 " + len1_64 + ", " + len2_64 + "\n");
-            
-            // for \0
-            let total_size -> String = next_reg(c);
-            c.output_file.write(c.indent + total_size + " = add i64 " + sum_len + ", 1\n");
-
-            let new_str_ptr -> String = emit_alloc_obj(c, total_size, "" + TYPE_STRING, "i8*");
-            
-            // strcpy(new_ptr, left) -> null
-            let ign1 -> String = next_reg(c);
-            c.output_file.write(c.indent + ign1 + " = call i8* @strcpy(i8* " + new_str_ptr + ", i8* " + left.reg + ")\n");
-            
-            // strcat(new_ptr, right) -> null
-            let ign2 -> String = next_reg(c);
-            c.output_file.write(c.indent + ign2 + " = call i8* @strcat(i8* " + new_str_ptr + ", i8* " + right.reg + ")\n");
-            
+            let new_str_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + new_str_ptr + " = call %struct.$String* @wl_string_concat(%struct.$String* " + left.reg + ", %struct.$String* " + right.reg + ")\n");
             return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
         }
 
@@ -5485,7 +5686,7 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         }
 
         let cmp_val -> String = next_reg(c);
-        c.output_file.write(c.indent + cmp_val + " = call i32 @strcmp(i8* " + left.reg + ", i8* " + right.reg + ")\n");
+        c.output_file.write(c.indent + cmp_val + " = call i32 @wl_string_compare(%struct.$String* " + left.reg + ", %struct.$String* " + right.reg + ")\n");
 
         let res_reg -> String = next_reg(c);
         let op_code -> String = "icmp eq";
@@ -5787,7 +5988,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         let len -> Int = val.length() + 1;
         let res_reg -> String = next_reg(c);
 
-        c.output_file.write(c.indent + res_reg + " = getelementptr inbounds { i32, i32, [" + len + " x i8] }, { i32, i32, [" + len + " x i8] }* @.str." + id + ", i32 0, i32 2, i32 0\n");
+        c.output_file.write(c.indent + res_reg + " = getelementptr inbounds { i32, i32, %struct.$String }, { i32, i32, %struct.$String }* @.str." + id + ", i32 0, i32 2\n");
         
         return CompileResult(reg=res_reg, type=TYPE_STRING, origin_type=0);
     }
@@ -7006,7 +7207,27 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
 
     if (type_id == TYPE_STRING) {
         let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
-        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + reg + ")\n");
+        let label_null -> String = next_label(c);
+        let label_value -> String = next_label(c);
+        let label_end -> String = next_label(c);
+        let is_null -> String = next_reg(c);
+
+        c.output_file.write(c.indent + is_null + " = icmp eq %struct.$String* " + reg + ", null\n");
+        c.output_file.write(c.indent + "br i1 " + is_null + ", label %" + label_null + ", label %" + label_value + "\n");
+
+        c.output_file.write("\n" + label_null + ":\n");
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* null)\n");
+        c.output_file.write(c.indent + "br label %" + label_end + "\n");
+
+        c.output_file.write("\n" + label_value + ":\n");
+        let struct_reg -> String = next_reg(c);
+        let ptr_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + struct_reg + " = getelementptr inbounds %struct.$String, %struct.$String* " + reg + ", i32 0, i32 0\n");
+        c.output_file.write(c.indent + ptr_reg + " = load i8*, i8** " + struct_reg + "\n");
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + ptr_reg + ")\n");
+        c.output_file.write(c.indent + "br label %" + label_end + "\n");
+
+        c.output_file.write("\n" + label_end + ":\n");
         return;
     }
 
@@ -7077,7 +7298,6 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
                 return;
             }
         }
-        // Fallback for pointers: convert ptrtoint to i64 then print_long
         let ptr_i64 -> String = next_reg(c);
         let hook_long -> String = get_mangled_symbol(c, "print_long", pos);
         c.output_file.write(c.indent + ptr_i64 + " = ptrtoint i8* " + reg + " to i64\n");
@@ -7413,7 +7633,7 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
     // String
     c.output_file.write("\n" + label_string + ":\n");
     let unboxed_str -> String = next_reg(c);
-    c.output_file.write(c.indent + unboxed_str + " = inttoptr i64 " + payload_i64 + " to i8*\n");
+    c.output_file.write(c.indent + unboxed_str + " = inttoptr i64 " + payload_i64 + " to %struct.$String*\n");
     compile_print(c, unboxed_str, TYPE_STRING, pos, 0);
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
@@ -7434,6 +7654,7 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
 }
 
 func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -> String, call_node -> CallNode) -> CompileResult {
+    // check if method exists before compiling obj_node to avoid double compile
     let target_func -> String = "string_" + method_name;
     let real_func_name -> String = c.compiler_link.get(target_func);
 
@@ -7442,7 +7663,10 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
     }
 
     let obj_res -> CompileResult = compile_node(c, obj_node);
-    let args_str -> String = "i8* " + obj_res.reg;
+
+    // WhiteLang methods use the WhiteLang ABI and receive the String object.
+    // Only explicit native-runtime adapters are allowed to expose the byte buffer.
+    let args_str -> String = "%struct.$String* " + obj_res.reg;
     let args -> Vector(Struct) = call_node.args;
     let a_len -> Int = 0;
     if (args is !null) { a_len = args.length(); }
@@ -7478,6 +7702,15 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
 // --------------
 
 func compile_start(c -> Compiler) -> Void {
+    c.output_file.write("declare %struct.$String* @wl_alloc_string(i64)\n");
+    c.declared_externs.put("wl_alloc_string", StringConstant(id=0, value=""));
+
+    c.output_file.write("declare %struct.$String* @wl_string_concat(%struct.$String*, %struct.$String*)\n");
+    c.declared_externs.put("wl_string_concat", StringConstant(id=0, value=""));
+
+    c.output_file.write("declare i32 @wl_string_compare(%struct.$String*, %struct.$String*)\n");
+    c.declared_externs.put("wl_string_compare", StringConstant(id=0, value=""));
+
     c.output_file.write("declare i32 @snprintf(i8*, i64, i8*, ...)\n");
     c.declared_externs.put("snprintf", StringConstant(id=0, value="")); 
 
@@ -7491,6 +7724,9 @@ func compile_start(c -> Compiler) -> Void {
 
     c.output_file.write("declare i8* @strcpy(i8*, i8*)\n");
     c.declared_externs.put("strcpy", StringConstant(id=0, value="")); 
+
+    c.output_file.write("declare i8* @strncpy(i8*, i8*, i64)\n");
+    c.declared_externs.put("strncpy", StringConstant(id=0, value="")); 
 
     c.output_file.write("declare i8* @strcat(i8*, i8*)\n\n");
     c.declared_externs.put("strcat", StringConstant(id=0, value="")); 
@@ -7566,8 +7802,28 @@ func compile_start(c -> Compiler) -> Void {
     );
     c.struct_table.put("$Variant", variant_info);
     c.struct_id_map.put("" + variant_id, variant_info);
+    
+    let string_info -> StructInfo = StructInfo(
+        name="String", 
+        type_id=TYPE_STRING, 
+        fields=null, 
+        llvm_name="%struct.$String", 
+        init_body=null, is_class=false, 
+        vtable_name="", 
+        parent_id=0, 
+        vtable=null, 
+        ann_flags=FLAG_ANN_INTRINSIC,
+        compiler_link_name="",
+        is_enum=false,
+        is_interface=false,
+        interfaces=null
+    );
+    c.struct_table.put("String", string_info);
+    c.struct_id_map.put("" + TYPE_STRING, string_info);
+
     c.output_file.write("; ====== COMPILER INTRINSICS ======\n");
-    c.output_file.write("%struct.$Variant = type { i32, i64 }\n\n");
+    c.output_file.write("%struct.$Variant = type { i32, i64 }\n");
+    c.output_file.write("%struct.$String = type { i8*, i32, i32 }\n\n");
 }
 
 func compile(c -> Compiler, node -> Struct) -> Void {
@@ -7617,8 +7873,14 @@ func compile_end(c -> Compiler) -> Void {
         let escaped_val -> String = string_escape(val);
         let id -> Int = curr.id;
         let len -> Int = val.length() + 1;
-        let def -> String = "@.str." + id + " = private unnamed_addr constant { i32, i32, [" + len + " x i8] } { i32 -1, i32 5, [" + len + " x i8] c\"" + escaped_val + "\\00\" }\n";
-        c.output_file.write(def);
+        let real_len -> Int = len - 1; // excluding \0
+
+        let bytes_def -> String = "@.str.bytes." + id + " = private unnamed_addr constant [" + len + " x i8] c\"" + escaped_val + "\\00\"\n";
+        // use correct TYPE_STRING (5) instead of TYPE_GENERIC_CLASS (11)
+        let struct_def -> String = "@.str." + id + " = private unnamed_addr constant { i32, i32, %struct.$String } { i32 -1, i32 5, %struct.$String { i8* getelementptr inbounds ([" + len + " x i8], [" + len + " x i8]* @.str.bytes." + id + ", i32 0, i32 0), i32 " + real_len + ", i32 " + real_len + " } }\n";
+
+        c.output_file.write(bytes_def);
+        c.output_file.write(struct_def);
         s_idx += 1;
     }
 

@@ -4,14 +4,14 @@
 // This file provides high-level abstractions over C stdio file operations.
 
 extern "C" {
-    func fopen(filename -> String, mode -> String) -> AnyPtr;
+    func wl_fopen(filename -> String, mode -> String) -> AnyPtr;
     func fclose(stream -> AnyPtr) -> Int;
-    func fread(p -> String, size -> Long, count -> Long, stream -> AnyPtr) -> Long;
-    func fwrite(p -> String, size -> Long, count -> Long, stream -> AnyPtr) -> Long;
+    func wl_fread(p -> String, size -> Long, count -> Long, stream -> AnyPtr) -> Long;
+    func wl_fwrite(p -> String, size -> Long, count -> Long, stream -> AnyPtr) -> Long;
     func fseek(stream -> AnyPtr, offset -> Long, origin -> Int) -> Int;
     func ftell(stream -> AnyPtr) -> Long;
     func rewind(stream -> AnyPtr) -> Void;
-    func remove(filename -> String) -> Int;
+    func wl_remove(filename -> String) -> Int;
 
     func wl_alloc_string(size -> Long) -> String;
 }
@@ -28,7 +28,7 @@ class File {
 
     init(p -> String, mode -> String) {
         self.path = p;
-        let raw_handle -> AnyPtr = fopen(p, mode);
+        let raw_handle -> AnyPtr = wl_fopen(p, mode);
         if (raw_handle is !nullptr) {
             self.handle = raw_handle;
         }
@@ -42,14 +42,14 @@ class File {
         rewind(self.handle);
         
         let buffer -> String = wl_alloc_string(size);
-        fread(buffer, 1, size, self.handle);
+        wl_fread(buffer, 1, size, self.handle);
         return buffer;
     }
 
     method write(content -> String) -> Void {
         if (self.handle is nullptr) { return; }
         let len -> Long = content.length(); 
-        fwrite(content, 1, len, self.handle);
+        wl_fwrite(content, 1, len, self.handle);
     }
 
     method close() -> Void {
@@ -65,6 +65,6 @@ class File {
 }
 
 func remove_file(path -> String) -> Bool {
-    let res -> Int = remove(path);
+    let res -> Int = wl_remove(path);
     return res == 0;
 }

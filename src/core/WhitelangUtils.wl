@@ -281,6 +281,7 @@ func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
     );
 
     comp.type_drop_list.append(TypeListNode(type=TYPE_GENERIC_FUNCTION));
+    comp.type_drop_list.append(TypeListNode(type=TYPE_STRING));
     return comp;
 }
 
@@ -690,7 +691,7 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_FLOAT) { return "double"; }
     if (type_id == TYPE_BOOL)  { return "i1"; }
     if (type_id == TYPE_VOID)  { return "void"; }
-    if (type_id == TYPE_STRING){ return "i8*"; }
+    if (type_id == TYPE_STRING){ return "%struct.$String*"; }
     if (type_id == TYPE_CHAR)  { return "i32"; }
     if (type_id == TYPE_GENERIC_STRUCT) { return "i8*"; }
     if (type_id == TYPE_GENERIC_FUNCTION) { return "i8*"; }
