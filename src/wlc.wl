@@ -34,7 +34,7 @@ struct CompilerConfig(
 )
 
 func print_usage() -> Void {
-    builtin.print("White Language Compiler (v0.2.9)");
+    builtin.print("White Language Compiler (v0.2.10)");
     builtin.print("Usage: wlc <source.wl> [extra_files...] [options]");
     builtin.print("");
     builtin.print("Arguments:");
@@ -338,6 +338,12 @@ func main(argc -> Int, ptr argv -> String) -> Int {
             }
         } else {
             builtin.print("Warning: WL_PATH environment variable is not set. Auto-linking of runtime skipped.");
+        }
+
+        let lib_idx -> Int = 0;
+        while (lib_idx < compiler.extra_libs.length()) {
+            cmd += " -l" + compiler.extra_libs[lib_idx];
+            lib_idx += 1;
         }
 
         if (cfg.extra_ldflags.length() > 0) {

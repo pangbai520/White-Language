@@ -4051,66 +4051,107 @@ func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResu
     return val_res;
 }
 
+// TODO: Add whitelang abi
+func normalize_extern_abi(name -> String, pos -> Position) -> String {
+    if (name == "C" || name == "c") { return "C"; }
+    if (name == "system" || name == "System" || name == "SYSTEM") { return "system"; }
+    WhitelangExceptions.throw_extern_error(pos, "Unsupported extern ABI '" + name + "'. Expected 'C' or 'system'.");
+    return "C";
+}
+func extern_callconv(abi_name -> String) -> String {
+    if (abi_name == "system" && get_target_os() == "WINDOWS") { return "win64cc "; }
+    return "ccc ";
+}
+func func_callconv(info -> FuncInfo) -> String {
+    if (info is null || info.abi_name is null || info.abi_name.length() == 0) { return ""; }
+    return extern_callconv(info.abi_name);
+}
+func register_extern_library(c -> Compiler, name -> String, pos -> Position) -> Void {
+    if (name is null || name.length() == 0) { return; }
+
+    let i -> Int = 0;
+    while (i < name.length()) {
+        let ch -> Char = name[i];
+        let valid -> Bool = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                            (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' ||
+                            ch == '+' || ch == '.';
+        if (!valid) {
+            WhitelangExceptions.throw_extern_error(pos, "Invalid extern library name '" + name + "'. Use a linker library name without paths or flags.");
+            return;
+        }
+        i += 1;
+    }
+
+    i = 0;
+    while (i < c.extra_libs.length()) {
+        if (c.extra_libs[i] == name) { return; }
+        i += 1;
+    }
+    c.extra_libs.append(name);
+}
 func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult {
     let func_name -> String = node.name_tok.value;
+    let abi_name -> String = normalize_extern_abi(node.abi_name, node.pos);
     let ret_type_id -> Int = resolve_type(c, node.ret_type_tok);
-    if (ret_type_id == TYPE_AUTO) { WhitelangExceptions.throw_type_error(node.pos, "Extern C functions cannot use Auto."); return void_result(); }
-    
+    if (ret_type_id == TYPE_AUTO) {
+        WhitelangExceptions.throw_extern_error(node.pos, "Extern functions cannot use Auto as a return type.");
+        return void_result();
+    }
+    if (node.is_varargs && abi_name != "C") {
+        WhitelangExceptions.throw_extern_error(node.pos, "Variadic extern functions require the C ABI.");
+        return void_result();
+    }
+
     let arg_types -> Vector(Struct) = [];
-    
     let params -> Vector(Struct) = node.params;
     let p_len -> Int = 0; if (params is !null) { p_len = params.length(); }
     let p_idx -> Int = 0;
-    
     let params_str -> String = "";
-    let first -> Bool = true;
-    
+
     while (p_idx < p_len) {
         let p -> ParamNode = params[p_idx];
         let p_id -> Int = resolve_type(c, p.type_tok);
-        if (p_id == TYPE_AUTO) { WhitelangExceptions.throw_type_error(p.pos, "Extern C functions cannot use Auto parameters."); return void_result(); }
-        
+        if (p_id == TYPE_AUTO) {
+            WhitelangExceptions.throw_type_error(p.pos, "Extern functions cannot use Auto parameters.");
+            return void_result();
+        }
+
         arg_types.append(TypeListNode(type=p_id));
-        
-        if (!first) { params_str = params_str + ", "; }
+        if (p_idx > 0) { params_str += ", "; }
         params_str += get_llvm_type_str(c, p_id);
-        first = false;
-        
         p_idx += 1;
     }
 
     if (node.is_varargs) {
-        if (!first) { params_str = params_str + ", "; }
-        params_str = params_str + "...";
+        if (p_len > 0) { params_str += ", "; }
+        params_str += "...";
     }
 
     let full_func_name -> String = func_name;
-    if (c.current_package_prefix.length() > 0) {
-        full_func_name = c.current_package_prefix + func_name;
-    }
-    c.func_table.put(full_func_name, FuncInfo(name=func_name, base_name=func_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=node.is_varargs));
-    if (c.declared_externs.get(func_name) is null) {
-        let ret_llvm -> String = get_llvm_type_str(c, ret_type_id);
-        c.output_file.write("declare " + ret_llvm + " @" + func_name + "(" + params_str + ")\n");
+    if (c.current_package_prefix.length() > 0) { full_func_name = c.current_package_prefix + func_name; }
 
-        c.declared_externs.put(func_name, StringConstant(id=0, value="")); 
+    let existing_func -> FuncInfo = c.func_table.get(full_func_name);
+    if (existing_func is !null) {
+        WhitelangExceptions.throw_name_error(node.pos, "Function '" + full_func_name + "' is already defined.");
+        return void_result();
     }
 
-    let lib_name -> String = node.lib_name;
-    if (lib_name is !null && lib_name.length() > 0 && lib_name != "c" && lib_name != "C") {
-        let i -> Int = 0;
-        let found -> Bool = false;
-        let libs_len -> Int = c.extra_libs.length();
-        while (i < libs_len) {
-            let lib -> String = c.extra_libs[i];
-            if (lib == lib_name) { found = true; break; }
-            i += 1;
-        }
-        if (!found) { c.extra_libs.append(lib_name); }
+    let callconv -> String = extern_callconv(abi_name);
+    let ret_llvm -> String = get_llvm_type_str(c, ret_type_id);
+    let signature -> String = callconv + ret_llvm + " (" + params_str + ")";
+    let existing_decl -> StringConstant = c.declared_externs.get(func_name);
+    if (existing_decl is null) {
+        c.output_file.write("declare " + callconv + ret_llvm + " @" + func_name + "(" + params_str + ")\n");
+        c.declared_externs.put(func_name, StringConstant(id=0, value=signature));
+    } else if (existing_decl.value.length() > 0 && existing_decl.value != signature) {
+        WhitelangExceptions.throw_extern_error(node.pos, "Conflicting extern declaration for symbol '" + func_name + "'.");
+        return void_result();
     }
+
+    c.func_table.put(full_func_name, FuncInfo(name=func_name, base_name=func_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=node.is_varargs, abi_name=abi_name));
+    register_extern_library(c, node.link_name, node.pos);
     return void_result();
 }
-
 func compile_extern_block(c -> Compiler, node -> ExternBlockNode) -> CompileResult {
     let funcs -> Vector(Struct) = node.funcs;
     let len -> Int = 0; if (funcs is !null) { len = funcs.length(); }
@@ -4122,6 +4163,7 @@ func compile_extern_block(c -> Compiler, node -> ExternBlockNode) -> CompileResu
     }
     return void_result();
 }
+
 
 func compile_array_literal(c -> Compiler, lit_node -> VectorLitNode, target_arr_id -> Int, ptr_reg -> String) -> Void {
     let target_arr -> ArrayInfo = c.array_info_map.get("" + target_arr_id);
@@ -6489,8 +6531,9 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
             let ret_type_str -> String = get_llvm_type_str(c, func_info.ret_type);
             let call_res_reg -> String = "";
-            
-            let call_prefix -> String = ret_type_str + " ";
+
+            let abi_callconv -> String = func_callconv(func_info);
+            let call_prefix -> String = abi_callconv + ret_type_str + " ";
             if (func_info.is_varargs) {
                 let sig_args -> String = "";
                 let p_idx -> Int = 0;
@@ -6504,14 +6547,14 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 }
                 if (!first_p) { sig_args = sig_args + ", ..."; }
                 else { sig_args = "..."; }
-                call_prefix = ret_type_str + " (" + sig_args + ") ";
+                call_prefix = abi_callconv + ret_type_str + " (" + sig_args + ") ";
             }
             
             if (func_info.ret_type == TYPE_VOID) {
                 if (func_info.is_varargs) {
                     c.output_file.write(c.indent + "call " + call_prefix + "@" + func_info.name + "(" + args_str + ")\n");
                 } else {
-                    c.output_file.write(c.indent + "call void @" + func_info.name + "(" + args_str + ")\n");
+                    c.output_file.write(c.indent + "call " + abi_callconv + "void @" + func_info.name + "(" + args_str + ")\n");
                 }
                 return void_result();
             } else {

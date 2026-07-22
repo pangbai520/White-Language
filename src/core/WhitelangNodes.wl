@@ -289,9 +289,11 @@ struct NullNode(
 )
 
 struct ExternBlockNode(
-    type  -> Int, // NODE_EXTERN_BLOCK
-    funcs -> Vector(Struct),
-    pos   -> Position
+    type      -> Int, // NODE_EXTERN_BLOCK
+    funcs     -> Vector(Struct),
+    abi_name  -> String,
+    link_name -> String,
+    pos       -> Position
 )
 
 struct ExternFuncNode(
@@ -300,7 +302,8 @@ struct ExternFuncNode(
     params       -> Vector(Struct),
     ret_type_tok -> Struct,
     is_varargs   -> Bool,    // 1 if has '...', else 0
-    lib_name     -> String,
+    abi_name     -> String,
+    link_name    -> String,
     pos          -> Position
 )
 

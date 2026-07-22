@@ -2,36 +2,36 @@
 
 import * from "../../sys/target.wl"
 
-extern func GetProcessHeap() -> AnyPtr from "C";
-extern func HeapAlloc(hHeap -> AnyPtr, dwFlags -> Int, dwBytes -> Long) -> AnyPtr from "C";
-extern func HeapReAlloc(hHeap -> AnyPtr, dwFlags -> Int, lpMem -> AnyPtr, dwBytes -> Long) -> AnyPtr from "C";
-extern func HeapFree(hHeap -> AnyPtr, dwFlags -> Int, lpMem -> AnyPtr) -> Int from "C";
-extern func GetLastError() -> Int from "C";
+extern "system" {
+    func GetProcessHeap() -> AnyPtr;
+    func HeapAlloc(hHeap -> AnyPtr, dwFlags -> Int, dwBytes -> Long) -> AnyPtr;
+    func HeapReAlloc(hHeap -> AnyPtr, dwFlags -> Int, lpMem -> AnyPtr, dwBytes -> Long) -> AnyPtr;
+    func HeapFree(hHeap -> AnyPtr, dwFlags -> Int, lpMem -> AnyPtr) -> Int;
+    func GetLastError() -> Int;
+    func GetEnvironmentVariableW(lpName -> AnyPtr, lpBuffer -> AnyPtr, nSize -> Int) -> Int;
+    func CreateProcessW(lpApplicationName -> AnyPtr, lpCommandLine -> AnyPtr, lpProcessAttributes -> AnyPtr, lpThreadAttributes -> AnyPtr, bInheritHandles -> Int, dwCreationFlags -> Int, lpEnvironment -> AnyPtr, lpCurrentDirectory -> AnyPtr, lpStartupInfo -> AnyPtr, lpProcessInformation -> AnyPtr) -> Int;
+    func WaitForSingleObject(hHandle -> AnyPtr, dwMilliseconds -> Int) -> Int;
+    func GetExitCodeProcess(hProcess -> AnyPtr, lpExitCode -> AnyPtr) -> Int;
+    func CloseHandle(hObject -> AnyPtr) -> Int;
+    func CreateFileW(lpFileName -> AnyPtr, dwDesiredAccess -> Int, dwShareMode -> Int, lpSecurityAttributes -> AnyPtr, dwCreationDisposition -> Int, dwFlagsAndAttributes -> Int, hTemplateFile -> AnyPtr) -> AnyPtr;
+    func GetFileSizeEx(hFile -> AnyPtr, lpFileSize -> AnyPtr) -> Int;
+    func ReadFile(hFile -> AnyPtr, lpBuffer -> AnyPtr, nNumberOfBytesToRead -> Int, lpNumberOfBytesRead -> AnyPtr, lpOverlapped -> AnyPtr) -> Int;
+    func WriteFile(hFile -> AnyPtr, lpBuffer -> AnyPtr, nNumberOfBytesToWrite -> Int, lpNumberOfBytesWritten -> AnyPtr, lpOverlapped -> AnyPtr) -> Int;
+    func SetFilePointerEx(hFile -> AnyPtr, liDistanceToMove -> Long, lpNewFilePointer -> AnyPtr, dwMoveMethod -> Int) -> Int;
+    func DeleteFileW(lpFileName -> AnyPtr) -> Int;
+    func ExitProcess(uExitCode -> Int) -> Void;
+    func GetStdHandle(nStdHandle -> Int) -> AnyPtr;
+    func SetConsoleOutputCP(wCodePageID -> Int) -> Int;
+    func GetConsoleMode(hConsoleHandle -> AnyPtr, lpMode -> AnyPtr) -> Int;
+    func WriteConsoleW(hConsoleOutput -> AnyPtr, lpBuffer -> AnyPtr, nNumberOfCharsToWrite -> Int, lpNumberOfCharsWritten -> AnyPtr, lpReserved -> AnyPtr) -> Int;
+    func MultiByteToWideChar(CodePage -> Int, dwFlags -> Int, lpMultiByteStr -> AnyPtr, cbMultiByte -> Int, lpWideCharStr -> AnyPtr, cchWideChar -> Int) -> Int;
+    func WideCharToMultiByte(CodePage -> Int, dwFlags -> Int, lpWideCharStr -> AnyPtr, cchWideChar -> Int, lpMultiByteStr -> AnyPtr, cbMultiByte -> Int, lpDefaultChar -> AnyPtr, lpUsedDefaultChar -> AnyPtr) -> Int;
+}
 
-extern func GetEnvironmentVariableW(lpName -> AnyPtr, lpBuffer -> AnyPtr, nSize -> Int) -> Int from "C";
-
-extern func CreateProcessW(lpApplicationName -> AnyPtr, lpCommandLine -> AnyPtr, lpProcessAttributes -> AnyPtr, lpThreadAttributes -> AnyPtr, bInheritHandles -> Int, dwCreationFlags -> Int, lpEnvironment -> AnyPtr, lpCurrentDirectory -> AnyPtr, lpStartupInfo -> AnyPtr, lpProcessInformation -> AnyPtr) -> Int from "C";
-extern func WaitForSingleObject(hHandle -> AnyPtr, dwMilliseconds -> Int) -> Int from "C";
-extern func GetExitCodeProcess(hProcess -> AnyPtr, lpExitCode -> AnyPtr) -> Int from "C";
-extern func CloseHandle(hObject -> AnyPtr) -> Int from "C";
-
-extern func CreateFileW(lpFileName -> AnyPtr, dwDesiredAccess -> Int, dwShareMode -> Int, lpSecurityAttributes -> AnyPtr, dwCreationDisposition -> Int, dwFlagsAndAttributes -> Int, hTemplateFile -> AnyPtr) -> AnyPtr from "C";
-extern func GetFileSizeEx(hFile -> AnyPtr, lpFileSize -> AnyPtr) -> Int from "C";
-extern func ReadFile(hFile -> AnyPtr, lpBuffer -> AnyPtr, nNumberOfBytesToRead -> Int, lpNumberOfBytesRead -> AnyPtr, lpOverlapped -> AnyPtr) -> Int from "C";
-extern func WriteFile(hFile -> AnyPtr, lpBuffer -> AnyPtr, nNumberOfBytesToWrite -> Int, lpNumberOfBytesWritten -> AnyPtr, lpOverlapped -> AnyPtr) -> Int from "C";
-extern func SetFilePointerEx(hFile -> AnyPtr, liDistanceToMove -> Long, lpNewFilePointer -> AnyPtr, dwMoveMethod -> Int) -> Int from "C";
-extern func DeleteFileW(lpFileName -> AnyPtr) -> Int from "C";
-extern func ExitProcess(uExitCode -> Int) -> Void from "C";
-
-extern func GetStdHandle(nStdHandle -> Int) -> AnyPtr from "C";
-extern func SetConsoleOutputCP(wCodePageID -> Int) -> Int from "C";
-extern func GetConsoleMode(hConsoleHandle -> AnyPtr, lpMode -> AnyPtr) -> Int from "C";
-extern func WriteConsoleW(hConsoleOutput -> AnyPtr, lpBuffer -> AnyPtr, nNumberOfCharsToWrite -> Int, lpNumberOfCharsWritten -> AnyPtr, lpReserved -> AnyPtr) -> Int from "C";
-extern func MultiByteToWideChar(CodePage -> Int, dwFlags -> Int, lpMultiByteStr -> AnyPtr, cbMultiByte -> Int, lpWideCharStr -> AnyPtr, cchWideChar -> Int) -> Int from "C";
-extern func WideCharToMultiByte(CodePage -> Int, dwFlags -> Int, lpWideCharStr -> AnyPtr, cchWideChar -> Int, lpMultiByteStr -> AnyPtr, cbMultiByte -> Int, lpDefaultChar -> AnyPtr, lpUsedDefaultChar -> AnyPtr) -> Int from "C";
-
-extern func wl_string_data(value -> String) -> AnyPtr from "C";
-extern func wl_alloc_string(size -> Long) -> String from "C";
+extern "C" {
+    func wl_string_data(value -> String) -> AnyPtr;
+    func wl_alloc_string(size -> Long) -> String;
+}
 
 const STD_OUTPUT_HANDLE -> Int = -11;
 const STD_ERROR_HANDLE -> Int = -12;

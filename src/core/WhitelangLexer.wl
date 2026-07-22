@@ -199,6 +199,7 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "with") { return WhitelangTokens.Token(type=TOK_WITH, value=value, line=start_line, col=start_col); }
     if (value == "catch") { return WhitelangTokens.Token(type=TOK_CATCH, value=value, line=start_line, col=start_col); }
     if (value == "throw") { return WhitelangTokens.Token(type=TOK_THROW, value=value, line=start_line, col=start_col); }
+    if (value == "in") { return WhitelangTokens.Token(type=TOK_IN, value=value, line=start_line, col=start_col); }
 
     return WhitelangTokens.Token(type=TOK_IDENTIFIER, value=value, line=start_line, col=start_col);
 }

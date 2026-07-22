@@ -101,7 +101,8 @@ struct FuncInfo(
     arg_types -> Vector(Struct),
     is_varargs -> Bool,
     ann_flags  -> Int,
-    compiler_link_name -> String
+    compiler_link_name -> String,
+    abi_name -> String
 )
 
 struct FieldInfo(

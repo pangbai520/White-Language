@@ -165,10 +165,6 @@ func throw_import_error(pos -> Position, details -> String) -> Void {
     report_error(pos, "ImportError", details);
 }
 
-func throw_IO_error(pos -> Position, details -> String) -> Void {
-    report_error(pos, "IOError", details);
-}
-
 func throw_internal_compiler_error(pos -> Position, details -> String) -> Void {
     report_error(pos, "InternalCompilerError", details);
 }
@@ -179,6 +175,10 @@ func throw_zero_division_error(pos -> Position, details -> String) -> Void {
 
 func throw_overflow_error(pos -> Position, details -> String) -> Void {
     report_error(pos, "OverflowError", details);
+}
+
+func throw_extern_error(pos -> Position, details -> String) -> Void {
+    report_error(pos, "ExternError", details);
 }
 
 func throw_missing_main_function() -> Void { // special

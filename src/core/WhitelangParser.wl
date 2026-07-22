@@ -1431,90 +1431,105 @@ func parse_extern_func(p -> Parser) -> Struct {
         WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected return type ('-> Type').");
     }
     
-    return ExternFuncNode(type=NODE_EXTERN_FUNC, name_tok=name_tok, params=params, ret_type_tok=ret_type, is_varargs=is_varargs, pos=start_pos);
+    return ExternFuncNode(type=NODE_EXTERN_FUNC, name_tok=name_tok, params=params, ret_type_tok=ret_type, is_varargs=is_varargs, abi_name="", link_name="", pos=start_pos);
 }
 
 func parse_extern(p -> Parser) -> Struct {
     let start_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
     parser_advance(p); // skip 'extern'
 
-    // extern "XXX" { func ...; }
     if (p.current_tok.type == TOK_STR_LIT) {
-        let lib_name -> String = p.current_tok.value;
-        parser_advance(p); // skip string
-        
+        let abi_name -> String = p.current_tok.value;
+        let link_name -> String = "";
+        parser_advance(p); // skip abi
+
+        if (p.current_tok.type == TOK_IN) {
+            parser_advance(p); // skip 'in'
+            if (p.current_tok.type != TOK_STR_LIT) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected library name after 'in'.");
+            }
+            link_name = p.current_tok.value;
+            parser_advance(p); // skip library
+        }
+
         if (p.current_tok.type != TOK_LBRACE) {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '{' to start extern block.");
         }
         parser_advance(p); // skip '{'
-        
+
         let funcs -> Vector(Struct) = [];
-        
         while (p.current_tok.type != TOK_RBRACE && p.current_tok.type != TOK_EOF) {
-            if (p.current_tok.type == TOK_FUNC) {
-                let func_node -> Struct = parse_extern_func(p);
-                if (p.current_tok.type != TOK_SEMICOLON) {
-                    let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ';' after extern function declaration.");
-                }
-                parser_advance(p); // skip ';'
-                
-                funcs.append(func_node);
-            } else {
+            if (p.current_tok.type != TOK_FUNC) {
                 let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
                 WhitelangExceptions.throw_invalid_syntax(err_pos, "Only function declarations are allowed in extern blocks.");
+                break;
             }
+
+            let func_node -> Struct = parse_extern_func(p);
+            let f_node -> ExternFuncNode = func_node;
+            f_node.abi_name = abi_name;
+            f_node.link_name = link_name;
+
+            if (p.current_tok.type != TOK_SEMICOLON) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ';' after extern function declaration.");
+            }
+            parser_advance(p); // skip ';'
+            funcs.append(func_node);
         }
-        
+
         if (p.current_tok.type != TOK_RBRACE) {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected '}' to end extern block.");
         }
         parser_advance(p); // skip '}'
-        
-        return ExternBlockNode(type=NODE_EXTERN_BLOCK, funcs=funcs, lib_name=lib_name, pos=start_pos);
+        return ExternBlockNode(type=NODE_EXTERN_BLOCK, funcs=funcs, abi_name=abi_name, link_name=link_name, pos=start_pos);
     }
 
-    // extern func foo() -> Void from "XXX";
-    else if (p.current_tok.type == TOK_FUNC) {
+    if (p.current_tok.type == TOK_FUNC) {
         let func_node -> Struct = parse_extern_func(p);
 
-        if (p.current_tok.type == TOK_FROM) { 
-            parser_advance(p); 
-        } else if (p.current_tok.type == TOK_IDENTIFIER) {
-            if (p.current_tok.value == "from") {
-                parser_advance(p);
-            } else {
-                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected 'from' after single-line extern declaration.");
-            }
-        } else {
+        if (p.current_tok.type != TOK_FROM) {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected 'from' after single-line extern declaration.");
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected 'from' after extern function declaration.");
         }
-        
+        parser_advance(p); // skip 'from'
+
         if (p.current_tok.type != TOK_STR_LIT) {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected library name string (e.g. \"C\") after 'from'.");
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ABI name after 'from'.");
         }
-        let lib_name -> String = p.current_tok.value;
-        parser_advance(p); // skip string
-        
+        let abi_name -> String = p.current_tok.value;
+        let link_name -> String = "";
+        parser_advance(p); // skip abi
+
+        if (p.current_tok.type == TOK_IN) {
+            parser_advance(p); // skip 'in'
+            if (p.current_tok.type != TOK_STR_LIT) {
+                let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected library name after 'in'.");
+            }
+            link_name = p.current_tok.value;
+            parser_advance(p); // skip library
+        }
+
         if (p.current_tok.type != TOK_SEMICOLON) {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
             WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected ';' at the end of extern declaration.");
         }
         parser_advance(p); // skip ';'
+
         let f_node -> ExternFuncNode = func_node;
-        f_node.lib_name = lib_name;
-        
+        f_node.abi_name = abi_name;
+        f_node.link_name = link_name;
         let funcs -> Vector(Struct) = [func_node];
-        return ExternBlockNode(type=NODE_EXTERN_BLOCK, funcs=funcs, lib_name=lib_name, pos=start_pos);
+        return ExternBlockNode(type=NODE_EXTERN_BLOCK, funcs=funcs, abi_name=abi_name, link_name=link_name, pos=start_pos);
     }
-    
+
     let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected string literal \"C\"or 'func' after extern.");
+    WhitelangExceptions.throw_invalid_syntax(err_pos, "Expected an ABI string or 'func' after 'extern'.");
     return null;
 }
 
