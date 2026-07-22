@@ -1,12 +1,8 @@
 // std/dict.wl
-// Basic open-addressed hash map. Uses linear probing and "tombstones" for deletes.
-// Forced 2^n capacity so we can use bitmasking instead of slow modulo ops.
+// Basic open-addressed hash map using linear probing and tombstones
+// capacities stay at powers of two so probing can use a bitmask
 
-extern "C" {
-    func calloc(num -> Long, size -> Long) -> AnyPtr;
-    func free(p -> AnyPtr) -> Void;
-    func strcmp(s1 -> String, s2 -> String) -> Int;
-}
+import "internal/runtime"
 
 @CompilerIntrinsic
 struct Variant(
@@ -52,9 +48,9 @@ class Dict {
         self.tombstones = 0;
 
         // 8 bytes for keys (ptrs), 16 for variants, 4 for hashes
-        self.keys   = calloc(actual_cap, 8); 
-        self.values = calloc(actual_cap, 16); 
-        self.hashes = calloc(actual_cap, 4); 
+        self.keys   = runtime.mem_alloc_zeroed(Long(actual_cap) * 8L); 
+        self.values = runtime.mem_alloc_zeroed(Long(actual_cap) * 16L); 
+        self.hashes = runtime.mem_alloc_zeroed(Long(actual_cap) * 4L); 
     }
 
     method __resize() -> Void {
@@ -65,9 +61,9 @@ class Dict {
 
         // standard x2 growth strategy
         self.capacity <<= 1; 
-        self.keys   = calloc(self.capacity, 8);
-        self.values = calloc(self.capacity, 16);
-        self.hashes = calloc(self.capacity, 4);
+        self.keys   = runtime.mem_alloc_zeroed(Long(self.capacity) * 8L);
+        self.values = runtime.mem_alloc_zeroed(Long(self.capacity) * 16L);
+        self.hashes = runtime.mem_alloc_zeroed(Long(self.capacity) * 4L);
 
         self.size = 0;
         self.tombstones = 0; 
@@ -81,9 +77,9 @@ class Dict {
             i++;
         }
 
-        free(old_keys);
-        free(old_vals);
-        free(old_hashes);
+        runtime.mem_dealloc(old_keys);
+        runtime.mem_dealloc(old_vals);
+        runtime.mem_dealloc(old_hashes);
     }
 
     method put(key -> String, val -> Variant) -> Void {
@@ -216,15 +212,15 @@ class Dict {
     deinit() {
         // standard cleanup to avoid leaking memory
         if (self.keys is !nullptr) {
-            free(self.keys);
+            runtime.mem_dealloc(self.keys);
             self.keys = nullptr;
         }
         if (self.values is !nullptr) {
-            free(self.values);
+            runtime.mem_dealloc(self.values);
             self.values = nullptr;
         }
         if (self.hashes is !nullptr) {
-            free(self.hashes);
+            runtime.mem_dealloc(self.hashes);
             self.hashes = nullptr;
         }
     }

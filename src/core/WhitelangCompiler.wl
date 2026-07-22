@@ -1,5 +1,7 @@
 // core/WhitelangCompiler.wl
 import "builtin"
+import "sys"
+import "file"
 
 import * from "WhitelangNodes.wl"
 import * from "WhitelangUtils.wl"
@@ -8,19 +10,10 @@ import Lexer from "WhitelangLexer.wl"
 import Position from "WhitelangExceptions.wl"
 import Parser from "WhitelangParser.wl"
 import Dict from "dict"
-import File from "file_io"
-
-
-extern func is_windows() -> Int from "C";
-extern func is_macos() -> Int from "C";
-extern func wl_getenv(name -> String) -> String from "C";
-
 
 
 func get_target_os() -> String {
-    if (is_windows() == 1) { return "WINDOWS"; }
-    if (is_macos() == 1) { return "MACOS"; }
-    return "LINUX";
+    return sys.OS;
 }
 func is_os_expr(c -> Compiler, node -> Struct) -> Bool {
     if (node is null) { return false; }
@@ -38,9 +31,7 @@ func is_os_expr(c -> Compiler, node -> Struct) -> Bool {
     return false;
 }
 func fold_os_cond(c -> Compiler, node -> Struct) -> Int {
-// -1 means the expression is not a platform condition.  0 and 1 are
-// compile-time false/true.  Only expressions proven here are allowed to erase
-// a branch; ordinary conditions continue through normal code generation.
+// return -1 when the condition cannot be folded for this target
 
     if (node is null) { return -1; }
     let base -> BaseNode = node;
@@ -737,10 +728,8 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
         c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
         c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
         
-        c.output_file.write(c.indent + "call void " + fmt_func + "(i8* " + buf_ptr_i8 + ", i64 " + low_reg + ", i64 " + high_reg + ")\n");
-
         let actual_len -> String = next_reg(c);
-        c.output_file.write(c.indent + actual_len + " = call i32 @strlen(i8* " + buf_ptr_i8 + ")\n");
+        c.output_file.write(c.indent + actual_len + " = call i32 " + fmt_func + "(i8* " + buf_ptr_i8 + ", i64 " + low_reg + ", i64 " + high_reg + ")\n");
         let out_len_field -> String = next_reg(c);
         c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
         c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_len_field + "\n");
@@ -752,31 +741,10 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
     }
 
     if (res.type == TYPE_UINT64 || res.type == TYPE_UINTSIZE) {
-        let obj_i8 -> String = emit_alloc_obj(c, "49", "" + TYPE_STRING, "i8*");
-        let new_str_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
-        
-        let buf_ptr_i8 -> String = next_reg(c);
-        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
-
-        let out_buf_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
-        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
-
-        let fmt -> String = next_reg(c);
-        c.output_file.write(c.indent + fmt + " = getelementptr [5 x i8], [5 x i8]* @.fmt_ulong_simple, i32 0, i32 0\n");
-        c.output_file.write(c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr_i8 + ", i64 32, i8* " + fmt + ", i64 " + res.reg + ")\n");
-
-        let actual_len -> String = next_reg(c);
-        c.output_file.write(c.indent + actual_len + " = call i32 @strlen(i8* " + buf_ptr_i8 + ")\n");
-        let out_len_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
-        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_len_field + "\n");
-        let out_cap_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
-        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_cap_field + "\n");
-
-        return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
+        let format_hook -> String = get_mangled_symbol(c, "format_uint64", null);
+        let result -> String = next_reg(c);
+        c.output_file.write(c.indent + result + " = call %struct.$String* @" + format_hook + "(i64 " + res.reg + ")\n");
+        return CompileResult(reg=result, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_INT || res.type == TYPE_BYTE) {
@@ -786,122 +754,32 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
             c.output_file.write(c.indent + val_reg + " = zext i8 " + res.reg + " to i32\n");
         }
 
-        let obj_i8 -> String = emit_alloc_obj(c, "49", "" + TYPE_STRING, "i8*");
-        let new_str_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
-        
-        let buf_ptr_i8 -> String = next_reg(c);
-        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
-
-        let out_buf_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
-        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
-
-        let fmt -> String = next_reg(c);
-        c.output_file.write(c.indent + fmt + " = getelementptr [3 x i8], [3 x i8]* @.fmt_int_simple, i32 0, i32 0\n");
-        c.output_file.write(c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr_i8 + ", i64 32, i8* " + fmt + ", i32 " + val_reg + ")\n");
-
-        let actual_len -> String = next_reg(c);
-        c.output_file.write(c.indent + actual_len + " = call i32 @strlen(i8* " + buf_ptr_i8 + ")\n");
-        let out_len_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
-        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_len_field + "\n");
-        let out_cap_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
-        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_cap_field + "\n");
-
-        return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
+        let format_hook -> String = get_mangled_symbol(c, "format_int", null);
+        let result -> String = next_reg(c);
+        c.output_file.write(c.indent + result + " = call %struct.$String* @" + format_hook + "(i32 " + val_reg + ")\n");
+        return CompileResult(reg=result, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_LONG) {
-        let obj_i8 -> String = emit_alloc_obj(c, "49", "" + TYPE_STRING, "i8*");
-        let new_str_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
-        
-        let buf_ptr_i8 -> String = next_reg(c);
-        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
-
-        let out_buf_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
-        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
-
-        let fmt -> String = next_reg(c);
-        c.output_file.write(c.indent + fmt + " = getelementptr [5 x i8], [5 x i8]* @.fmt_long_simple, i32 0, i32 0\n");
-        c.output_file.write(c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr_i8 + ", i64 32, i8* " + fmt + ", i64 " + res.reg + ")\n");
-
-        let actual_len -> String = next_reg(c);
-        c.output_file.write(c.indent + actual_len + " = call i32 @strlen(i8* " + buf_ptr_i8 + ")\n");
-        let out_len_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
-        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_len_field + "\n");
-        let out_cap_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
-        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_cap_field + "\n");
-
-        return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
+        let format_hook -> String = get_mangled_symbol(c, "format_long", null);
+        let result -> String = next_reg(c);
+        c.output_file.write(c.indent + result + " = call %struct.$String* @" + format_hook + "(i64 " + res.reg + ")\n");
+        return CompileResult(reg=result, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_FLOAT) {
-        let obj_i8 -> String = emit_alloc_obj(c, "49", "" + TYPE_STRING, "i8*");
-        let new_str_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
-        
-        let buf_ptr_i8 -> String = next_reg(c);
-        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
-
-        let out_buf_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
-        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
-
-        let fmt -> String = next_reg(c);
-        c.output_file.write(c.indent + fmt + " = getelementptr [3 x i8], [3 x i8]* @.fmt_float_simple, i32 0, i32 0\n");
-        c.output_file.write(c.indent + "call i32 (i8*, i64, i8*, ...) @snprintf(i8* " + buf_ptr_i8 + ", i64 32, i8* " + fmt + ", double " + res.reg + ")\n");
-
-        let actual_len -> String = next_reg(c);
-        c.output_file.write(c.indent + actual_len + " = call i32 @strlen(i8* " + buf_ptr_i8 + ")\n");
-        let out_len_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
-        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_len_field + "\n");
-        let out_cap_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
-        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_cap_field + "\n");
-
-        return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
+        let format_hook -> String = get_mangled_symbol(c, "format_float", null);
+        let result -> String = next_reg(c);
+        c.output_file.write(c.indent + result + " = call %struct.$String* @" + format_hook + "(double " + res.reg + ")\n");
+        return CompileResult(reg=result, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_BOOL) {
-        let ptr_true -> String = next_reg(c);
-        c.output_file.write(c.indent + ptr_true + " = getelementptr [5 x i8], [5 x i8]* @.str_true, i32 0, i32 0\n");
-        let ptr_false -> String = next_reg(c);
-        c.output_file.write(c.indent + ptr_false + " = getelementptr [6 x i8], [6 x i8]* @.str_false, i32 0, i32 0\n");
-        
-        let src_reg -> String = next_reg(c);
-        c.output_file.write(c.indent + src_reg + " = select i1 " + res.reg + ", i8* " + ptr_true + ", i8* " + ptr_false + "\n");
-        
-        // allocate struct + 6 bytes + 1 null
-        let obj_i8 -> String = emit_alloc_obj(c, "23", "" + TYPE_STRING, "i8*");
-        let new_str_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
-        
-        let buf_ptr_i8 -> String = next_reg(c);
-        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
-
-        let out_buf_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
-        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
-
-        c.output_file.write(c.indent + "call i8* @strcpy(i8* " + buf_ptr_i8 + ", i8* " + src_reg + ")\n");
-
-        let actual_len -> String = next_reg(c);
-        c.output_file.write(c.indent + actual_len + " = call i32 @strlen(i8* " + buf_ptr_i8 + ")\n");
-        let out_len_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
-        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_len_field + "\n");
-        let out_cap_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
-        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_cap_field + "\n");
-
-        return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
+        let true_id -> Int = register_string_constant(c, "true");
+        let false_id -> Int = register_string_constant(c, "false");
+        let result -> String = next_reg(c);
+        c.output_file.write(c.indent + result + " = select i1 " + res.reg + ", %struct.$String* " + get_string_object_ptr(true_id) + ", %struct.$String* " + get_string_object_ptr(false_id) + "\n");
+        return CompileResult(reg=result, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_CHAR) {
@@ -935,30 +813,9 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
         return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
     }
 
-    // fallback for null
-    let obj_i8 -> String = emit_alloc_obj(c, "22", "" + TYPE_STRING, "i8*"); // "null" = 4 + 1
-    let new_str_ptr -> String = next_reg(c);
-    c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
-    
-    let buf_ptr_i8 -> String = next_reg(c);
-    c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
-
-    let out_buf_field -> String = next_reg(c);
-    c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
-    c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
-
-    let empty_src -> String = next_reg(c);
-    c.output_file.write(c.indent + empty_src + " = getelementptr [5 x i8], [5 x i8]* @.str_null, i32 0, i32 0\n");
-    c.output_file.write(c.indent + "call i8* @strcpy(i8* " + buf_ptr_i8 + ", i8* " + empty_src + ")\n");
-
-    let out_len_field -> String = next_reg(c);
-    c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
-    c.output_file.write(c.indent + "store i32 4, i32* " + out_len_field + "\n");
-    let out_cap_field -> String = next_reg(c);
-    c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
-    c.output_file.write(c.indent + "store i32 4, i32* " + out_cap_field + "\n");
-
-    return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
+    // fallback for null uses an immortal string literal and requires no allocation.
+    let null_id -> Int = register_string_constant(c, "null");
+    return CompileResult(reg=get_string_object_ptr(null_id), type=TYPE_STRING);
 }
 
 func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
@@ -1348,7 +1205,8 @@ func emit_alloc_obj(c -> Compiler, payload_size_reg -> String, type_id_str -> St
     c.output_file.write(c.indent + total_size + " = add i64 " + payload_size_reg + ", 8\n");
     
     let raw_mem -> String = next_reg(c);
-    c.output_file.write(c.indent + raw_mem + " = call i8* @malloc(i64 " + total_size + ")\n");
+    let alloc_hook -> String = get_mangled_symbol(c, "memory_alloc", null);
+    c.output_file.write(c.indent + raw_mem + " = call i8* @" + alloc_hook + "(i64 " + total_size + ")\n");
     
     let rc_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + rc_ptr + " = bitcast i8* " + raw_mem + " to i32*\n");
@@ -1439,7 +1297,7 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
 }
 
 func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
-    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", null);
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_bytes", null);
     let hook_int -> String = get_mangled_symbol(c, "print_int", null);
 
     if (hook_raw_str is !null && hook_int is !null) {
@@ -1458,11 +1316,11 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
         let ln -> Int = pos.ln + 1;
         let col -> Int = pos.col + 1;
         
-        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + header_1_ptr + ")\n");
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + header_1_ptr + ", i32 " + header_1.length() + ")\n");
         c.output_file.write(c.indent + "call void @" + hook_int + "(i32 " + ln + ")\n");
-        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + header_2_ptr + ")\n");
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + header_2_ptr + ", i32 " + header_2.length() + ")\n");
         c.output_file.write(c.indent + "call void @" + hook_int + "(i32 " + col + ")\n");
-        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + header_3_ptr + ")\n");
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + header_3_ptr + ", i32 " + header_3.length() + ")\n");
 
         let full_text -> String = pos.text;
         if (full_text.length() > 0) {
@@ -1489,7 +1347,7 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
         
             let code_id -> Int = register_string_constant(c, code_content);
             let code_ptr -> String = get_string_ptr(code_id, code_content);
-            c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + code_ptr + ")\n");
+            c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + code_ptr + ", i32 " + code_content.length() + ")\n");
 
             let err_len -> Int = 1;
             let line_len -> Int = raw_line.length();
@@ -1523,11 +1381,12 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
             arrow_str += "\n";
             let arrow_id -> Int = register_string_constant(c, arrow_str);
             let arrow_ptr -> String = get_string_ptr(arrow_id, arrow_str);
-            c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + arrow_ptr + ")\n");
+            c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + arrow_ptr + ", i32 " + arrow_str.length() + ")\n");
         }
     }
 
-    c.output_file.write(c.indent + "call void @exit(i32 1)\n");
+    let exit_hook -> String = get_mangled_symbol(c, "process_exit", pos);
+    c.output_file.write(c.indent + "call void @" + exit_hook + "(i32 1)\n");
     c.output_file.write(c.indent + "unreachable\n");
 }
 
@@ -1603,6 +1462,8 @@ func compile_arc_hooks(c -> Compiler) -> Void {
 // TODO: ARC operations are currently non-atomic.
 // Once we go multi-threaded, we must upgrade these to atomicrmw (or proper LLVM atomics)
 // to prevent catastrophic races, though we'll need to watch out for the performance hit.
+
+    let free_hook -> String = get_mangled_symbol(c, "memory_free", null);
 
     // --- __wl_retain(i8* ptr) ---
     c.output_file.write("define void @__wl_retain(i8* %ptr) {\n");
@@ -1684,7 +1545,7 @@ func compile_arc_hooks(c -> Compiler) -> Void {
 
     // default: free(ptr[-8])
     c.output_file.write("\nfree_default:\n");
-    c.output_file.write("  call void @free(i8* %base)\n"); 
+    c.output_file.write("  call void @" + free_hook + "(i8* %base)\n"); 
     c.output_file.write("  br label %done\n");
 
     // generate drop blocks for complex types
@@ -1738,21 +1599,20 @@ func compile_arc_hooks(c -> Compiler) -> Void {
 
                 c.output_file.write("\n" + loop_end + ":\n");
                 c.output_file.write("  %data_i8_" + t_id + " = bitcast " + elem_ty_str + "* %data_ptr_" + t_id + " to i8*\n");
-                c.output_file.write("  call void @free(i8* %data_i8_" + t_id + ")\n");
+                c.output_file.write("  call void @" + free_hook + "(i8* %data_i8_" + t_id + ")\n");
             } else {
                 c.output_file.write("  %data_ptr_ptr_" + t_id + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* %vec_cast_" + t_id + ", i32 0, i32 2\n");
                 c.output_file.write("  %data_ptr_" + t_id + " = load " + elem_ty_str + "*, " + elem_ty_str + "** %data_ptr_ptr_" + t_id + "\n");
                 c.output_file.write("  %data_i8_" + t_id + " = bitcast " + elem_ty_str + "* %data_ptr_" + t_id + " to i8*\n");
-                c.output_file.write("  call void @free(i8* %data_i8_" + t_id + ")\n");
+                c.output_file.write("  call void @" + free_hook + "(i8* %data_i8_" + t_id + ")\n");
             }
             c.output_file.write("  br label %free_default\n");
         } else {
             let s_info -> StructInfo = c.struct_id_map.get("" + t_id);
             if (s_info is !null) {
-                // String bytes are inline in the same ARC allocation.
+                // String bytes share the arc allocation
                 if (t_id == TYPE_STRING) {
-                    // Dynamic strings keep their bytes inline with the ARC object.
-                    // Static strings have rc=-1 and never reach this block.
+                    // static strings have rc=-1 and never reach this block
                     c.output_file.write("  br label %free_default\n");
                 } else {
                     // release each ref field
@@ -1956,7 +1816,7 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     c.current_file_func_aliases     = Dict(32);
     c.current_file_global_aliases   = Dict(32);
 
-    let f -> File = File(final_path, "rb");
+    let f -> file.File = file.open(final_path);
     if (f is null) { WhitelangExceptions.throw_import_error(node.pos, "Failed to open: " + final_path); }
     let source -> String = f.read_all();
     f.close();
@@ -2290,7 +2150,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         }
 
         let linkage -> String = "";
-        if (c.is_shared && is_windows() == 1) {
+        if (c.is_shared && sys.OS == "WINDOWS") {
             if ((sys_anns.ann_flags & FLAG_ANN_EXPORT) != 0) {
                 linkage = "dllexport ";
             } else {
@@ -2663,7 +2523,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     let linkage -> String = "";
     if (c.is_shared) {
         if ((f_info.ann_flags & FLAG_ANN_EXPORT) != 0) {
-            if (is_windows() == 1) {
+            if (sys.OS == "WINDOWS") {
                 linkage = "dllexport ";
             }
         } else {
@@ -2671,7 +2531,13 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         }
     }
 
-    c.output_file.write("define " + linkage + llvm_ret_type + " @" + f_info.name + "(" + params_str + ") {\n");
+    // keep compiler-link hooks out of line to avoid cloning their loops at call sites
+    let func_attrs -> String = "";
+    if ((f_info.ann_flags & FLAG_ANN_COMP_LINK) != 0) {
+        func_attrs = "noinline ";
+    }
+
+    c.output_file.write("define " + linkage + llvm_ret_type + " @" + f_info.name + "(" + params_str + ") " + func_attrs + "{\n");
     c.output_file.write("entry:\n");
 
     let old_sym -> Scope = c.symbol_table;
@@ -3112,12 +2978,12 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
         t_i += 1;
     }
 
-    let old_file -> File = c.output_file;
+    let old_file -> file.File = c.output_file;
 
     let temp_dir -> String = "";
-    if (is_windows() == 1) {
-        temp_dir = wl_getenv("TMP");
-        if (temp_dir is null) { temp_dir = wl_getenv("TEMP"); }
+    if (sys.OS == "WINDOWS") {
+        temp_dir = sys.env.get_env("TMP");
+        if (temp_dir is null) { temp_dir = sys.env.get_env("TEMP"); }
         if (temp_dir is null) { temp_dir = "."; }
         if (!temp_dir.ends_with("\\") && !temp_dir.ends_with("/")) {
             temp_dir += "\\";
@@ -3128,7 +2994,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
 
     let tmp_name -> String = temp_dir + "wl_lambda_tmp_" + env_id + ".ll";
     
-    c.output_file = File(tmp_name, "w");
+    c.output_file = file.create(tmp_name);
     
     let lambda_name -> String = "lambda." + func_def.name_tok.value + "." + env_id;
     let ret_type_id -> Int = resolve_type(c, func_def.ret_type_tok);
@@ -3219,10 +3085,10 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     
     c.output_file.close();
     c.output_file = old_file;
-    let tmp_read -> File = File(tmp_name, "rb");
+    let tmp_read -> file.File = file.open(tmp_name);
     let lambda_ir -> String = tmp_read.read_all();
     tmp_read.close();
-    file_io.remove_file(tmp_name); 
+    file.remove(tmp_name); 
 
     c.global_buffer = c.global_buffer + lambda_ir;
 
@@ -4373,8 +4239,9 @@ func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallN
     let new_bytes -> String = next_reg(c);
     c.output_file.write(c.indent + new_bytes + " = mul i64 " + new_cap + ", " + elem_size + "\n");
     
+    let resize_hook -> String = get_mangled_symbol(c, "memory_resize", call_node.pos);
     let new_data_i8 -> String = next_reg(c);
-    c.output_file.write(c.indent + new_data_i8 + " = call i8* @realloc(i8* " + old_data_i8 + ", i64 " + new_bytes + ")\n");
+    c.output_file.write(c.indent + new_data_i8 + " = call i8* @" + resize_hook + "(i8* " + old_data_i8 + ", i64 " + new_bytes + ")\n");
     
     let new_data_typed -> String = next_reg(c);
     c.output_file.write(c.indent + new_data_typed + " = bitcast i8* " + new_data_i8 + " to " + elem_ty_str + "*\n");
@@ -4503,9 +4370,10 @@ func compile_vector_lit(c -> Compiler, node -> VectorLitNode) -> CompileResult {
     let arr_bytes -> String = next_reg(c);
     c.output_file.write(c.indent + arr_bytes + " = ptrtoint " + elem_ty_str + "* " + arr_size_ptr + " to i64\n");
     
+    let alloc_hook -> String = get_mangled_symbol(c, "memory_alloc", node.pos);
     let raw_data -> String = next_reg(c);
     // TODO: Handle count == 0 case carefully
-    c.output_file.write(c.indent + raw_data + " = call i8* @malloc(i64 " + arr_bytes + ")\n");
+    c.output_file.write(c.indent + raw_data + " = call i8* @" + alloc_hook + "(i64 " + arr_bytes + ")\n");
     let data_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + data_ptr + " = bitcast i8* " + raw_data + " to " + elem_ty_str + "*\n");
 
@@ -4985,61 +4853,16 @@ func compile_slice_access(c -> Compiler, node -> SliceAccessNode) -> CompileResu
     c.expected_type = old_exp;
 
     if (target_res.type == TYPE_STRING) {
-        // extract buffer and length from string
-        let src_buf -> String = next_reg(c);
-        let src_struct_buf -> String = next_reg(c);
-        c.output_file.write(c.indent + src_struct_buf + " = getelementptr inbounds %struct.$String, %struct.$String* " + target_res.reg + ", i32 0, i32 0\n");
-        c.output_file.write(c.indent + src_buf + " = load i8*, i8** " + src_struct_buf + "\n");
-        
+        // validate here, string hook owns allocation and copying
         let src_len -> String = next_reg(c);
         let src_struct_len -> String = next_reg(c);
         c.output_file.write(c.indent + src_struct_len + " = getelementptr inbounds %struct.$String, %struct.$String* " + target_res.reg + ", i32 0, i32 1\n");
         c.output_file.write(c.indent + src_len + " = load i32, i32* " + src_struct_len + "\n");
-
-        // compute slice length
-        let slice_len -> String = next_reg(c);
-        c.output_file.write(c.indent + slice_len + " = sub i32 " + end_res.reg + ", " + start_res.reg + "\n");
-
         emit_slice_bounds_check(c, start_res.reg, end_res.reg, src_len, node.pos);
-
-        let slice_len_64 -> String = next_reg(c);
-        c.output_file.write(c.indent + slice_len_64 + " = zext i32 " + slice_len + " to i64\n");
-        
-        let total_size -> String = next_reg(c);
-        c.output_file.write(c.indent + total_size + " = add i64 " + slice_len_64 + ", 17\n");
-
-        // allocate
-        let obj_i8 -> String = emit_alloc_obj(c, total_size, "" + TYPE_STRING, "i8*");
-        let new_str_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
-        
-        let buf_ptr_i8 -> String = next_reg(c);
-        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
-
-        // set struct fields
-        let out_buf_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
-        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
-        
-        let out_len_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
-        c.output_file.write(c.indent + "store i32 " + slice_len + ", i32* " + out_len_field + "\n");
-
-        let out_cap_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
-        c.output_file.write(c.indent + "store i32 " + slice_len + ", i32* " + out_cap_field + "\n");
-        
-        // copy bytes
-        let src_offset_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + src_offset_ptr + " = getelementptr inbounds i8, i8* " + src_buf + ", i32 " + start_res.reg + "\n");
-        c.output_file.write(c.indent + "call i8* @strncpy(i8* " + buf_ptr_i8 + ", i8* " + src_offset_ptr + ", i64 " + slice_len_64 + ")\n");
-
-        // append null terminator
-        let null_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + null_ptr + " = getelementptr inbounds i8, i8* " + buf_ptr_i8 + ", i64 " + slice_len_64 + "\n");
-        c.output_file.write(c.indent + "store i8 0, i8* " + null_ptr + "\n");
-
-        return CompileResult(reg=new_str_ptr, type=TYPE_STRING, origin_type=0);
+        let slice_hook -> String = get_mangled_symbol(c, "string_slice", node.pos);
+        let result -> String = next_reg(c);
+        c.output_file.write(c.indent + result + " = call %struct.$String* @" + slice_hook + "(%struct.$String* " + target_res.reg + ", i32 " + start_res.reg + ", i32 " + end_res.reg + ")\n");
+        return CompileResult(reg=result, type=TYPE_STRING, origin_type=0);
     }
 
     let elem_type -> Int = 0;
@@ -5670,8 +5493,9 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
                 right = convert_to_string(c, right);
             }
 
+            let concat_hook -> String = get_mangled_symbol(c, "string_concat", node.pos);
             let new_str_ptr -> String = next_reg(c);
-            c.output_file.write(c.indent + new_str_ptr + " = call %struct.$String* @wl_string_concat(%struct.$String* " + left.reg + ", %struct.$String* " + right.reg + ")\n");
+            c.output_file.write(c.indent + new_str_ptr + " = call %struct.$String* @" + concat_hook + "(%struct.$String* " + left.reg + ", %struct.$String* " + right.reg + ")\n");
             return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
         }
 
@@ -5690,8 +5514,9 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
             return void_result();
         }
 
+        let compare_hook -> String = get_mangled_symbol(c, "string_compare", node.pos);
         let cmp_val -> String = next_reg(c);
-        c.output_file.write(c.indent + cmp_val + " = call i32 @wl_string_compare(%struct.$String* " + left.reg + ", %struct.$String* " + right.reg + ")\n");
+        c.output_file.write(c.indent + cmp_val + " = call i32 @" + compare_hook + "(%struct.$String* " + left.reg + ", %struct.$String* " + right.reg + ")\n");
 
         let res_reg -> String = next_reg(c);
         let op_code -> String = "icmp eq";
@@ -5790,107 +5615,6 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
             c.output_file.write(c.indent + res_reg + " = " + op_code + " i1 " + left.reg + ", " + right.reg + "\n");
             return CompileResult(reg=res_reg, type=TYPE_BOOL);
         }
-
-        let target_type -> Int = left.type;
-        if (left.type == TYPE_FLOAT || right.type == TYPE_FLOAT) {
-            target_type = TYPE_FLOAT;
-        } else if (left.type == TYPE_FLOAT32 || right.type == TYPE_FLOAT32) {
-            target_type = TYPE_FLOAT32;
-        } else if (is_integer_type(left.type) && is_integer_type(right.type)) {
-            let l_bits -> Int = get_type_bitwidth(left.type);
-            let r_bits -> Int = get_type_bitwidth(right.type);
-
-            if (r_bits > l_bits) { target_type = right.type; }
-            else if (l_bits > r_bits) { target_type = left.type; }
-            else {
-                if (is_unsigned_integer(right.type)) { target_type = right.type; }
-                else { target_type = left.type; }
-            }
-            if (get_type_bitwidth(target_type) < 32) { target_type = TYPE_INT; }
-        } else {
-            WhitelangExceptions.throw_type_error(node.pos, "Invalid types for binary operator.");
-            return void_result();
-        }
-
-        left = compile_type_cast(c, left, target_type, node.pos);
-        right = compile_type_cast(c, right, target_type, node.pos);
-
-        let type_str -> String = get_llvm_type_str(c, target_type);
-        let res_reg -> String = next_reg(c);
-        let op_code -> String = "";
-
-        let is_cmp -> Bool = false;
-        if (op_type == TOK_EE || op_type == TOK_NE || op_type == TOK_GT || op_type == TOK_LT || op_type == TOK_GTE || op_type == TOK_LTE) { is_cmp = true; }
-
-        if is_cmp {
-            if (target_type == TYPE_FLOAT || target_type == TYPE_FLOAT32) {
-                if (op_type == TOK_EE) { op_code = "fcmp oeq"; }
-                else if (op_type == TOK_NE) { op_code = "fcmp one"; }
-                else if (op_type == TOK_GT) { op_code = "fcmp ogt"; }
-                else if (op_type == TOK_LT) { op_code = "fcmp olt"; }
-                else if (op_type == TOK_GTE) { op_code = "fcmp oge"; }
-                else if (op_type == TOK_LTE) { op_code = "fcmp ole"; }
-            } else {
-                let suffix -> String = "s"; 
-                if (is_unsigned_integer(target_type)) { suffix = "u"; }
-                if (op_type == TOK_EE) { op_code = "icmp eq"; }
-                else if (op_type == TOK_NE) { op_code = "icmp ne"; }
-                else if (op_type == TOK_GT) { op_code = "icmp " + suffix + "gt"; }
-                else if (op_type == TOK_LT) { op_code = "icmp " + suffix + "lt"; }
-                else if (op_type == TOK_GTE) { op_code = "icmp " + suffix + "ge"; }
-                else if (op_type == TOK_LTE) { op_code = "icmp " + suffix + "le"; }
-            }
-            c.output_file.write(c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
-            return CompileResult(reg=res_reg, type=TYPE_BOOL);
-        }
-
-        if (target_type == TYPE_FLOAT || target_type == TYPE_FLOAT32) {
-            if (op_type == TOK_PLUS)  { op_code = "fadd"; }
-            else if (op_type == TOK_SUB)   { op_code = "fsub"; }
-            else if (op_type == TOK_MUL)   { op_code = "fmul"; }
-            else if (op_type == TOK_DIV)   { op_code = "fdiv"; }
-            else if (op_type == TOK_MOD)   { op_code = "frem"; } 
-        } else {
-            if (op_type == TOK_PLUS)  { op_code = "add"; }
-            else if (op_type == TOK_SUB)   { op_code = "sub"; }
-            else if (op_type == TOK_MUL)   { op_code = "mul"; }
-            else if (op_type == TOK_DIV) { 
-                if (is_unsigned_integer(target_type)) { op_code = "udiv"; } else { op_code = "sdiv"; }
-            }
-            else if (op_type == TOK_MOD) { 
-                if (is_unsigned_integer(target_type)) { op_code = "urem"; } else { op_code = "srem"; }
-            }
-            else if (op_type == TOK_BIT_AND) { op_code = "and"; }
-            else if (op_type == TOK_BIT_OR) { op_code = "or"; }
-            else if (op_type == TOK_BIT_XOR) { op_code = "xor"; }
-            else if (op_type == TOK_LSHIFT) { op_code = "shl"; }
-            else if (op_type == TOK_RSHIFT) { 
-                if (is_unsigned_integer(target_type)) { op_code = "lshr"; } else { op_code = "ashr"; }
-            }
-        }
-
-        if (op_type == TOK_DIV || op_type == TOK_MOD) {
-            if (right.reg == "0" || right.reg == "0.0") {
-                WhitelangExceptions.throw_zero_division_error(node.pos, "Cannot divide by zero. ");
-                return void_result();
-            }
-            let is_zero_reg -> String = next_reg(c);
-            if (target_type == TYPE_FLOAT || target_type == TYPE_FLOAT32) {
-                c.output_file.write(c.indent + is_zero_reg + " = fcmp oeq " + type_str + " " + right.reg + ", 0.0\n");
-            } else {
-                c.output_file.write(c.indent + is_zero_reg + " = icmp eq " + type_str + " " + right.reg + ", 0\n");
-            }
-            let err_label -> String = "div_zero_" + c.type_counter;
-            let ok_label -> String = "div_ok_" + c.type_counter;
-            c.type_counter += 1;
-            c.output_file.write(c.indent + "br i1 " + is_zero_reg + ", label %" + err_label + ", label %" + ok_label + "\n");
-            c.output_file.write("\n" + err_label + ":\n");
-            emit_runtime_error(c, node.pos, "Division by zero");
-            c.output_file.write("\n" + ok_label + ":\n");
-        }
-
-        c.output_file.write(c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
-        return CompileResult(reg=res_reg, type=target_type);
     }
 
     if (left.type == TYPE_BOOL || right.type == TYPE_BOOL) {
@@ -5898,52 +5622,78 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         return void_result();
     }
 
-    let target_type -> Int = TYPE_BYTE;
-    
+    let target_type -> Int = left.type;
     if (left.type == TYPE_FLOAT || right.type == TYPE_FLOAT) {
         target_type = TYPE_FLOAT;
-        left = promote_to_float(c, left);
-        right = promote_to_float(c, right);
-    } else if (left.type == TYPE_LONG || right.type == TYPE_LONG) {
-        target_type = TYPE_LONG;
-        left = promote_to_long(c, left);
-        right = promote_to_long(c, right);
-    } else if (left.type == TYPE_INT || right.type == TYPE_INT) {
-        target_type = TYPE_INT;
-        if (left.type == TYPE_BYTE) { left = promote_to_int(c, left); }
-        if (right.type == TYPE_BYTE) { right = promote_to_int(c, right); }
+    } else if (left.type == TYPE_FLOAT32 || right.type == TYPE_FLOAT32) {
+        target_type = TYPE_FLOAT32;
+    } else if (is_integer_type(left.type) && is_integer_type(right.type)) {
+        let l_bits -> Int = get_type_bitwidth(left.type);
+        let r_bits -> Int = get_type_bitwidth(right.type);
+
+        if (r_bits > l_bits) { target_type = right.type; }
+        else if (l_bits > r_bits) { target_type = left.type; }
+        else {
+            if (is_unsigned_integer(right.type)) { target_type = right.type; }
+            else { target_type = left.type; }
+        }
+    } else {
+        WhitelangExceptions.throw_type_error(node.pos, "Invalid types for binary operator.");
+        return void_result();
     }
 
+    left = compile_type_cast(c, left, target_type, node.pos);
+    right = compile_type_cast(c, right, target_type, node.pos);
+
+    let type_str -> String = get_llvm_type_str(c, target_type);
     let res_reg -> String = next_reg(c);
     let op_code -> String = "";
-    let type_str -> String = "i8";
-    
-    if (target_type == TYPE_FLOAT) {
-        type_str = "double";
+
+    if is_cmp {
+        if (target_type == TYPE_FLOAT || target_type == TYPE_FLOAT32) {
+            if (op_type == TOK_EE) { op_code = "fcmp oeq"; }
+            else if (op_type == TOK_NE) { op_code = "fcmp one"; }
+            else if (op_type == TOK_GT) { op_code = "fcmp ogt"; }
+            else if (op_type == TOK_LT) { op_code = "fcmp olt"; }
+            else if (op_type == TOK_GTE) { op_code = "fcmp oge"; }
+            else if (op_type == TOK_LTE) { op_code = "fcmp ole"; }
+        } else {
+            let suffix -> String = "s"; 
+            if (is_unsigned_integer(target_type)) { suffix = "u"; }
+            if (op_type == TOK_EE) { op_code = "icmp eq"; }
+            else if (op_type == TOK_NE) { op_code = "icmp ne"; }
+            else if (op_type == TOK_GT) { op_code = "icmp " + suffix + "gt"; }
+            else if (op_type == TOK_LT) { op_code = "icmp " + suffix + "lt"; }
+            else if (op_type == TOK_GTE) { op_code = "icmp " + suffix + "ge"; }
+            else if (op_type == TOK_LTE) { op_code = "icmp " + suffix + "le"; }
+        }
+        c.output_file.write(c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
+        return CompileResult(reg=res_reg, type=TYPE_BOOL);
+    }
+
+    if (target_type == TYPE_FLOAT || target_type == TYPE_FLOAT32) {
         if (op_type == TOK_PLUS)  { op_code = "fadd"; }
         else if (op_type == TOK_SUB)   { op_code = "fsub"; }
         else if (op_type == TOK_MUL)   { op_code = "fmul"; }
         else if (op_type == TOK_DIV)   { op_code = "fdiv"; }
         else if (op_type == TOK_MOD)   { op_code = "frem"; } 
     } else {
-        if (target_type == TYPE_LONG) { type_str = "i64"; }
-        else if (target_type == TYPE_INT) { type_str = "i32"; }
-        
         if (op_type == TOK_PLUS)  { op_code = "add"; }
         else if (op_type == TOK_SUB)   { op_code = "sub"; }
         else if (op_type == TOK_MUL)   { op_code = "mul"; }
-
         else if (op_type == TOK_DIV) { 
-            if (target_type == TYPE_BYTE) { op_code = "udiv"; } else { op_code = "sdiv"; }
+            if (is_unsigned_integer(target_type)) { op_code = "udiv"; } else { op_code = "sdiv"; }
         }
         else if (op_type == TOK_MOD) { 
-            if (target_type == TYPE_BYTE) { op_code = "urem"; } else { op_code = "srem"; }
+            if (is_unsigned_integer(target_type)) { op_code = "urem"; } else { op_code = "srem"; }
         }
         else if (op_type == TOK_BIT_AND) { op_code = "and"; }
         else if (op_type == TOK_BIT_OR) { op_code = "or"; }
         else if (op_type == TOK_BIT_XOR) { op_code = "xor"; }
         else if (op_type == TOK_LSHIFT) { op_code = "shl"; }
-        else if (op_type == TOK_RSHIFT) { op_code = "ashr"; }
+        else if (op_type == TOK_RSHIFT) { 
+            if (is_unsigned_integer(target_type)) { op_code = "lshr"; } else { op_code = "ashr"; }
+        }
     }
 
     if (op_type == TOK_DIV || op_type == TOK_MOD) {
@@ -5951,23 +5701,18 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
             WhitelangExceptions.throw_zero_division_error(node.pos, "Cannot divide by zero. ");
             return void_result();
         }
-
         let is_zero_reg -> String = next_reg(c);
-        if (target_type == TYPE_FLOAT) {
-            c.output_file.write(c.indent + is_zero_reg + " = fcmp oeq double " + right.reg + ", 0.0\n");
+        if (target_type == TYPE_FLOAT || target_type == TYPE_FLOAT32) {
+            c.output_file.write(c.indent + is_zero_reg + " = fcmp oeq " + type_str + " " + right.reg + ", 0.0\n");
         } else {
             c.output_file.write(c.indent + is_zero_reg + " = icmp eq " + type_str + " " + right.reg + ", 0\n");
         }
-        
         let err_label -> String = "div_zero_" + c.type_counter;
         let ok_label -> String = "div_ok_" + c.type_counter;
         c.type_counter += 1;
-        
         c.output_file.write(c.indent + "br i1 " + is_zero_reg + ", label %" + err_label + ", label %" + ok_label + "\n");
-        
         c.output_file.write("\n" + err_label + ":\n");
         emit_runtime_error(c, node.pos, "Division by zero");
-        
         c.output_file.write("\n" + ok_label + ":\n");
     }
 
@@ -6307,8 +6052,9 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 
                 let cast_reg -> String = next_reg(c);
                 c.output_file.write(c.indent + cast_reg + " = bitcast " + sig + " " + func_ptr + " to i8*\n");
+                let alloc_hook -> String = get_mangled_symbol(c, "memory_alloc", v.pos);
                 let clo_reg -> String = next_reg(c);
-                c.output_file.write(c.indent + clo_reg + " = call i8* @malloc(i64 24)\n");
+                c.output_file.write(c.indent + clo_reg + " = call i8* @" + alloc_hook + "(i64 24)\n");
                 let clo_rc_ptr -> String = next_reg(c);
                 c.output_file.write(c.indent + clo_rc_ptr + " = bitcast i8* " + clo_reg + " to i32*\n");
                 c.output_file.write(c.indent + "store i32 0, i32* " + clo_rc_ptr + "\n");
@@ -6455,27 +6201,6 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 }
             }
 
-            if (f_acc.field_name == "length") {
-                return compile_length_method(c, f_acc.obj, n_call);
-            }
-            if (f_acc.field_name == "append") {
-                return compile_vector_append(c, f_acc.obj, n_call);
-            }
-            if (f_acc.field_name == "drop") {
-                return compile_vector_drop(c, f_acc.obj, n_call);
-            }
-
-            let try_string_method -> Bool = false;
-            let guessed_type -> Int = get_expr_type(c, f_acc.obj);
-            if (guessed_type == TYPE_STRING) {
-                try_string_method = true;
-            }
-
-            if try_string_method {
-                let res -> CompileResult = compile_string_method_call(c, f_acc.obj, f_acc.field_name, n_call);
-                if (res is !null) { return res; }
-            }
-
             let is_module_path -> Bool = true;
             let path_parts -> Vector(String) = [];
             let curr_obj -> Struct = f_acc.obj;
@@ -6503,6 +6228,32 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                         is_package_call = true;
                     }
                 }
+            }
+
+            let try_string_method -> Bool = false;
+            let guessed_type -> Int = get_expr_type(c, f_acc.obj);
+            if (!is_package_call) {
+                if (f_acc.field_name == "length") {
+                    if (guessed_type == TYPE_STRING || c.vector_base_map.get("" + guessed_type) is !null || c.array_info_map.get("" + guessed_type) is !null) {
+                        return compile_length_method(c, f_acc.obj, n_call);
+                    }
+                }
+                if (c.vector_base_map.get("" + guessed_type) is !null) {
+                    if (f_acc.field_name == "append") {
+                        return compile_vector_append(c, f_acc.obj, n_call);
+                    }
+                    if (f_acc.field_name == "drop") {
+                        return compile_vector_drop(c, f_acc.obj, n_call);
+                    }
+                }
+                if (guessed_type == TYPE_STRING) {
+                    try_string_method = true;
+                }
+            }
+
+            if try_string_method {
+                let res -> CompileResult = compile_string_method_call(c, f_acc.obj, f_acc.field_name, n_call);
+                if (res is !null) { return res; }
             }
 
             if (!is_package_call && !try_string_method) {
@@ -6631,15 +6382,15 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 let a_len -> Int = 0;
                 if (args is !null) { a_len = args.length(); }
 
-                let print_hook -> String = get_mangled_symbol(c, "print_raw_string", null);
+                let print_hook -> String = get_mangled_symbol(c, "print_bytes", null);
                 if (print_hook is null) {
-                    WhitelangExceptions.throw_type_error(n_call.pos, "Missing CompilerLink hook 'print_raw_string'. Did you import 'builtin'?");
+                    WhitelangExceptions.throw_type_error(n_call.pos, "Missing CompilerLink hook 'print_bytes'. Did you import 'builtin'?");
                     return void_result();
                 }
 
                 if (a_len == 0) {
                     let fmt_ptr -> String = next_reg(c);
-                    c.output_file.write(c.indent + "call void @" + print_hook + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
+                    c.output_file.write(c.indent + "call void @" + print_hook + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0), i32 1)\n");
                     return void_result();
                 }
                 
@@ -6651,7 +6402,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                     a_idx += 1;
                 }
 
-                c.output_file.write(c.indent + "call void @" + print_hook + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0))\n");
+                c.output_file.write(c.indent + "call void @" + print_hook + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_newline, i32 0, i32 0), i32 1)\n");
                 return void_result();
             }
 
@@ -7224,7 +6975,7 @@ func compile_type_cast(c -> Compiler, val_res -> CompileResult, target_type -> I
 func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position, origin_id -> Int) -> Void {
 
     if (type_id == TYPE_STRING) {
-        let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
+        let hook_raw_str -> String = get_mangled_symbol(c, "print_bytes", pos);
         let label_null -> String = next_label(c);
         let label_value -> String = next_label(c);
         let label_end -> String = next_label(c);
@@ -7234,15 +6985,19 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
         c.output_file.write(c.indent + "br i1 " + is_null + ", label %" + label_null + ", label %" + label_value + "\n");
 
         c.output_file.write("\n" + label_null + ":\n");
-        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* null)\n");
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* null, i32 0)\n");
         c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
         c.output_file.write("\n" + label_value + ":\n");
         let struct_reg -> String = next_reg(c);
         let ptr_reg -> String = next_reg(c);
+        let len_field -> String = next_reg(c);
+        let len_reg -> String = next_reg(c);
         c.output_file.write(c.indent + struct_reg + " = getelementptr inbounds %struct.$String, %struct.$String* " + reg + ", i32 0, i32 0\n");
         c.output_file.write(c.indent + ptr_reg + " = load i8*, i8** " + struct_reg + "\n");
-        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + ptr_reg + ")\n");
+        c.output_file.write(c.indent + len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + reg + ", i32 0, i32 1\n");
+        c.output_file.write(c.indent + len_reg + " = load i32, i32* " + len_field + "\n");
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + ptr_reg + ", i32 " + len_reg + ")\n");
         c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
         c.output_file.write("\n" + label_end + ":\n");
@@ -7287,8 +7042,8 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
     }
 
     if (type_id == TYPE_NULL || type_id == TYPE_NULLPTR) {
-        let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
-        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
+        let hook_raw_str -> String = get_mangled_symbol(c, "print_bytes", pos);
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0), i32 4)\n");
         return;
     }
 
@@ -7353,7 +7108,7 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
 }
 
 func compile_print_enum_internal(c -> Compiler, enum_reg -> String, s_info -> StructInfo, pos -> Position) -> Void {
-    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_bytes", pos);
     let default_label -> String = next_label(c);
     let end_label -> String = next_label(c);
     
@@ -7381,7 +7136,7 @@ func compile_print_enum_internal(c -> Compiler, enum_reg -> String, s_info -> St
         let name_str -> String = s_info.name + "." + f.name;
         let id -> Int = register_string_constant(c, name_str);
         let ptr_ -> String = get_string_ptr(id, name_str);
-        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + ptr_ + ")\n");
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + ptr_ + ", i32 " + name_str.length() + ")\n");
         c.output_file.write(c.indent + "br label %" + end_label + "\n");
         i += 1;
     }
@@ -7390,19 +7145,19 @@ func compile_print_enum_internal(c -> Compiler, enum_reg -> String, s_info -> St
     let unk_str -> String = s_info.name + "(<unknown>)";
     let unk_id -> Int = register_string_constant(c, unk_str);
     let unk_ptr -> String = get_string_ptr(unk_id, unk_str);
-    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + unk_ptr + ")\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + unk_ptr + ", i32 " + unk_str.length() + ")\n");
     c.output_file.write(c.indent + "br label %" + end_label + "\n");
     
     c.output_file.write("\n" + end_label + ":\n");
 }
 
 func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> StructInfo, pos -> Position) -> Void {
-    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_bytes", pos);
     let header -> String = s_info.name + "(";
     let header_id -> Int = register_string_constant(c, header);
     let header_ptr -> String = get_string_ptr(header_id, header);
     
-    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + header_ptr + ")\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + header_ptr + ", i32 " + header.length() + ")\n");
 
     let fields_vec -> Vector(Struct) = s_info.fields;
     let f_len -> Int = 0;
@@ -7419,7 +7174,7 @@ func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> S
         let fn_id -> Int = register_string_constant(c, f_name_eq);
         let fn_ptr -> String = get_string_ptr(fn_id, f_name_eq);
     
-        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + fn_ptr + ")\n");
+        c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + fn_ptr + ", i32 " + f_name_eq.length() + ")\n");
         
         let f_ptr -> String = next_reg(c);
         c.output_file.write(c.indent + f_ptr + " = getelementptr inbounds " + s_info.llvm_name + ", " + s_info.llvm_name + "* " + obj_reg + ", i32 0, i32 " + f_curr.offset + "\n");
@@ -7429,14 +7184,14 @@ func compile_print_struct_internal(c -> Compiler, obj_reg -> String, s_info -> S
 
         f_idx += 1;
         if (f_idx < f_len) {
-            c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
+            c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0), i32 2)\n");
         }
     }
-    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_paren, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_paren, i32 0, i32 0), i32 1)\n");
 }
 
 func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> SymbolInfo, pos -> Position) -> Void {
-    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_bytes", pos);
     let elem_type -> Int = v_info.type;
     let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
     let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
@@ -7451,7 +7206,7 @@ func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> S
     let data_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_ptr_ptr + "\n");
 
-    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_open_bracket, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_open_bracket, i32 0, i32 0), i32 1)\n");
 
     let label_cond -> String = next_label(c);
     let label_body -> String = next_label(c);
@@ -7487,19 +7242,19 @@ func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> S
     c.output_file.write(c.indent + "br i1 " + is_not_last + ", label %" + label_sep + ", label %" + label_cond + "\n");
 
     c.output_file.write("\n" + label_sep + ":\n");
-    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0), i32 2)\n");
     c.output_file.write(c.indent + "br label %" + label_cond + "\n");
 
     c.output_file.write("\n" + label_end + ":\n");
-    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0), i32 1)\n");
 }
 
 func compile_print_array_internal(c -> Compiler, arr_reg -> String, arr_info -> ArrayInfo, pos -> Position) -> Void {
-    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_bytes", pos);
     let elem_type -> Int = arr_info.base_type;
     let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
 
-    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_open_bracket, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_open_bracket, i32 0, i32 0), i32 1)\n");
 
     let size_val -> String = next_reg(c);
     if (arr_info.size == -1) {
@@ -7561,15 +7316,15 @@ func compile_print_array_internal(c -> Compiler, arr_reg -> String, arr_info -> 
     c.output_file.write(c.indent + "br i1 " + is_not_last + ", label %" + label_sep + ", label %" + label_cond + "\n");
 
     c.output_file.write("\n" + label_sep + ":\n");
-    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str_comma_space, i32 0, i32 0), i32 2)\n");
     c.output_file.write(c.indent + "br label %" + label_cond + "\n");
 
     c.output_file.write("\n" + label_end + ":\n");
-    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_bracket, i32 0, i32 0), i32 1)\n");
 }
 
 func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info -> StructInfo, pos -> Position) -> Void {
-    let hook_raw_str -> String = get_mangled_symbol(c, "print_raw_string", pos);
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_bytes", pos);
     let variant_llvm -> String = v_info.llvm_name;
 
     let is_null -> String = next_reg(c);
@@ -7582,7 +7337,7 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
     c.output_file.write(c.indent + "br i1 " + is_null + ", label %" + label_null_print + ", label %" + label_not_null + "\n");
 
     c.output_file.write("\n" + label_null_print + ":\n");
-    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0), i32 4)\n");
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
     c.output_file.write("\n" + label_not_null + ":\n");
@@ -7619,7 +7374,7 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
 
     // null
     c.output_file.write("\n" + label_null + ":\n");
-    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0))\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str_null, i32 0, i32 0), i32 4)\n");
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
     // Int
@@ -7682,8 +7437,7 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
 
     let obj_res -> CompileResult = compile_node(c, obj_node);
 
-    // WhiteLang methods use the WhiteLang ABI and receive the String object.
-    // Only explicit native-runtime adapters are allowed to expose the byte buffer.
+    // WhiteLang methods receive the string object, native adapters receive its buffer
     let args_str -> String = "%struct.$String* " + obj_res.reg;
     let args -> Vector(Struct) = call_node.args;
     let a_len -> Int = 0;
@@ -7723,47 +7477,11 @@ func compile_start(c -> Compiler) -> Void {
     c.output_file.write("declare %struct.$String* @wl_alloc_string(i64)\n");
     c.declared_externs.put("wl_alloc_string", StringConstant(id=0, value=""));
 
-    c.output_file.write("declare %struct.$String* @wl_string_concat(%struct.$String*, %struct.$String*)\n");
-    c.declared_externs.put("wl_string_concat", StringConstant(id=0, value=""));
-
-    c.output_file.write("declare i32 @wl_string_compare(%struct.$String*, %struct.$String*)\n");
-    c.declared_externs.put("wl_string_compare", StringConstant(id=0, value=""));
-
-    c.output_file.write("declare i32 @snprintf(i8*, i64, i8*, ...)\n");
-    c.declared_externs.put("snprintf", StringConstant(id=0, value="")); 
-
     c.output_file.write("declare double @llvm.pow.f64(double, double)\n\n");
 
-    c.output_file.write("declare i8* @malloc(i64)\n");
-    c.declared_externs.put("malloc", StringConstant(id=0, value=""));
-
-    c.output_file.write("declare i32 @strlen(i8*)\n");
-    c.declared_externs.put("strlen", StringConstant(id=0, value="")); 
-
-    c.output_file.write("declare i8* @strcpy(i8*, i8*)\n");
-    c.declared_externs.put("strcpy", StringConstant(id=0, value="")); 
-
-    c.output_file.write("declare i8* @strncpy(i8*, i8*, i64)\n");
-    c.declared_externs.put("strncpy", StringConstant(id=0, value="")); 
-
-    c.output_file.write("declare i8* @strcat(i8*, i8*)\n\n");
-    c.declared_externs.put("strcat", StringConstant(id=0, value="")); 
-
-    c.output_file.write("declare i32 @strcmp(i8*, i8*)\n\n");
-    c.declared_externs.put("strcmp", StringConstant(id=0, value="")); 
-
-    c.output_file.write("declare void @free(i8*)\n");
-    c.declared_externs.put("free", StringConstant(id=0, value=""));
-
-    c.output_file.write("declare void @exit(i32)\n");
-    c.declared_externs.put("exit", StringConstant(id=0, value=""));
-
-    c.output_file.write("declare i8* @realloc(i8*, i64)\n");
-    c.declared_externs.put("realloc", StringConstant(id=0, value=""));
-
-    c.output_file.write("declare void @wl_format_i128(i8*, i64, i64)\n");
+    c.output_file.write("declare i32 @wl_format_i128(i8*, i64, i64)\n");
     c.declared_externs.put("wl_format_i128", StringConstant(id=0, value=""));
-    c.output_file.write("declare void @wl_format_u128(i8*, i64, i64)\n");
+    c.output_file.write("declare i32 @wl_format_u128(i8*, i64, i64)\n");
     c.declared_externs.put("wl_format_u128", StringConstant(id=0, value=""));
 
 
@@ -7775,10 +7493,6 @@ func compile_start(c -> Compiler) -> Void {
     c.output_file.write("@.fmt_char = private unnamed_addr constant [3 x i8] c\"%c\\00\"\n");
     c.output_file.write("@.fmt_hex_ptr = private unnamed_addr constant [3 x i8] c\"%p\\00\"\n");
 
-    c.output_file.write("@.fmt_int_simple = private unnamed_addr constant [3 x i8] c\"%d\\00\"\n");
-    c.output_file.write("@.fmt_float_simple = private unnamed_addr constant [3 x i8] c\"%f\\00\"\n");
-    c.output_file.write("@.fmt_long_simple = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n");
-    c.output_file.write("@.fmt_ulong_simple = private unnamed_addr constant [5 x i8] c\"%llu\\00\"\n");
     c.output_file.write("@.str_true = private unnamed_addr constant [5 x i8] c\"true\\00\"\n");
     c.output_file.write("@.str_false = private unnamed_addr constant [6 x i8] c\"false\\00\"\n");
     c.output_file.write("@.str_null = private unnamed_addr constant [5 x i8] c\"null\\00\"\n\n");
@@ -7853,6 +7567,11 @@ func compile(c -> Compiler, node -> Struct) -> Void {
     let star_sym -> ImportSymbolNode = ImportSymbolNode(name_tok=star_tok, alias_tok=null);
     let fake_syms -> Vector(Struct) = [];
     fake_syms.append(star_sym);
+
+    // builtin is the prelude and carries the hooks required by generated code
+    let fake_builtin_path -> Token = Token(type=TOK_STR_LIT, value="builtin", line=0, col=0);
+    let fake_builtin_import -> ImportNode = ImportNode(type=NODE_IMPORT, path_tok=fake_builtin_path, symbols=fake_syms, alias_tok=null, pos=fake_pos);
+    compile_import(c, fake_builtin_import);
 
     let fake_import -> ImportNode = ImportNode(type=NODE_IMPORT, path_tok=fake_path, symbols=fake_syms, alias_tok=null, pos=fake_pos);
     compile_import(c, fake_import);

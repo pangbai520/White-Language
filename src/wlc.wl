@@ -1,6 +1,8 @@
 // src/wlc.wl
 import "builtin"
-import File from "file_io"
+import "sys"
+import "process"
+import "file"
 
 // Core components
 import "core/WhitelangTokens.wl"
@@ -13,10 +15,6 @@ import "core/WhitelangUtils.wl"
 
 
 extern func get_arg(ptr argv -> String, idx -> Int) -> String from "C";
-extern func system_call(cmd -> String) -> Int from "C";
-extern func is_windows() -> Int from "C";
-extern func is_macos() -> Int from "C";
-extern func wl_getenv(name -> String) -> String from "C";
 
 struct CompilerConfig(
     source_file     -> String,
@@ -132,10 +130,11 @@ func main(argc -> Int, ptr argv -> String) -> Int {
             if (cfg.source_file.length() == 0) {
                 cfg.source_file = arg;
             } else {
+                let linked_file -> String = "\"" + arg + "\"";
                 if (cfg.extra_files.length() == 0) {
-                    cfg.extra_files = arg;
+                    cfg.extra_files = linked_file;
                 } else {
-                    cfg.extra_files = cfg.extra_files + " " + arg;
+                    cfg.extra_files = cfg.extra_files + " " + linked_file;
                 }
             }
         }
@@ -155,9 +154,9 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     } else {
         let temp_dir -> String = "";
         
-        if (is_windows() == 1) {
-            temp_dir = wl_getenv("TMP");
-            if (temp_dir is null) { temp_dir = wl_getenv("TEMP"); }
+        if (sys.OS == "WINDOWS") {
+            temp_dir = sys.env.get_env("TMP");
+            if (temp_dir is null) { temp_dir = sys.env.get_env("TEMP"); }
             if (temp_dir is null) { temp_dir = "."; }
             
             if (!temp_dir.ends_with("\\") && !temp_dir.ends_with("/")) {
@@ -194,28 +193,28 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         else if (cfg.is_compile_only) {
             if (cfg.is_emit_llvm) { cfg.output_file = base_name + ".bc"; }
             else { 
-                if (is_windows() == 1) { cfg.output_file = base_name + ".obj"; }
+                if (sys.OS == "WINDOWS") { cfg.output_file = base_name + ".obj"; }
                 else { cfg.output_file = base_name + ".o"; }
             }
         }
         else if (cfg.is_shared) {
-            if (is_windows() == 1) { 
+            if (sys.OS == "WINDOWS") { 
                 cfg.output_file = base_name + ".dll"; 
-            } else if (is_macos() == 1) { 
+            } else if (sys.OS == "MACOS") { 
                 cfg.output_file = "lib" + base_name + ".dylib";
             } else { 
                 cfg.output_file = "lib" + base_name + ".so"; 
             }
         }
         else { // EXE
-            if (is_windows() == 1) { cfg.output_file = base_name + ".exe"; }
+            if (sys.OS == "WINDOWS") { cfg.output_file = base_name + ".exe"; }
             else { cfg.output_file = base_name; }
         }
     }
 
     log_stage(cfg, "Frontend & Middle-end");
-    let f_in -> File = File(cfg.source_file, "rb");
-    if (f_in is null) {
+    let f_in -> file.File = file.open(cfg.source_file);
+    if (f_in is null || !f_in.is_open()) {
         builtin.print("Error: Could not open " + cfg.source_file);
         return 1;
     }
@@ -238,7 +237,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     WhitelangExceptions.check_errors_and_abort();
 
     if (cfg.dump_ir) {
-        let f_ir -> File = File(ll_file, "rb");
+        let f_ir -> file.File = file.open(ll_file);
         let ir_content -> String = f_ir.read_all();
         f_ir.close();
         builtin.print(ir_content);
@@ -251,23 +250,23 @@ func main(argc -> Int, ptr argv -> String) -> Int {
 
     log_stage(cfg, "Backend/Linker");
     let clang_cmd -> String = "clang";
-    if (is_windows() == 1) {
+    if (sys.OS == "WINDOWS") {
         clang_cmd = "clang.exe";
     }
 
     let has_clang -> Bool = false;
 
-    let wl_path -> String = wl_getenv("WL_PATH");
+    let wl_path -> String = sys.env.get_env("WL_PATH");
     if (wl_path is !null) {
         let portable_clang -> String = "";
-        if (is_windows() == 1) {
+        if (sys.OS == "WINDOWS") {
             portable_clang = wl_path + "/tools/llvm/bin/clang.exe";
         } else {
             portable_clang = wl_path + "/tools/llvm/bin/clang";
         }
 
-        let probe -> File = File(portable_clang, "rb");
-        if (probe is !null) {
+        let probe -> file.File = file.open(portable_clang);
+        if (probe is !null && probe.is_open()) {
             probe.close();
             clang_cmd = "\"" + portable_clang + "\"";
             has_clang = true;
@@ -279,10 +278,10 @@ func main(argc -> Int, ptr argv -> String) -> Int {
 
     if (!has_clang) {
         let check_ret -> Int = 1;
-        if (is_windows() == 1) {
-            check_ret = system_call("where " + clang_cmd + " >nul 2>nul");
+        if (sys.OS == "WINDOWS") {
+            check_ret = process.shell("where " + clang_cmd + " >nul 2>nul");
         } else {
-            check_ret = system_call("which " + clang_cmd + " > /dev/null 2>&1");
+            check_ret = process.shell("which " + clang_cmd + " > /dev/null 2>&1");
         }
 
         if (check_ret == 0) {
@@ -317,18 +316,23 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     }
     else {
         if (cfg.is_shared) {
-            if (is_macos() == 1) {
+            if (sys.OS == "MACOS") {
                 cmd += " -dynamiclib";
             } else {
                 cmd += " -shared";
             }
-            if (is_windows() == 0) { cmd += " -fPIC"; }
+            if (sys.OS != "WINDOWS") { cmd += " -fPIC"; }
         }
 
-        let wl_path -> String = wl_getenv("WL_PATH");
+        let wl_path -> String = sys.env.get_env("WL_PATH");
         if (wl_path is !null) {
-            if (is_windows() == 1) {
+            if (sys.OS == "WINDOWS") {
                 cmd += " \"" + wl_path + "/runtime/wl_runtime.obj\"";
+                if (cfg.is_shared) {
+                    cmd += " -nostdlib -Xlinker /entry:DllMainCRTStartup -lkernel32 -lshell32";
+                } else {
+                    cmd += " -nostdlib -Xlinker /entry:mainCRTStartup -Xlinker /subsystem:console -lkernel32 -lshell32";
+                }
             } else {
                 cmd += " \"" + wl_path + "/runtime/wl_runtime.o\"";
             }
@@ -342,19 +346,17 @@ func main(argc -> Int, ptr argv -> String) -> Int {
 
         cmd += " -o \"" + cfg.output_file + "\"";
 
-        if (is_windows() == 0) {
+        if (sys.OS != "WINDOWS") {
             cmd += " -lm -lc";
         }
     }
 
     if (cfg.verbose) { builtin.print("Command: " + cmd); }
-    if (is_windows() == 1) { cmd = "\"" + cmd + "\""; }
-
-    let ret -> Int = system_call(cmd);
+    let ret -> Int = process.shell(cmd);
 
     if (!cfg.keep_temps && cfg.output_file != ll_file) {
         if (cfg.verbose) { builtin.print("Cleaning up: " + ll_file); }
-        file_io.remove_file(ll_file);
+        file.remove(ll_file);
         WhitelangExceptions.CLEAN_TMP_LL = "";
     }
 

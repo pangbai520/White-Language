@@ -1,13 +1,12 @@
 // core/WhitelangExceptions.wl
 import "builtin"
-import "file_io"
-
-extern func exit(status -> Int) -> Void from "C";
+import "file"
+import "process"
 
 let GLOBAL_ERROR_COUNT -> Int = 0;
 let LAST_ERROR_FILE -> String = "";
 let CLEAN_TMP_LL -> String = "";
-let ACTIVE_FILE -> file_io.File = null;
+let ACTIVE_FILE -> file.File = null;
 let ERROR_BUFFER -> Vector(String) = null;
 
 struct Position(
@@ -33,9 +32,9 @@ func abort_and_clean(status -> Int) -> Void {
         ACTIVE_FILE.close();
     }
     if (CLEAN_TMP_LL.length() > 0) {
-        file_io.remove_file(CLEAN_TMP_LL);
+        file.remove(CLEAN_TMP_LL);
     }
-    exit(status);
+    process.exit(status);
 }
 
 func report_error(pos -> Position, name -> String, details -> String) -> Void {

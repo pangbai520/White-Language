@@ -1,14 +1,12 @@
 // core/WhitelangUtils.wl
 import "builtin"
+import "sys"
+import "file"
 
 import * from "WhitelangNodes.wl"
 import Position from "WhitelangExceptions.wl"
 import Token from "WhitelangTokens.wl"
-import File from "file_io"
 import Dict from "dict"
-
-extern func wl_getenv(name -> String) -> String from "C";
-
 
 // Type constants
 const TYPE_INT   -> Int = 1;
@@ -142,7 +140,7 @@ struct CaptureScope(
 )
 
 struct Compiler(
-    output_file -> File,
+    output_file -> file.File,
     reg_count   -> Int, 
     symbol_table -> Scope,
     global_symbol_table -> Dict,
@@ -220,7 +218,7 @@ struct LoopScope(
 
 // compiler init & state utils
 func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
-    let f -> File = File(out_path, "w");
+    let f -> file.File = file.create(out_path);
     // initialize empty scope
     let root_scope -> Scope = Scope(table=Dict(32), parent=null, gc_vars=[], depth=0);
 
@@ -460,6 +458,13 @@ func export_module_symbols(c -> Compiler, prefix -> String, as_submodule -> Bool
     }
 }
 
+func report_import_collision(c -> Compiler, pos -> Position, kind -> String, name -> String) -> Void {
+// imports are bound in both passes; only codegen emits diagnostics
+    if (!c.is_precompile_phase) {
+        WhitelangExceptions.throw_import_error(pos, "Name collision for " + kind + " '" + name + "'. Please use explicit alias.");
+    }
+}
+
 func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) -> Void {
     if (prefix != "") {
         let bare_prefix -> String = prefix.slice(0, prefix.length() - 1);
@@ -491,7 +496,7 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
                         if (!bare_name.starts_with("__")) {
                             let existing_f -> String = c.current_file_func_aliases.get(bare_name);
                             if (existing_f is !null && existing_f != f_key) {
-                                WhitelangExceptions.throw_import_error(node.pos, "Name collision for function '" + bare_name + "'. Please use explicit alias.");
+                                report_import_collision(c, node.pos, "function", bare_name);
                             } else {
                                 c.current_file_func_aliases.put(bare_name, f_key);
                             }
@@ -511,7 +516,7 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
                         if (!bare_name.starts_with("__")) {
                             let existing_s -> String = c.current_file_type_aliases.get(bare_name);
                             if (existing_s is !null && existing_s != s_key) {
-                                WhitelangExceptions.throw_import_error(node.pos, "Name collision for type '" + bare_name + "'. Please use explicit alias.");
+                                report_import_collision(c, node.pos, "type", bare_name);
                             } else {
                                 c.current_file_type_aliases.put(bare_name, s_key);
                             }
@@ -531,7 +536,7 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
                         if (!bare_name.starts_with("__")) {
                             let existing_g -> String = c.current_file_global_aliases.get(bare_name);
                             if (existing_g is !null && existing_g != g_key) {
-                                WhitelangExceptions.throw_import_error(node.pos, "Name collision for global '" + bare_name + "'. Please use explicit alias.");
+                                report_import_collision(c, node.pos, "global", bare_name);
                             } else {
                                 c.current_file_global_aliases.put(bare_name, g_key);
                             }
@@ -546,13 +551,13 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
             while (k < g_f_cap) {
                 if (c.global_func_aliases.hashes[k] >= 2) { 
                     let f_key -> String = c.global_func_aliases.keys[k];
-                    if (f_key.starts_with(prefix)) {
+                    if (f_key.starts_with(prefix) && c.func_table.get(f_key) is null) {
                         let bare_name -> String = f_key.slice(p_len, f_key.length());
                         if (!bare_name.starts_with("__")) {
                             let existing_f -> String = c.current_file_func_aliases.get(bare_name);
                             let val -> String = c.global_func_aliases.get(f_key);
                             if (existing_f is !null && existing_f != val) {
-                                WhitelangExceptions.throw_import_error(node.pos, "Name collision for function '" + bare_name + "'. Please use explicit alias.");
+                                report_import_collision(c, node.pos, "function", bare_name);
                             } else {
                                 c.current_file_func_aliases.put(bare_name, val);
                             }
@@ -567,13 +572,13 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
             while (k < g_s_cap) {
                 if (c.global_type_aliases.hashes[k] >= 2) { 
                     let s_key -> String = c.global_type_aliases.keys[k];
-                    if (s_key.starts_with(prefix)) {
+                    if (s_key.starts_with(prefix) && c.struct_table.get(s_key) is null) {
                         let bare_name -> String = s_key.slice(p_len, s_key.length());
                         if (!bare_name.starts_with("__")) {
                             let existing_s -> String = c.current_file_type_aliases.get(bare_name);
                             let val -> String = c.global_type_aliases.get(s_key);
                             if (existing_s is !null && existing_s != val) {
-                                WhitelangExceptions.throw_import_error(node.pos, "Name collision for type '" + bare_name + "'. Please use explicit alias.");
+                                report_import_collision(c, node.pos, "type", bare_name);
                             } else {
                                 c.current_file_type_aliases.put(bare_name, val);
                             }
@@ -588,13 +593,13 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
             while (k < g_v_cap) {
                 if (c.global_var_aliases.hashes[k] >= 2) { 
                     let v_key -> String = c.global_var_aliases.keys[k];
-                    if (v_key.starts_with(prefix)) {
+                    if (v_key.starts_with(prefix) && c.global_symbol_table.get(v_key) is null) {
                         let bare_name -> String = v_key.slice(p_len, v_key.length());
                         if (!bare_name.starts_with("__")) {
                             let existing_v -> String = c.current_file_global_aliases.get(bare_name);
                             let val -> String = c.global_var_aliases.get(v_key);
                             if (existing_v is !null && existing_v != val) {
-                                WhitelangExceptions.throw_import_error(node.pos, "Name collision for global '" + bare_name + "'. Please use explicit alias.");
+                                report_import_collision(c, node.pos, "global", bare_name);
                             } else {
                                 c.current_file_global_aliases.put(bare_name, val);
                             }
@@ -627,37 +632,37 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
 
         if (c.func_table.get(lookup_name) is !null) {
             let existing_f -> String = c.current_file_func_aliases.get(target_name);
-            if (existing_f is !null && existing_f != lookup_name) { WhitelangExceptions.throw_import_error(node.pos, "Name collision for function '" + target_name + "'. Please use explicit alias."); }
+            if (existing_f is !null && existing_f != lookup_name) { report_import_collision(c, node.pos, "function", target_name); }
             else { c.current_file_func_aliases.put(target_name, lookup_name); }
             found = true;
         } else if (c.global_func_aliases.get(lookup_name) is !null) {
             let real_name -> String = c.global_func_aliases.get(lookup_name);
             let existing_f -> String = c.current_file_func_aliases.get(target_name);
-            if (existing_f is !null && existing_f != real_name) { WhitelangExceptions.throw_import_error(node.pos, "Name collision for function '" + target_name + "'. Please use explicit alias."); }
+            if (existing_f is !null && existing_f != real_name) { report_import_collision(c, node.pos, "function", target_name); }
             else { c.current_file_func_aliases.put(target_name, real_name); }
             found = true;
         }
         if (c.struct_table.get(lookup_name) is !null) {
             let existing_s -> String = c.current_file_type_aliases.get(target_name);
-            if (existing_s is !null && existing_s != lookup_name) { WhitelangExceptions.throw_import_error(node.pos, "Name collision for type '" + target_name + "'. Please use explicit alias."); }
+            if (existing_s is !null && existing_s != lookup_name) { report_import_collision(c, node.pos, "type", target_name); }
             else { c.current_file_type_aliases.put(target_name, lookup_name); }
             found = true;
         } else if (c.global_type_aliases.get(lookup_name) is !null) {
             let real_name -> String = c.global_type_aliases.get(lookup_name);
             let existing_s -> String = c.current_file_type_aliases.get(target_name);
-            if (existing_s is !null && existing_s != real_name) { WhitelangExceptions.throw_import_error(node.pos, "Name collision for type '" + target_name + "'. Please use explicit alias."); }
+            if (existing_s is !null && existing_s != real_name) { report_import_collision(c, node.pos, "type", target_name); }
             else { c.current_file_type_aliases.put(target_name, real_name); }
             found = true;
         }
         if (c.global_symbol_table.get(lookup_name) is !null) {
             let existing_g -> String = c.current_file_global_aliases.get(target_name);
-            if (existing_g is !null && existing_g != lookup_name) { WhitelangExceptions.throw_import_error(node.pos, "Name collision for global '" + target_name + "'. Please use explicit alias."); }
+            if (existing_g is !null && existing_g != lookup_name) { report_import_collision(c, node.pos, "global", target_name); }
             else { c.current_file_global_aliases.put(target_name, lookup_name); }
             found = true;
         } else if (c.global_var_aliases.get(lookup_name) is !null) {
             let real_name -> String = c.global_var_aliases.get(lookup_name);
             let existing_g -> String = c.current_file_global_aliases.get(target_name);
-            if (existing_g is !null && existing_g != real_name) { WhitelangExceptions.throw_import_error(node.pos, "Name collision for global '" + target_name + "'. Please use explicit alias."); }
+            if (existing_g is !null && existing_g != real_name) { report_import_collision(c, node.pos, "global", target_name); }
             else { c.current_file_global_aliases.put(target_name, real_name); }
             found = true;
         }
@@ -2075,7 +2080,7 @@ func string_escape(s -> String) -> String {
 }
 
 func file_exists(path -> String) -> Bool {
-    let f -> File = File(path, "rb");
+    let f -> file.File = file.open(path);
     if (f.handle is nullptr) {
         return false;
     }
@@ -2171,7 +2176,7 @@ func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> 
         return to_normpath(c.current_dir + "/" + raw_path);
     }
 
-    let wl_path -> String = wl_getenv("WL_PATH");
+    let wl_path -> String = sys.env.get_env("WL_PATH");
     if (wl_path is null) {
         WhitelangExceptions.throw_environment_error("Missing 'WL_PATH' variable.");
     }

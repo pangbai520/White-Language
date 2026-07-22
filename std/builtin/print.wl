@@ -1,143 +1,117 @@
 import "sys"
-import "sys/win32"
+import "internal/platform/windows"
+import "internal/platform/posix"
+import "internal/runtime"
 
-extern func write(fd -> Int, buf -> AnyPtr, count -> Long) -> Long from "C";
 extern func wl_string_data(s -> String) -> AnyPtr from "C";
 
 let console_init_done -> Bool = false;
 
-@CompilerLink("print_raw_string")
-func __wl_print_raw_string(p -> AnyPtr) -> Void {
-    if (p is nullptr) {
-        __wl_print_char('n');
-        __wl_print_char('u');
-        __wl_print_char('l');
-        __wl_print_char('l');
+@CompilerLink("print_bytes")
+func write_bytes(data -> AnyPtr, length -> Int) -> Void {
+    if (data is nullptr) {
+        write_char('n');
+        write_char('u');
+        write_char('l');
+        write_char('l');
         return;
     }
-    let ptr byte_ptr -> Byte = p;
-    let len -> Int = 0;
-    while (byte_ptr[len] != 0) { len = len + 1; }
-    
+
     if (sys.OS == "WINDOWS") {
-        let handle -> AnyPtr = win32.GetStdHandle(win32.STD_OUTPUT_HANDLE);
+        let handle -> AnyPtr = windows.GetStdHandle(windows.STD_OUTPUT_HANDLE);
         if (handle is !nullptr) {
             if (console_init_done == false) {
-                win32.SetConsoleOutputCP(win32.CP_UTF8);
+                windows.SetConsoleOutputCP(windows.CP_UTF8);
                 console_init_done = true;
             }
             let bytes_written -> Int = 0;
-            win32.WriteFile(handle, p, len, ref bytes_written, nullptr);
+            windows.WriteFile(handle, data, length, ref bytes_written, nullptr);
         }
     } else {
-        let len_long -> Long = len;
-        write(1, p, len_long);
+        posix.write(1, data, Long(length));
+    }
+}
+
+@CompilerLink("print_raw_string")
+func write_raw_string(data -> AnyPtr) -> Void {
+// raw pointers have no length; write one byte at a time to prevent strlen folding
+    if (data is nullptr) {
+        write_bytes(nullptr, 0);
+        return;
+    }
+    let ptr bytes -> Byte = data;
+    let i -> Int = 0;
+    while (bytes[i] != 0) {
+        write_char(Char(bytes[i]));
+        i += 1;
     }
 }
 
 @CompilerLink("print_char")
-func __wl_print_char(c -> Char) -> Void {
+func write_char(c -> Char) -> Void {
     let char_buf -> Byte = Byte(c);
     if (sys.OS == "WINDOWS") {
-        let handle -> AnyPtr = win32.GetStdHandle(win32.STD_OUTPUT_HANDLE);
+        let handle -> AnyPtr = windows.GetStdHandle(windows.STD_OUTPUT_HANDLE);
         if (handle is !nullptr) {
             if (console_init_done == false) {
-                win32.SetConsoleOutputCP(win32.CP_UTF8);
+                windows.SetConsoleOutputCP(windows.CP_UTF8);
                 console_init_done = true;
             }
             let bytes_written -> Int = 0;
-            win32.WriteFile(handle, ref char_buf, 1, ref bytes_written, nullptr);
+            windows.WriteFile(handle, ref char_buf, 1, ref bytes_written, nullptr);
         }
     } else {
-        write(1, ref char_buf, 1);
+        posix.write(1, ref char_buf, 1L);
     }
 }
 
-func __wl_print_int_helper(v -> Int) -> Void {
-    if (v == 0) { return; }
-    __wl_print_int_helper(v / 10);
-    let digit -> Int = v % 10;
+func write_int_digits(value -> Int) -> Void {
+    if (value == 0) { return; }
+    write_int_digits(value / 10);
+    let digit -> Int = value % 10;
     if (digit < 0) { digit = -digit; }
-    __wl_print_char(Char(digit + 48));
+    write_char(Char(digit + 48));
 }
 
 @CompilerLink("print_int")
-func __wl_print_int(v -> Int) -> Void {
-    if (v == 0) { __wl_print_char('0'); return; }
-    if (v < 0) { __wl_print_char('-'); }
-    __wl_print_int_helper(v);
+func write_int(value -> Int) -> Void {
+    if (value == 0) { write_char('0'); return; }
+    if (value < 0) { write_char('-'); }
+    write_int_digits(value);
 }
 
-func __wl_print_long_helper(v -> Long) -> Void {
-    if (v == 0) { return; }
-    __wl_print_long_helper(v / 10);
-    let digit -> Long = v % 10;
+func write_long_digits(value -> Long) -> Void {
+    if (value == 0L) { return; }
+    write_long_digits(value / 10L);
+    let digit -> Long = value % 10L;
     if (digit < 0) { digit = -digit; }
-    __wl_print_char(Char(Int(digit) + 48));
+    write_char(Char(Int(digit) + 48));
 }
 
 @CompilerLink("print_long")
-func __wl_print_long(v -> Long) -> Void {
-    if (v == 0) { __wl_print_char('0'); return; }
-    if (v < 0) { __wl_print_char('-'); }
-    __wl_print_long_helper(v);
+func write_long(value -> Long) -> Void {
+    if (value == 0L) { write_char('0'); return; }
+    if (value < 0L) { write_char('-'); }
+    write_long_digits(value);
 }
 
 @CompilerLink("print_float")
-func __wl_print_float(v -> Float) -> Void {
-    if (v < 0.0) { __wl_print_char('-'); v = -v; }
-    let int_part -> Long = Long(v);
-    __wl_print_long(int_part);
-    __wl_print_char('.');
-    let int_float -> Float = Float(int_part);
-    let frac_part -> Float = v - int_float;
-    let i -> Int = 0;
-    while (i < 6) {
-        frac_part = frac_part * 10.0;
-        let digit -> Int = Int(frac_part);
-        __wl_print_int(digit);
-        let digit_float -> Float = Float(digit);
-        frac_part = frac_part - digit_float;
-        i = i + 1;
-    }
+func write_float(value -> Float) -> Void {
+    let formatted -> String = runtime.format_float(value);
+    write_bytes(wl_string_data(formatted), formatted.length());
 }
 
 @CompilerLink("print_bool")
-func __wl_print_bool(v -> Bool) -> Void {
+func write_bool(value -> Bool) -> Void {
     let s -> String = "false";
-    if (v) { s = "true"; }
-    let data -> AnyPtr = wl_string_data(s);
-    
-    if (sys.OS == "WINDOWS") {
-        let handle -> AnyPtr = win32.GetStdHandle(win32.STD_OUTPUT_HANDLE);
-        if (handle is !nullptr) {
-            let bytes_written -> Int = 0;
-            win32.WriteFile(handle, data, s.length(), ref bytes_written, nullptr);
-        }
-    } else {
-        let len_long -> Long = s.length();
-        write(1, data, len_long);
-    }
+    if (value) { s = "true"; }
+    write_bytes(wl_string_data(s), s.length());
 }
 
 @CompilerLink
 func print(s -> String) -> Void {
     if (s is null) { s = "null"; }
-    let data -> AnyPtr = wl_string_data(s);
-    if (sys.OS == "WINDOWS") {
-        let handle -> AnyPtr = win32.GetStdHandle(win32.STD_OUTPUT_HANDLE);
-        if (handle is !nullptr) {
-            if (console_init_done == false) {
-                win32.SetConsoleOutputCP(win32.CP_UTF8);
-                console_init_done = true;
-            }
-            let bytes_written -> Int = 0;
-            win32.WriteFile(handle, data, s.length(), ref bytes_written, nullptr);
-            win32.WriteFile(handle, "\n", 1, ref bytes_written, nullptr);
-        }
-    } else {
-        let len_long -> Long = s.length();
-        write(1, data, len_long);
-        write(1, "\n", 1);
-    }
+    write_bytes(wl_string_data(s), s.length());
+    let newline -> String = "\n";
+    write_bytes(wl_string_data(newline), 1);
 }

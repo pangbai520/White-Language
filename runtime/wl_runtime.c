@@ -1,15 +1,78 @@
 // runtime/wl_runtime.c
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <limits.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shellapi.h>
+
+// abi hooks required by msvc- and mingw-targeted objects
+int _fltused = 0x9875;
+void __main(void) {}
+
+__attribute__((weak)) BOOL WINAPI DllMainCRTStartup(HINSTANCE instance, DWORD reason, LPVOID reserved) {
+    (void)instance;
+    (void)reason;
+    (void)reserved;
+    return TRUE;
+}
+
+// x64 ignores argc and argv when the emitted main does not declare them
+extern int main(int argc, char** argv) __attribute__((weak));
+
+__declspec(noreturn) __attribute__((weak)) void mainCRTStartup(void) {
+    int argc = 0;
+    wchar_t** wide_argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (wide_argv == NULL || argc < 0) {
+        ExitProcess(127);
+    }
+
+    HANDLE heap = GetProcessHeap();
+    char** argv = (char**)HeapAlloc(heap, HEAP_ZERO_MEMORY, ((SIZE_T)argc + 1u) * sizeof(char*));
+    if (argv == NULL) {
+        LocalFree(wide_argv);
+        ExitProcess(127);
+    }
+
+    for (int i = 0; i < argc; ++i) {
+        int bytes = WideCharToMultiByte(CP_UTF8, 0, wide_argv[i], -1, NULL, 0, NULL, NULL);
+        if (bytes <= 0) {
+            for (int j = 0; j < i; ++j) HeapFree(heap, 0, argv[j]);
+            HeapFree(heap, 0, argv);
+            LocalFree(wide_argv);
+            ExitProcess(127);
+        }
+
+        argv[i] = (char*)HeapAlloc(heap, 0, (SIZE_T)bytes);
+        if (argv[i] == NULL || WideCharToMultiByte(CP_UTF8, 0, wide_argv[i], -1, argv[i], bytes, NULL, NULL) <= 0) {
+            if (argv[i] != NULL) HeapFree(heap, 0, argv[i]);
+            for (int j = 0; j < i; ++j) HeapFree(heap, 0, argv[j]);
+            HeapFree(heap, 0, argv);
+            LocalFree(wide_argv);
+            ExitProcess(127);
+        }
+    }
+
+    LocalFree(wide_argv);
+    if (main == NULL) {
+        HeapFree(heap, 0, argv);
+        ExitProcess(127);
+    }
+    int status = main(argc, argv);
+
+    for (int i = 0; i < argc; ++i) HeapFree(heap, 0, argv[i]);
+    HeapFree(heap, 0, argv);
+    ExitProcess((UINT)status);
+}
+#else
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #endif
 
-// Define WhiteLang String struct layout to ensure C compatibility
+// keep this layout in sync with %struct.$String
 typedef struct {
     char* buf;
     int len;
@@ -21,13 +84,27 @@ enum {
     WL_OBJECT_HEADER_SIZE = 8
 };
 
+// c strings are scanned only at native boundaries such as argv and getenv
+static size_t wl_cstr_len(const char* text) {
+    if (text == NULL) return 0;
+    const volatile unsigned char* cursor = (const volatile unsigned char*)text;
+    size_t len = 0;
+    while (cursor[len] != 0) ++len;
+    return len;
+}
+
 static wl_string* wl_alloc_string_storage(size_t capacity) {
     if (capacity > INT_MAX || capacity > SIZE_MAX - WL_OBJECT_HEADER_SIZE - sizeof(wl_string) - 1) {
         return NULL;
     }
 
     const size_t total_size = WL_OBJECT_HEADER_SIZE + sizeof(wl_string) + capacity + 1;
-    unsigned char* mem = (unsigned char*)malloc(total_size);
+    unsigned char* mem;
+#ifdef _WIN32
+    mem = (unsigned char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, total_size);
+#else
+    mem = (unsigned char*)malloc(total_size);
+#endif
     if (mem == NULL) {
         return NULL;
     }
@@ -41,7 +118,9 @@ static wl_string* wl_alloc_string_storage(size_t capacity) {
     str->buf = (char*)(mem + WL_OBJECT_HEADER_SIZE + sizeof(wl_string));
     str->len = (int)capacity;
     str->cap = (int)capacity;
+#ifndef _WIN32
     memset(str->buf, 0, capacity + 1);
+#endif
     return str;
 }
 
@@ -63,10 +142,12 @@ int is_macos() {
 
 wl_string* to_wl_str(const char* c_str) {
     if (c_str == NULL) return NULL;
-    const size_t len = strlen(c_str);
+    const size_t len = wl_cstr_len(c_str);
     wl_string* wl_str = wl_alloc_string_storage(len);
     if (wl_str == NULL) return NULL;
-    memcpy(wl_str->buf, c_str, len + 1);
+    volatile char* dest = (volatile char*)wl_str->buf;
+    const volatile char* source = (const volatile char*)c_str;
+    for (size_t i = 0; i <= len; ++i) dest[i] = source[i];
     return wl_str;
 }
 
@@ -75,6 +156,7 @@ wl_string* get_arg(char** argv, int idx) {
     return to_wl_str(argv[idx]);
 }
 
+#ifndef _WIN32
 int system_call(wl_string* cmd) {
     if (cmd == NULL || cmd->buf == NULL) return -1;
     return system(cmd->buf);
@@ -86,6 +168,11 @@ wl_string* wl_getenv(wl_string* name) {
     if (val == NULL) return NULL;
     return to_wl_str(val);
 }
+
+void wl_posix_exit(int status) {
+    exit(status);
+}
+#endif
 
 void __wl_str_set(wl_string* s, int idx, int val) {
     if (s && s->buf && idx >= 0 && idx < s->cap) {
@@ -105,81 +192,59 @@ void* wl_string_data(wl_string* s) {
     return s->buf;
 }
 
-int wl_string_at(wl_string* s, int idx) {
-    if (s == NULL || s->buf == NULL || idx < 0 || idx >= s->len) return 0;
-    return (unsigned char)s->buf[idx];
+void wl_string_set_length(wl_string* s, int length) {
+    if (s == NULL || s->buf == NULL || length < 0 || length > s->cap) return;
+    s->len = length;
+    s->buf[length] = '\0';
 }
 
-wl_string* wl_string_slice(wl_string* s, int start, int end) {
-    if (s == NULL || s->buf == NULL) return NULL;
-    if (start < 0) start = 0;
-    if (end > s->len) end = s->len;
-    if (start > end) start = end;
-
-    const size_t len = (size_t)(end - start);
-    wl_string* result = wl_alloc_string_storage(len);
-    if (result == NULL) return NULL;
-    if (len > 0) memcpy(result->buf, s->buf + start, len);
-    result->buf[len] = '\0';
-    return result;
-}
-
-int wl_string_ends_with(wl_string* s, wl_string* suffix) {
-    if (s == NULL || suffix == NULL || s->buf == NULL || suffix->buf == NULL) return 0;
-    if (suffix->len > s->len) return 0;
-    const int offset = s->len - suffix->len;
-    for (int i = 0; i < suffix->len; ++i) {
-        if (s->buf[offset + i] != suffix->buf[i]) return 0;
-    }
-    return 1;
-}
-
-int wl_string_starts_with(wl_string* s, wl_string* prefix) {
-    if (s == NULL || prefix == NULL || s->buf == NULL || prefix->buf == NULL) return 0;
-    if (prefix->len > s->len) return 0;
-    for (int i = 0; i < prefix->len; ++i) {
-        if (s->buf[i] != prefix->buf[i]) return 0;
-    }
-    return 1;
+wl_string* wl_alloc_string(long long size) {
+// allocate an empty string with inline storage
+    if (size < 0) return NULL;
+    return wl_alloc_string_storage((size_t)size);
 }
 
 wl_string* wl_string_concat(wl_string* left, wl_string* right) {
     if (left == NULL || right == NULL || left->buf == NULL || right->buf == NULL) return NULL;
-    const size_t left_len = (size_t)left->len;
-    const size_t right_len = (size_t)right->len;
-    if (left_len > SIZE_MAX - right_len) return NULL;
+    if (left->len < 0 || right->len < 0 || left->len > INT_MAX - right->len) return NULL;
 
-    wl_string* result = wl_alloc_string_storage(left_len + right_len);
+    const int length = left->len + right->len;
+    wl_string* result = wl_alloc_string_storage((size_t)length);
     if (result == NULL) return NULL;
-    if (left_len > 0) memcpy(result->buf, left->buf, left_len);
-    if (right_len > 0) memcpy(result->buf + left_len, right->buf, right_len);
-    result->buf[left_len + right_len] = '\0';
+
+    int i = 0;
+    while (i < left->len) {
+        result->buf[i] = left->buf[i];
+        ++i;
+    }
+    int j = 0;
+    while (j < right->len) {
+        result->buf[left->len + j] = right->buf[j];
+        ++j;
+    }
     return result;
 }
 
 int wl_string_compare(wl_string* left, wl_string* right) {
     if (left == right) return 0;
-    if (left == NULL) return -1;
-    if (right == NULL) return 1;
+    if (left == NULL || left->buf == NULL) return -1;
+    if (right == NULL || right->buf == NULL) return 1;
 
-    const int common_len = left->len < right->len ? left->len : right->len;
-    for (int i = 0; i < common_len; ++i) {
+    const int common_length = left->len < right->len ? left->len : right->len;
+    int i = 0;
+    while (i < common_length) {
         const unsigned char lhs = (unsigned char)left->buf[i];
         const unsigned char rhs = (unsigned char)right->buf[i];
         if (lhs < rhs) return -1;
         if (lhs > rhs) return 1;
+        ++i;
     }
     if (left->len < right->len) return -1;
     if (left->len > right->len) return 1;
     return 0;
 }
 
-// safely allocate an empty string of a specified size
-wl_string* wl_alloc_string(long long size) {
-    if (size < 0) return NULL;
-    return wl_alloc_string_storage((size_t)size);
-}
-
+#ifndef _WIN32
 void* wl_fopen(wl_string* filename, wl_string* mode) {
     if (filename == NULL || filename->buf == NULL || mode == NULL || mode->buf == NULL) {
         return NULL;
@@ -226,18 +291,21 @@ int wl_remove(wl_string* filename) {
     if (filename == NULL || filename->buf == NULL) return -1;
     return remove(filename->buf);
 }
+#endif
 
-void wl_format_i128(char* buf, unsigned long long low, long long high) {
+int wl_format_i128(char* buf, unsigned long long low, long long high) {
     __int128 val = (__int128)(((unsigned __int128)(unsigned long long)high << 64) | low);
     if (val == 0) {
-        strcpy(buf, "0");
-        return;
+        buf[0] = '0';
+        buf[1] = '\0';
+        return 1;
     }
     int is_neg = 0;
     unsigned __int128 uval;
     if (val < 0) {
         is_neg = 1;
-        uval = (unsigned __int128)(-val);
+        // negate after conversion so INT128_MIN stays defined
+        uval = (unsigned __int128)0 - (unsigned __int128)val;
     } else {
         uval = (unsigned __int128)val;
     }
@@ -256,13 +324,15 @@ void wl_format_i128(char* buf, unsigned long long low, long long high) {
         buf[i] = temp[pos - 1 - i];
     }
     buf[pos] = '\0';
+    return pos;
 }
 
-void wl_format_u128(char* buf, unsigned long long low, unsigned long long high) {
+int wl_format_u128(char* buf, unsigned long long low, unsigned long long high) {
     unsigned __int128 val = ((unsigned __int128)high << 64) | low;
     if (val == 0) {
-        strcpy(buf, "0");
-        return;
+        buf[0] = '0';
+        buf[1] = '\0';
+        return 1;
     }
     char temp[64];
     int pos = 0;
@@ -275,4 +345,5 @@ void wl_format_u128(char* buf, unsigned long long low, unsigned long long high) 
         buf[i] = temp[pos - 1 - i];
     }
     buf[pos] = '\0';
+    return pos;
 }

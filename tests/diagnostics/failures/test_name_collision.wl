@@ -5,7 +5,7 @@
 
 import "../../fixtures/pkgs/conflict_source_a.wl"
 import * from "../../fixtures/pkgs/conflict_source_a.wl"
-import * from "../../fixtures/pkgs/pkg_b.wl" // This must throw ImportError due to 'collision_target' conflict
+import * from "../../fixtures/pkgs/conflict_source_b.wl" // This must throw ImportError due to 'collision_target' conflict
 
 func main() -> Int {
     collision_target();
