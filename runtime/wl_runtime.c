@@ -124,22 +124,6 @@ static wl_string* wl_alloc_string_storage(size_t capacity) {
     return str;
 }
 
-int is_windows() {
-    #ifdef _WIN32
-        return 1;
-    #else
-        return 0;
-    #endif
-}
-
-int is_macos() {
-    #ifdef __APPLE__
-        return 1;
-    #else
-        return 0;
-    #endif
-}
-
 wl_string* to_wl_str(const char* c_str) {
     if (c_str == NULL) return NULL;
     const size_t len = wl_cstr_len(c_str);

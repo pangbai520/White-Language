@@ -20,6 +20,7 @@ struct CompilerConfig(
     source_file     -> String,
     output_file     -> String,
     extra_ldflags   -> String,
+    library_paths   -> Vector(String),
     extra_files     -> String,
     is_compile_only -> Bool,  // -c
     is_asm_only     -> Bool,  // -S
@@ -48,6 +49,8 @@ func print_usage() -> Void {
     builtin.print("  --emit-llvm            Use the LLVM representation for assembler and object files");
     builtin.print("  -O<level>              Optimization level (0, 1, 2, 3). Default: 2");
     builtin.print("  -g                     Generate source-level debug information");
+    builtin.print("  -L <dir>               Add <dir> to the linker library search path");
+    builtin.print("  --library-path <dir>   Add <dir> to the linker library search path");
     builtin.print("  --ldflags <flags>      Pass extra flags to the linker (e.g., \"-lm -lpthread\")");
     builtin.print("  -v, --verbose          Enable verbose logging");
     builtin.print("  --dump-ast             Dump Abstract Syntax Tree to stdout");
@@ -82,6 +85,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         source_file     = "",
         output_file     = "",
         extra_ldflags   = "",
+        library_paths   = [],
         extra_files     = "",
         is_compile_only = false,
         is_asm_only     = false,
@@ -120,6 +124,16 @@ func main(argc -> Int, ptr argv -> String) -> Int {
             i++;
             if (i >= argc) { builtin.print("Error: -o requires an argument"); return 1; }
             cfg.output_file = get_arg(argv, i);
+        }
+        else if (arg == "-L" || arg == "--library-path") {
+            i++;
+            if (i >= argc) { builtin.print("Error: " + arg + " requires an argument"); return 1; }
+            let library_path -> String = get_arg(argv, i);
+            if (library_path.length() == 0) { builtin.print("Error: Library search path cannot be empty"); return 1; }
+            cfg.library_paths.append(library_path);
+        }
+        else if (arg.starts_with("-L") && arg.length() > 2) {
+            cfg.library_paths.append(arg.slice(2, arg.length()));
         }
         else if (arg == "--ldflags") {
             i++;
@@ -341,6 +355,12 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         }
 
         let lib_idx -> Int = 0;
+        let path_idx -> Int = 0;
+        while (path_idx < cfg.library_paths.length()) {
+            cmd += " -L \"" + cfg.library_paths[path_idx] + "\"";
+            path_idx += 1;
+        }
+
         while (lib_idx < compiler.extra_libs.length()) {
             cmd += " -l" + compiler.extra_libs[lib_idx];
             lib_idx += 1;
