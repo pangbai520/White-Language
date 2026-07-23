@@ -1,4 +1,5 @@
 import "string.wl"
 import * from "memory.wl"
+import * from "int128.wl"
 import * from "format.wl"
 import * from "process.wl"

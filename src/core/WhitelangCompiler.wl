@@ -2,6 +2,8 @@
 import "builtin"
 import "sys"
 import "file"
+import "internal/runtime" as runtime
+import Dict from "dict"
 
 import * from "WhitelangNodes.wl"
 import * from "WhitelangUtils.wl"
@@ -9,7 +11,6 @@ import * from "WhitelangTokens.wl"
 import Lexer from "WhitelangLexer.wl"
 import Position from "WhitelangExceptions.wl"
 import Parser from "WhitelangParser.wl"
-import Dict from "dict"
 
 
 func get_target_os() -> String {
@@ -167,6 +168,18 @@ func promote_to_int(c -> Compiler, res -> CompileResult) -> CompileResult {
     return CompileResult(reg=ext_reg, type=TYPE_INT);
 }
 
+func combine_i128_words(c -> Compiler, low -> String, high -> String) -> String {
+    let low_i128 -> String = next_reg(c);
+    c.output_file.write(c.indent + low_i128 + " = zext i64 " + low + " to i128\n");
+    let high_i128 -> String = next_reg(c);
+    c.output_file.write(c.indent + high_i128 + " = zext i64 " + high + " to i128\n");
+    let shifted_high -> String = next_reg(c);
+    c.output_file.write(c.indent + shifted_high + " = shl i128 " + high_i128 + ", 64\n");
+    let result -> String = next_reg(c);
+    c.output_file.write(c.indent + result + " = or i128 " + low_i128 + ", " + shifted_high + "\n");
+    return result;
+}
+
 func eval_const_long(c -> Compiler, node -> Struct, pos -> Position) -> Long {
     if (node is null) { return 0L; }
     let base -> BaseNode = node;
@@ -213,6 +226,100 @@ func eval_const_long(c -> Compiler, node -> Struct, pos -> Position) -> Long {
     WhitelangExceptions.throw_invalid_syntax(pos, "Expression is not a compile-time constant integer.");
     return 0L;
 }
+
+func parse_const_uint128(raw -> String, pos -> Position) -> UInt128 {
+    let end -> Int = raw.length();
+    if (raw.ends_with("ULL") || raw.ends_with("ull")) { end -= 3; }
+    else if (raw.ends_with("LL") || raw.ends_with("ll") || raw.ends_with("UL") || raw.ends_with("ul")) { end -= 2; }
+    else if (raw.ends_with("U") || raw.ends_with("u") || raw.ends_with("L") || raw.ends_with("l")) { end -= 1; }
+
+    let value -> UInt128 = UInt128(0);
+    let i -> Int = 0;
+    while (i < end) {
+        let ch -> Char = raw[i];
+        if (ch != '_') {
+            if (ch < '0' || ch > '9') {
+                WhitelangExceptions.throw_invalid_syntax(pos, "Invalid 128-bit integer literal.");
+                return UInt128(0);
+            }
+            let digit -> Int = Int(ch) - 48;
+            if (value > 34028236692093846346337460743176821145ULL ||
+                (value == 34028236692093846346337460743176821145ULL && digit > 5)) {
+                WhitelangExceptions.throw_overflow_error(pos, "128-bit integer literal is out of range.");
+                return UInt128(0);
+            }
+            value = value * UInt128(10) + UInt128(digit);
+        }
+        i += 1;
+    }
+    return value;
+}
+
+func eval_const_wide(c -> Compiler, node -> Struct, pos -> Position, is_unsigned -> Bool) -> UInt128 {
+    if (node is null) { return UInt128(0); }
+    let base -> BaseNode = node;
+
+    if (base.type == NODE_INT) {
+        let value -> IntNode = node;
+        let parsed -> UInt128 = parse_const_uint128(value.tok.value, value.pos);
+        if (!is_unsigned && parsed > 170141183460469231731687303715884105727ULL) {
+            WhitelangExceptions.throw_overflow_error(value.pos, "Literal '" + value.tok.value + "' overflows Int128 valid range.");
+            return UInt128(0);
+        }
+        return parsed;
+    }
+    if (base.type == NODE_UNARYOP) {
+        let unary -> UnaryOpNode = node;
+        let value -> UInt128 = eval_const_wide(c, unary.node, pos, is_unsigned);
+        if (unary.op_tok.value == "-") { return UInt128(0) - value; }
+        if (unary.op_tok.value == "~") { return value ^ 340282366920938463463374607431768211455ULL; }
+        WhitelangExceptions.throw_type_error(pos, "Invalid unary operator for 128-bit constant integer.");
+        return UInt128(0);
+    }
+    if (base.type == NODE_BINOP) {
+        let binary -> BinOpNode = node;
+        let op -> String = binary.op_tok.value;
+        let left -> UInt128 = eval_const_wide(c, binary.left, pos, is_unsigned);
+        let right -> UInt128 = eval_const_wide(c, binary.right, pos, is_unsigned);
+
+        if (op == "+") { return left + right; }
+        if (op == "-") { return left - right; }
+        if (op == "*") { return left * right; }
+        if (op == "<<") { return left << right; }
+        if (op == ">>") {
+            if is_unsigned { return left >> right; }
+            return UInt128(Int128(left) >> Int128(right));
+        }
+        if (op == "&") { return left & right; }
+        if (op == "|") { return left | right; }
+        if (op == "^") { return left ^ right; }
+        if (op == "/" || op == "%") {
+            if (right == UInt128(0)) {
+                WhitelangExceptions.throw_zero_division_error(pos, "Compile-time division by zero.");
+                return UInt128(0);
+            }
+            if is_unsigned {
+                if (op == "/") { return runtime.uint128_div(left, right); }
+                return runtime.uint128_rem(left, right);
+            }
+
+            let signed_left -> Int128 = Int128(left);
+            let signed_right -> Int128 = Int128(right);
+            if (signed_left == -170141183460469231731687303715884105727LL - Int128(1) && signed_right == Int128(-1)) {
+                WhitelangExceptions.throw_overflow_error(pos, "Compile-time signed division overflow.");
+                return UInt128(0);
+            }
+            if (op == "/") { return UInt128(runtime.int128_div(signed_left, signed_right)); }
+            return UInt128(runtime.int128_rem(signed_left, signed_right));
+        }
+
+        WhitelangExceptions.throw_type_error(pos, "Invalid binary operator for 128-bit constant integer.");
+        return UInt128(0);
+    }
+
+    WhitelangExceptions.throw_invalid_syntax(pos, "Expression is not a compile-time constant 128-bit integer.");
+    return UInt128(0);
+}
 func eval_const_bool(c -> Compiler, node -> Struct, pos -> Position) -> Int {
     if (node is null) { return 0; }
     let base -> BaseNode = node;
@@ -247,6 +354,28 @@ func eval_const_bool(c -> Compiler, node -> Struct, pos -> Position) -> Int {
         }
 
         if (op_str == "==" || op_str == "!=" || op_str == "<" || op_str == ">" || op_str == "<=" || op_str == ">=") {
+            let left_type -> Int = get_expr_type(c, b.left);
+            let right_type -> Int = get_expr_type(c, b.right);
+            if (get_type_bitwidth(left_type) == 128 || get_type_bitwidth(right_type) == 128) {
+                let use_unsigned -> Bool = is_unsigned_integer(left_type) || is_unsigned_integer(right_type);
+                let left_wide -> UInt128 = eval_const_wide(c, b.left, pos, use_unsigned);
+                let right_wide -> UInt128 = eval_const_wide(c, b.right, pos, use_unsigned);
+                if (op_str == "==") { if (left_wide == right_wide) { return 1; } else { return 0; } }
+                if (op_str == "!=") { if (left_wide != right_wide) { return 1; } else { return 0; } }
+                if use_unsigned {
+                    if (op_str == "<") { if (left_wide < right_wide) { return 1; } else { return 0; } }
+                    if (op_str == ">") { if (left_wide > right_wide) { return 1; } else { return 0; } }
+                    if (op_str == "<=") { if (left_wide <= right_wide) { return 1; } else { return 0; } }
+                    if (op_str == ">=") { if (left_wide >= right_wide) { return 1; } else { return 0; } }
+                } else {
+                    let signed_left -> Int128 = Int128(left_wide);
+                    let signed_right -> Int128 = Int128(right_wide);
+                    if (op_str == "<") { if (signed_left < signed_right) { return 1; } else { return 0; } }
+                    if (op_str == ">") { if (signed_left > signed_right) { return 1; } else { return 0; } }
+                    if (op_str == "<=") { if (signed_left <= signed_right) { return 1; } else { return 0; } }
+                    if (op_str == ">=") { if (signed_left >= signed_right) { return 1; } else { return 0; } }
+                }
+            }
             let left -> Long = eval_const_long(c, b.left, pos);
             let right -> Long = eval_const_long(c, b.right, pos);
             if (op_str == "==") { if (left == right) { return 1; } else { return 0; } }
@@ -283,55 +412,61 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
 
     let variant_info -> StructInfo = c.struct_table.get("$Variant");
     if (variant_info is !null && expected_type == variant_info.type_id) {
-        // packing something into the 16-byte Variant box
+        // pack values into an aligned low/high payload
         let variant_llvm -> String = variant_info.llvm_name; // e.g. "%struct.$Variant"
 
         // alloca a local box
-        let box_ptr -> String = emit_alloc_obj(c, "16", "" + expected_type, variant_llvm + "*");
+        let box_ptr -> String = emit_alloc_obj(c, "24", "" + expected_type, variant_llvm + "*");
 
         // store the Type ID (tag)
         let type_ptr -> String = next_reg(c);
         c.output_file.write(c.indent + type_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + box_ptr + ", i32 0, i32 0\n");
         c.output_file.write(c.indent + "store i32 " + val_res.type + ", i32* " + type_ptr + "\n");
 
-        // prepare the Payload (convert anything to i64)
-        let payload_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + payload_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + box_ptr + ", i32 0, i32 1\n");
-        
-        let payload_i64 -> String = next_reg(c);
-        
+        let payload_low_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + payload_low_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + box_ptr + ", i32 0, i32 1\n");
+        let payload_high_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + payload_high_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + box_ptr + ", i32 0, i32 2\n");
+
+        let payload_low -> String = next_reg(c);
+        let payload_high -> String = "0";
+
         if (val_res.type == TYPE_INT128 || val_res.type == TYPE_UINT128) {
-            WhitelangExceptions.throw_type_error(pos, "Cannot pack 128-bit integers into 16-byte Variant box directly.");
-            return CompileResult(reg="0", type=expected_type, origin_type=val_res.type);
+            c.output_file.write(c.indent + payload_low + " = trunc i128 " + val_res.reg + " to i64\n");
+            let shifted_high -> String = next_reg(c);
+            c.output_file.write(c.indent + shifted_high + " = lshr i128 " + val_res.reg + ", 64\n");
+            payload_high = next_reg(c);
+            c.output_file.write(c.indent + payload_high + " = trunc i128 " + shifted_high + " to i64\n");
         } else if (is_small_primitive_type(val_res.type)) {
             let prim_ty -> String = get_llvm_type_str(c, val_res.type);
             if (is_signed_integer(val_res.type)) {
-                c.output_file.write(c.indent + payload_i64 + " = sext " + prim_ty + " " + val_res.reg + " to i64\n");
+                c.output_file.write(c.indent + payload_low + " = sext " + prim_ty + " " + val_res.reg + " to i64\n");
             } else {
-                c.output_file.write(c.indent + payload_i64 + " = zext " + prim_ty + " " + val_res.reg + " to i64\n");
+                c.output_file.write(c.indent + payload_low + " = zext " + prim_ty + " " + val_res.reg + " to i64\n");
             }
         } else if (val_res.type == TYPE_FLOAT32) {
             let fpext_reg -> String = next_reg(c);
             c.output_file.write(c.indent + fpext_reg + " = fpext float " + val_res.reg + " to double\n");
-            c.output_file.write(c.indent + payload_i64 + " = bitcast double " + fpext_reg + " to i64\n");
+            c.output_file.write(c.indent + payload_low + " = bitcast double " + fpext_reg + " to i64\n");
         } else if (val_res.type == TYPE_LONG || val_res.type == TYPE_UINT64 || val_res.type == TYPE_INTSIZE || val_res.type == TYPE_UINTSIZE) {
-            c.output_file.write(c.indent + payload_i64 + " = add i64 0, " + val_res.reg + "\n"); 
+            c.output_file.write(c.indent + payload_low + " = add i64 0, " + val_res.reg + "\n");
         } else if (val_res.type == TYPE_FLOAT) {
-            c.output_file.write(c.indent + payload_i64 + " = bitcast double " + val_res.reg + " to i64\n");
+            c.output_file.write(c.indent + payload_low + " = bitcast double " + val_res.reg + " to i64\n");
         } else {
             let val_s_info -> StructInfo = c.struct_id_map.get("" + val_res.type);
             if (val_s_info is !null && val_s_info.is_enum) {
-                c.output_file.write(c.indent + payload_i64 + " = zext i32 " + val_res.reg + " to i64\n");
+                c.output_file.write(c.indent + payload_low + " = zext i32 " + val_res.reg + " to i64\n");
             } else {
                 let ptr_ty -> String = get_llvm_type_str(c, val_res.type);
-                c.output_file.write(c.indent + payload_i64 + " = ptrtoint " + ptr_ty + " " + val_res.reg + " to i64\n");
+                c.output_file.write(c.indent + payload_low + " = ptrtoint " + ptr_ty + " " + val_res.reg + " to i64\n");
                 if (is_ref_type(c, val_res.type)) {
                     emit_retain(c, val_res.reg, val_res.type);
                 }
             }
         }
-        
-        c.output_file.write(c.indent + "store i64 " + payload_i64 + ", i64* " + payload_ptr + "\n");
+
+        c.output_file.write(c.indent + "store i64 " + payload_low + ", i64* " + payload_low_ptr + "\n");
+        c.output_file.write(c.indent + "store i64 " + payload_high + ", i64* " + payload_high_ptr + "\n");
         return CompileResult(reg=box_ptr, type=expected_type, origin_type=val_res.type);
     }
 
@@ -392,32 +527,36 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         emit_runtime_error(c, pos, "Dict value type mismatch or missing. Expected " + get_type_name(c, expected_type) + ".");
 
         c.output_file.write("\n" + unbox_label + ":\n");
-        let payload_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + payload_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + val_res.reg + ", i32 0, i32 1\n");
-        let payload_i64 -> String = next_reg(c);
-        c.output_file.write(c.indent + payload_i64 + " = load i64, i64* " + payload_ptr + "\n");
+        let payload_low_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + payload_low_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + val_res.reg + ", i32 0, i32 1\n");
+        let payload_low -> String = next_reg(c);
+        c.output_file.write(c.indent + payload_low + " = load i64, i64* " + payload_low_ptr + "\n");
+        let payload_high_ptr -> String = next_reg(c);
+        c.output_file.write(c.indent + payload_high_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + val_res.reg + ", i32 0, i32 2\n");
+        let payload_high -> String = next_reg(c);
+        c.output_file.write(c.indent + payload_high + " = load i64, i64* " + payload_high_ptr + "\n");
         
         let unboxed_reg -> String = next_reg(c);
         if (expected_type == TYPE_INT128 || expected_type == TYPE_UINT128) {
-            WhitelangExceptions.throw_type_error(pos, "Cannot unpack 128-bit integers from 16-byte Variant box directly.");
+            unboxed_reg = combine_i128_words(c, payload_low, payload_high);
         } else if (is_small_primitive_type(expected_type)) {
             let prim_ty -> String = get_llvm_type_str(c, expected_type);
-            c.output_file.write(c.indent + unboxed_reg + " = trunc i64 " + payload_i64 + " to " + prim_ty + "\n");
+            c.output_file.write(c.indent + unboxed_reg + " = trunc i64 " + payload_low + " to " + prim_ty + "\n");
         } else if (expected_type == TYPE_FLOAT32) {
             let cast_double -> String = next_reg(c);
-            c.output_file.write(c.indent + cast_double + " = bitcast i64 " + payload_i64 + " to double\n");
+            c.output_file.write(c.indent + cast_double + " = bitcast i64 " + payload_low + " to double\n");
             c.output_file.write(c.indent + unboxed_reg + " = fptrunc double " + cast_double + " to float\n");
         } else if (expected_type == TYPE_LONG || expected_type == TYPE_UINT64 || expected_type == TYPE_INTSIZE || expected_type == TYPE_UINTSIZE) {
-            c.output_file.write(c.indent + unboxed_reg + " = add i64 0, " + payload_i64 + "\n");
+            c.output_file.write(c.indent + unboxed_reg + " = add i64 0, " + payload_low + "\n");
         } else if (expected_type == TYPE_FLOAT) {
-            c.output_file.write(c.indent + unboxed_reg + " = bitcast i64 " + payload_i64 + " to double\n");
+            c.output_file.write(c.indent + unboxed_reg + " = bitcast i64 " + payload_low + " to double\n");
         } else {
             let exp_s_info -> StructInfo = c.struct_id_map.get("" + expected_type);
             if (exp_s_info is !null && exp_s_info.is_enum) {
-                c.output_file.write(c.indent + unboxed_reg + " = trunc i64 " + payload_i64 + " to i32\n");
+                c.output_file.write(c.indent + unboxed_reg + " = trunc i64 " + payload_low + " to i32\n");
             } else {
                 let ptr_ty -> String = get_llvm_type_str(c, expected_type);
-                c.output_file.write(c.indent + unboxed_reg + " = inttoptr i64 " + payload_i64 + " to " + ptr_ty + "\n");
+                c.output_file.write(c.indent + unboxed_reg + " = inttoptr i64 " + payload_low + " to " + ptr_ty + "\n");
             }
         }
         c.output_file.write(c.indent + "br label %" + merge_label + "\n");
@@ -2068,36 +2207,45 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                     return void_result();
                 }
 
-                let folded_val -> Long = eval_const_long(c, val_node, node.pos);
                 let bits -> Int = get_type_bitwidth(target_type_id);
-                let is_overflow -> Bool = false;
-                
-                if (bits == 8) {
+                if (bits == 128) {
+                    let folded_wide -> UInt128 = eval_const_wide(c, val_node, node.pos, is_unsigned_integer(target_type_id));
                     if (is_unsigned_integer(target_type_id)) {
-                        if (folded_val < 0L || folded_val > 255L) { is_overflow = true; }
+                        init_val_str = runtime.format_uint128(folded_wide);
                     } else {
-                        if (folded_val < -128L || folded_val > 127L) { is_overflow = true; }
+                        init_val_str = runtime.format_int128(Int128(folded_wide));
                     }
-                } else if (bits == 16) {
-                    if (is_unsigned_integer(target_type_id)) {
-                        if (folded_val < 0L || folded_val > 65535L) { is_overflow = true; }
-                    } else {
-                        if (folded_val < -32768L || folded_val > 32767L) { is_overflow = true; }
+                } else {
+                    let folded_val -> Long = eval_const_long(c, val_node, node.pos);
+                    let is_overflow -> Bool = false;
+                    
+                    if (bits == 8) {
+                        if (is_unsigned_integer(target_type_id)) {
+                            if (folded_val < 0L || folded_val > 255L) { is_overflow = true; }
+                        } else {
+                            if (folded_val < -128L || folded_val > 127L) { is_overflow = true; }
+                        }
+                    } else if (bits == 16) {
+                        if (is_unsigned_integer(target_type_id)) {
+                            if (folded_val < 0L || folded_val > 65535L) { is_overflow = true; }
+                        } else {
+                            if (folded_val < -32768L || folded_val > 32767L) { is_overflow = true; }
+                        }
+                    } else if (bits == 32) {
+                        if (is_unsigned_integer(target_type_id)) {
+                            if (folded_val < 0L || folded_val > 4294967295L) { is_overflow = true; }
+                        } else {
+                            if (folded_val < -2147483648L || folded_val > 2147483647L) { is_overflow = true; }
+                        }
                     }
-                } else if (bits == 32) {
-                    if (is_unsigned_integer(target_type_id)) {
-                        if (folded_val < 0L || folded_val > 4294967295L) { is_overflow = true; }
-                    } else {
-                        if (folded_val < -2147483648L || folded_val > 2147483647L) { is_overflow = true; }
-                    }
-                }
 
-                if (is_overflow) {
-                    WhitelangExceptions.throw_overflow_error(node.pos, "Global constant overflows " + get_type_name(c, target_type_id) + " valid range.");
-                    return void_result();
+                    if (is_overflow) {
+                        WhitelangExceptions.throw_overflow_error(node.pos, "Global constant overflows " + get_type_name(c, target_type_id) + " valid range.");
+                        return void_result();
+                    }
+                    
+                    init_val_str = "" + folded_val;
                 }
-                
-                init_val_str = "" + folded_val;
             }
             else if (target_type_id == TYPE_CHAR) {
                 if (val_node.type != NODE_CHAR) {
@@ -4249,9 +4397,7 @@ func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallN
     let old_data_i8 -> String = next_reg(c);
     c.output_file.write(c.indent + old_data_i8 + " = bitcast " + elem_ty_str + "* " + old_data + " to i8*\n");
 
-    let elem_size -> Int = 8; 
-    if (elem_type == TYPE_INT) { elem_size = 4; } 
-    if (elem_type == TYPE_BYTE || elem_type == TYPE_BOOL) { elem_size = 1; }
+    let elem_size -> Int = get_type_size_bytes(c, elem_type);
     
     let new_bytes -> String = next_reg(c);
     c.output_file.write(c.indent + new_bytes + " = mul i64 " + new_cap + ", " + elem_size + "\n");
@@ -5731,6 +5877,38 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         c.output_file.write("\n" + err_label + ":\n");
         emit_runtime_error(c, node.pos, "Division by zero");
         c.output_file.write("\n" + ok_label + ":\n");
+
+        if (is_signed_integer(target_type)) {
+            let min_literal -> String = get_signed_min_literal(target_type);
+            if (min_literal.length() > 0) {
+                let is_min -> String = next_reg(c);
+                c.output_file.write(c.indent + is_min + " = icmp eq " + type_str + " " + left.reg + ", " + min_literal + "\n");
+                let is_negative_one -> String = next_reg(c);
+                c.output_file.write(c.indent + is_negative_one + " = icmp eq " + type_str + " " + right.reg + ", -1\n");
+                let is_overflow -> String = next_reg(c);
+                c.output_file.write(c.indent + is_overflow + " = and i1 " + is_min + ", " + is_negative_one + "\n");
+
+                let overflow_label -> String = "div_overflow_" + c.type_counter;
+                let arithmetic_label -> String = "div_arithmetic_" + c.type_counter;
+                c.type_counter += 1;
+                c.output_file.write(c.indent + "br i1 " + is_overflow + ", label %" + overflow_label + ", label %" + arithmetic_label + "\n");
+                c.output_file.write("\n" + overflow_label + ":\n");
+                emit_runtime_error(c, node.pos, "Signed division overflow");
+                c.output_file.write("\n" + arithmetic_label + ":\n");
+            }
+        }
+    }
+
+    if ((target_type == TYPE_INT128 || target_type == TYPE_UINT128) && (op_type == TOK_DIV || op_type == TOK_MOD)) {
+        let hook_name -> String = "int128_div";
+        if (target_type == TYPE_UINT128) { hook_name = "uint128_div"; }
+        if (op_type == TOK_MOD) {
+            hook_name = "int128_rem";
+            if (target_type == TYPE_UINT128) { hook_name = "uint128_rem"; }
+        }
+        let arithmetic_hook -> String = get_mangled_symbol(c, hook_name, node.pos);
+        c.output_file.write(c.indent + res_reg + " = call i128 @" + arithmetic_hook + "(i128 " + left.reg + ", i128 " + right.reg + ")\n");
+        return CompileResult(reg=res_reg, type=target_type);
     }
 
     c.output_file.write(c.indent + res_reg + " = " + op_code + " " + type_str + " " + left.reg + ", " + right.reg + "\n");
@@ -5941,10 +6119,11 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         if (raw_val.ends_with("ULL") || raw_val.ends_with("ull")) {
             is_i128 = true;
             suffix_len = 3;
-            if (t_id == 0) { t_id = TYPE_UINT128; }
+            t_id = TYPE_UINT128;
         } else if (raw_val.ends_with("LL") || raw_val.ends_with("ll")) {
             is_i128 = true;
             suffix_len = 2;
+            t_id = TYPE_INT128;
         } else if (raw_val.ends_with("UL") || raw_val.ends_with("ul")) {
             suffix_len = 2;
             if (t_id == 0) { t_id = TYPE_UINT64; }
@@ -5963,6 +6142,28 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         if is_i128 {
             if (t_id == 0 || !is_integer_type(t_id)) {
                 t_id = TYPE_INT128;
+            }
+            let parsed_wide -> UInt128 = parse_const_uint128(raw_val, n.pos);
+            let bits -> Int = get_type_bitwidth(t_id);
+            let max_value -> UInt128 = 340282366920938463463374607431768211455ULL;
+            if (bits == 8) {
+                if (is_unsigned_integer(t_id)) { max_value = UInt128(255); }
+                else { max_value = UInt128(127); }
+            } else if (bits == 16) {
+                if (is_unsigned_integer(t_id)) { max_value = UInt128(65535); }
+                else { max_value = UInt128(32767); }
+            } else if (bits == 32) {
+                if (is_unsigned_integer(t_id)) { max_value = UInt128(4294967295UL); }
+                else { max_value = UInt128(2147483647); }
+            } else if (bits == 64) {
+                if (is_unsigned_integer(t_id)) { max_value = UInt128(18446744073709551615UL); }
+                else { max_value = UInt128(9223372036854775807L); }
+            } else if (!is_unsigned_integer(t_id)) {
+                max_value = 170141183460469231731687303715884105727ULL;
+            }
+            if (parsed_wide > max_value) {
+                WhitelangExceptions.throw_overflow_error(n.pos, "Literal '" + raw_val + "' overflows " + get_type_name(c, t_id) + " valid range.");
+                return void_result();
             }
             let actual_val -> String = raw_val;
             if (suffix_len > 0) {
@@ -6992,6 +7193,12 @@ func compile_type_cast(c -> Compiler, val_res -> CompileResult, target_type -> I
 // BUILTIN HELPER
 func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position, origin_id -> Int) -> Void {
 
+    if (type_id == TYPE_INT128 || type_id == TYPE_UINT128) {
+        let formatted -> CompileResult = convert_to_string(c, CompileResult(reg=reg, type=type_id, origin_type=origin_id));
+        compile_print(c, formatted.reg, TYPE_STRING, pos, TYPE_STRING);
+        return;
+    }
+
     if (type_id == TYPE_STRING) {
         let hook_raw_str -> String = get_mangled_symbol(c, "print_bytes", pos);
         let label_null -> String = next_label(c);
@@ -7365,10 +7572,14 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
     let type_id_reg -> String = next_reg(c);
     c.output_file.write(c.indent + type_id_reg + " = load i32, i32* " + type_id_ptr + "\n");
 
-    let payload_ptr -> String = next_reg(c);
-    c.output_file.write(c.indent + payload_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + variant_reg + ", i32 0, i32 1\n");
-    let payload_i64 -> String = next_reg(c);
-    c.output_file.write(c.indent + payload_i64 + " = load i64, i64* " + payload_ptr + "\n");
+    let payload_low_ptr -> String = next_reg(c);
+    c.output_file.write(c.indent + payload_low_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + variant_reg + ", i32 0, i32 1\n");
+    let payload_low -> String = next_reg(c);
+    c.output_file.write(c.indent + payload_low + " = load i64, i64* " + payload_low_ptr + "\n");
+    let payload_high_ptr -> String = next_reg(c);
+    c.output_file.write(c.indent + payload_high_ptr + " = getelementptr inbounds " + variant_llvm + ", " + variant_llvm + "* " + variant_reg + ", i32 0, i32 2\n");
+    let payload_high -> String = next_reg(c);
+    c.output_file.write(c.indent + payload_high + " = load i64, i64* " + payload_high_ptr + "\n");
 
     let label_null -> String = "var_null_" + c.type_counter;
     let label_int -> String = "var_int_" + c.type_counter;
@@ -7377,6 +7588,8 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
     let label_bool -> String = "var_bool_" + c.type_counter;
     let label_string -> String = "var_string_" + c.type_counter;
     let label_char -> String = "var_char_" + c.type_counter;
+    let label_int128 -> String = "var_int128_" + c.type_counter;
+    let label_uint128 -> String = "var_uint128_" + c.type_counter;
     let label_default -> String = "var_default_" + c.type_counter;
     c.type_counter += 1;
 
@@ -7388,6 +7601,8 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
     c.output_file.write("    i32 " + TYPE_BOOL + ", label %" + label_bool + "\n");
     c.output_file.write("    i32 " + TYPE_STRING + ", label %" + label_string + "\n");
     c.output_file.write("    i32 " + TYPE_CHAR + ", label %" + label_char + "\n");
+    c.output_file.write("    i32 " + TYPE_INT128 + ", label %" + label_int128 + "\n");
+    c.output_file.write("    i32 " + TYPE_UINT128 + ", label %" + label_uint128 + "\n");
     c.output_file.write("  ]\n");
 
     // null
@@ -7398,47 +7613,57 @@ func compile_print_variant_internal(c -> Compiler, variant_reg -> String, v_info
     // Int
     c.output_file.write("\n" + label_int + ":\n");
     let unboxed_int -> String = next_reg(c);
-    c.output_file.write(c.indent + unboxed_int + " = trunc i64 " + payload_i64 + " to i32\n");
+    c.output_file.write(c.indent + unboxed_int + " = trunc i64 " + payload_low + " to i32\n");
     compile_print(c, unboxed_int, TYPE_INT, pos, 0);
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
     // Long
     c.output_file.write("\n" + label_long + ":\n");
-    compile_print(c, payload_i64, TYPE_LONG, pos, 0);
+    compile_print(c, payload_low, TYPE_LONG, pos, 0);
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
     // Float
     c.output_file.write("\n" + label_float + ":\n");
     let unboxed_float -> String = next_reg(c);
-    c.output_file.write(c.indent + unboxed_float + " = bitcast i64 " + payload_i64 + " to double\n");
+    c.output_file.write(c.indent + unboxed_float + " = bitcast i64 " + payload_low + " to double\n");
     compile_print(c, unboxed_float, TYPE_FLOAT, pos, 0);
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
     
     // Bool
     c.output_file.write("\n" + label_bool + ":\n");
     let unboxed_bool -> String = next_reg(c);
-    c.output_file.write(c.indent + unboxed_bool + " = trunc i64 " + payload_i64 + " to i1\n");
+    c.output_file.write(c.indent + unboxed_bool + " = trunc i64 " + payload_low + " to i1\n");
     compile_print(c, unboxed_bool, TYPE_BOOL, pos, 0);
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
     // String
     c.output_file.write("\n" + label_string + ":\n");
     let unboxed_str -> String = next_reg(c);
-    c.output_file.write(c.indent + unboxed_str + " = inttoptr i64 " + payload_i64 + " to %struct.$String*\n");
+    c.output_file.write(c.indent + unboxed_str + " = inttoptr i64 " + payload_low + " to %struct.$String*\n");
     compile_print(c, unboxed_str, TYPE_STRING, pos, 0);
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
     // Char
     c.output_file.write("\n" + label_char + ":\n");
     let unboxed_char -> String = next_reg(c);
-    c.output_file.write(c.indent + unboxed_char + " = trunc i64 " + payload_i64 + " to i32\n");
+    c.output_file.write(c.indent + unboxed_char + " = trunc i64 " + payload_low + " to i32\n");
     compile_print(c, unboxed_char, TYPE_CHAR, pos, 0);
+    c.output_file.write(c.indent + "br label %" + label_end + "\n");
+
+    c.output_file.write("\n" + label_int128 + ":\n");
+    let unboxed_int128 -> String = combine_i128_words(c, payload_low, payload_high);
+    compile_print(c, unboxed_int128, TYPE_INT128, pos, 0);
+    c.output_file.write(c.indent + "br label %" + label_end + "\n");
+
+    c.output_file.write("\n" + label_uint128 + ":\n");
+    let unboxed_uint128 -> String = combine_i128_words(c, payload_low, payload_high);
+    compile_print(c, unboxed_uint128, TYPE_UINT128, pos, 0);
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
     // other object
     c.output_file.write("\n" + label_default + ":\n");
     let hook_long -> String = get_mangled_symbol(c, "print_long", pos);
-    c.output_file.write(c.indent + "call void @" + hook_long + "(i64 " + payload_i64 + ")\n");
+    c.output_file.write(c.indent + "call void @" + hook_long + "(i64 " + payload_low + ")\n");
     c.output_file.write(c.indent + "br label %" + label_end + "\n");
 
     c.output_file.write("\n" + label_end + ":\n");
@@ -7525,7 +7750,8 @@ func compile_start(c -> Compiler) -> Void {
     c.type_counter += 1;
     let v_fields -> Vector(Struct) = [];
     v_fields.append(FieldInfo(name="type_id", type=TYPE_INT, llvm_type="i32", offset=0));
-    v_fields.append(FieldInfo(name="payload", type=TYPE_LONG, llvm_type="i64", offset=1));
+    v_fields.append(FieldInfo(name="payload_low", type=TYPE_LONG, llvm_type="i64", offset=1));
+    v_fields.append(FieldInfo(name="payload_high", type=TYPE_LONG, llvm_type="i64", offset=2));
 
     let variant_info -> StructInfo = StructInfo(
         name="$Variant", 
@@ -7565,7 +7791,7 @@ func compile_start(c -> Compiler) -> Void {
     c.struct_id_map.put("" + TYPE_STRING, string_info);
 
     c.output_file.write("; ====== COMPILER INTRINSICS ======\n");
-    c.output_file.write("%struct.$Variant = type { i32, i64 }\n");
+    c.output_file.write("%struct.$Variant = type { i32, i64, i64 }\n");
     c.output_file.write("%struct.$String = type { i8*, i32, i32 }\n\n");
 }
 

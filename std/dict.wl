@@ -47,9 +47,9 @@ class Dict {
         self.size = 0;
         self.tombstones = 0;
 
-        // 8 bytes for keys (ptrs), 16 for variants, 4 for hashes
+        // keys and variants are stored as pointers, hashes are 32-bit values
         self.keys   = runtime.mem_alloc_zeroed(Long(actual_cap) * 8L); 
-        self.values = runtime.mem_alloc_zeroed(Long(actual_cap) * 16L); 
+        self.values = runtime.mem_alloc_zeroed(Long(actual_cap) * 8L); 
         self.hashes = runtime.mem_alloc_zeroed(Long(actual_cap) * 4L); 
     }
 
@@ -62,7 +62,7 @@ class Dict {
         // standard x2 growth strategy
         self.capacity <<= 1; 
         self.keys   = runtime.mem_alloc_zeroed(Long(self.capacity) * 8L);
-        self.values = runtime.mem_alloc_zeroed(Long(self.capacity) * 16L);
+        self.values = runtime.mem_alloc_zeroed(Long(self.capacity) * 8L);
         self.hashes = runtime.mem_alloc_zeroed(Long(self.capacity) * 4L);
 
         self.size = 0;
@@ -175,7 +175,7 @@ class Dict {
                     // turn this into a "tombstone" so we don't break the probe chain
                     self.hashes[idx] = 1; 
                     self.keys[idx] = "";  // clear the ref
-                    self.values[idx] = Variant(type_id=0, payload=0);
+                    self.values[idx] = Variant(type_id=0, payload_low=0L, payload_high=0L);
                     self.size--;
                     self.tombstones++;
                     return;

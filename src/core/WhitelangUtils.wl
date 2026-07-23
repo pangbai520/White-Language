@@ -1435,8 +1435,14 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
         if (left_ty == TYPE_CHAR && right_ty == TYPE_CHAR && op == WhitelangTokens.TOK_PLUS) { return TYPE_STRING; }
 
         if (left_ty == TYPE_FLOAT || right_ty == TYPE_FLOAT) { return TYPE_FLOAT; }
-        if (left_ty == TYPE_LONG || right_ty == TYPE_LONG) { return TYPE_LONG; }
-        if (left_ty == TYPE_INT || right_ty == TYPE_INT) { return TYPE_INT; }
+        if (left_ty == TYPE_FLOAT32 || right_ty == TYPE_FLOAT32) { return TYPE_FLOAT32; }
+        if (is_integer_type(left_ty) && is_integer_type(right_ty)) {
+            let left_bits -> Int = get_type_bitwidth(left_ty);
+            let right_bits -> Int = get_type_bitwidth(right_ty);
+            if (right_bits > left_bits) { return right_ty; }
+            if (left_bits > right_bits) { return left_ty; }
+            if (is_unsigned_integer(right_ty)) { return right_ty; }
+        }
         
         return left_ty;
     }
@@ -1460,6 +1466,35 @@ func get_type_bitwidth(t -> Int) -> Int {
     if (t == TYPE_LONG || t == TYPE_UINT64 || t == TYPE_FLOAT || t == TYPE_INTSIZE || t == TYPE_UINTSIZE) { return 64; }
     if (t == TYPE_INT128 || t == TYPE_UINT128) { return 128; }
     return 64; // fallback for pointers
+}
+
+func get_type_size_bytes(c -> Compiler, type_id -> Int) -> Int {
+// return the in-memory size used by contiguous containers
+    if (type_id == TYPE_BOOL || type_id == TYPE_BYTE || type_id == TYPE_INT8) { return 1; }
+    if (type_id == TYPE_INT16 || type_id == TYPE_UINT16) { return 2; }
+    if (type_id == TYPE_INT || type_id == TYPE_UINT32 || type_id == TYPE_CHAR || type_id == TYPE_FLOAT32 || type_id == TYPE_GENERIC_ENUM) { return 4; }
+    if (type_id == TYPE_INT128 || type_id == TYPE_UINT128) { return 16; }
+    if (type_id == TYPE_LONG || type_id == TYPE_UINT64 || type_id == TYPE_FLOAT || type_id == TYPE_INTSIZE || type_id == TYPE_UINTSIZE) { return 8; }
+
+    let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
+    if (arr_info is !null) {
+        if (arr_info.size < 0) { return 16; }
+        return arr_info.size * get_type_size_bytes(c, arr_info.base_type);
+    }
+
+    let struct_info -> StructInfo = c.struct_id_map.get("" + type_id);
+    if (struct_info is !null && struct_info.is_interface) { return 16; }
+
+    return 8;
+}
+
+func get_signed_min_literal(type_id -> Int) -> String {
+    if (type_id == TYPE_INT8) { return "-128"; }
+    if (type_id == TYPE_INT16) { return "-32768"; }
+    if (type_id == TYPE_INT) { return "-2147483648"; }
+    if (type_id == TYPE_LONG || type_id == TYPE_INTSIZE) { return "-9223372036854775808"; }
+    if (type_id == TYPE_INT128) { return "-170141183460469231731687303715884105728"; }
+    return "";
 }
 
 func resolve_type(c -> Compiler, node -> Struct) -> Int {
