@@ -2,8 +2,7 @@ import "sys"
 import "internal/platform/windows"
 import "internal/platform/posix"
 import "internal/runtime"
-
-extern func wl_string_data(s -> String) -> AnyPtr from "C";
+import "internal/runtime/string" as runtime_string
 
 let console_init_done -> Bool = false;
 
@@ -98,20 +97,20 @@ func write_long(value -> Long) -> Void {
 @CompilerLink("print_float")
 func write_float(value -> Float) -> Void {
     let formatted -> String = runtime.format_float(value);
-    write_bytes(wl_string_data(formatted), formatted.length());
+    write_bytes(runtime_string.data(formatted), formatted.length());
 }
 
 @CompilerLink("print_bool")
 func write_bool(value -> Bool) -> Void {
     let s -> String = "false";
     if (value) { s = "true"; }
-    write_bytes(wl_string_data(s), s.length());
+    write_bytes(runtime_string.data(s), s.length());
 }
 
 @CompilerLink
 func print(s -> String) -> Void {
     if (s is null) { s = "null"; }
-    write_bytes(wl_string_data(s), s.length());
+    write_bytes(runtime_string.data(s), s.length());
     let newline -> String = "\n";
-    write_bytes(wl_string_data(newline), 1);
+    write_bytes(runtime_string.data(newline), 1);
 }

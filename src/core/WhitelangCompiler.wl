@@ -705,39 +705,14 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
     }
 
     if (res.type == TYPE_INT128 || res.type == TYPE_UINT128) {
-        let fmt_func -> String = "@wl_format_i128";
+        let hook_name -> String = "format_int128";
         if (res.type == TYPE_UINT128) {
-            fmt_func = "@wl_format_u128";
+            hook_name = "format_uint128";
         }
-        let low_reg -> String = next_reg(c);
-        c.output_file.write(c.indent + low_reg + " = trunc i128 " + res.reg + " to i64\n");
-        let shifted -> String = next_reg(c);
-        c.output_file.write(c.indent + shifted + " = lshr i128 " + res.reg + ", 64\n");
-        let high_reg -> String = next_reg(c);
-        c.output_file.write(c.indent + high_reg + " = trunc i128 " + shifted + " to i64\n");
-        
-        // fix: allocate struct + 64 bytes buffer + 1 null
-        let obj_i8 -> String = emit_alloc_obj(c, "81", "" + TYPE_STRING, "i8*");
-        let new_str_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
-        
-        let buf_ptr_i8 -> String = next_reg(c);
-        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
-
-        let out_buf_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
-        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
-        
-        let actual_len -> String = next_reg(c);
-        c.output_file.write(c.indent + actual_len + " = call i32 " + fmt_func + "(i8* " + buf_ptr_i8 + ", i64 " + low_reg + ", i64 " + high_reg + ")\n");
-        let out_len_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
-        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_len_field + "\n");
-        let out_cap_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
-        c.output_file.write(c.indent + "store i32 " + actual_len + ", i32* " + out_cap_field + "\n");
-
-        return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
+        let format_hook -> String = get_mangled_symbol(c, hook_name, null);
+        let result -> String = next_reg(c);
+        c.output_file.write(c.indent + result + " = call %struct.$String* @" + format_hook + "(i128 " + res.reg + ")\n");
+        return CompileResult(reg=result, type=TYPE_STRING);
     }
 
     if (res.type == TYPE_UINT64 || res.type == TYPE_UINTSIZE) {
@@ -7521,13 +7496,6 @@ func compile_start(c -> Compiler) -> Void {
     c.declared_externs.put("wl_alloc_string", StringConstant(id=0, value=""));
 
     c.output_file.write("declare double @llvm.pow.f64(double, double)\n\n");
-
-    c.output_file.write("declare i32 @wl_format_i128(i8*, i64, i64)\n");
-    c.declared_externs.put("wl_format_i128", StringConstant(id=0, value=""));
-    c.output_file.write("declare i32 @wl_format_u128(i8*, i64, i64)\n");
-    c.declared_externs.put("wl_format_u128", StringConstant(id=0, value=""));
-
-
 
     c.output_file.write("@.fmt_int = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\"\n");
     c.output_file.write("@.fmt_long = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n");

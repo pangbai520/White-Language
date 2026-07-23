@@ -3,12 +3,7 @@
 import "sys"
 import "internal/platform/windows"
 import "internal/platform/posix"
-
-extern "C" {
-    func wl_alloc_string(size -> Long) -> String;
-    func wl_string_data(value -> String) -> AnyPtr;
-    func wl_string_set_length(value -> String, length -> Int) -> Void;
-}
+import "internal/runtime/string" as runtime_string
 
 const SEEK_SET -> Int = 0;
 const SEEK_CUR -> Int = 1;
@@ -62,22 +57,22 @@ class File {
     }
 
     method read_all() -> String {
-        if (self.handle is nullptr) { return wl_alloc_string(0L); }
+        if (self.handle is nullptr) { return runtime_string.alloc(0L); }
 
         if (sys.OS == "WINDOWS") {
             let size -> Long = 0L;
             if (windows.GetFileSizeEx(self.handle, ref size) == 0 || size < 0L || size > 2147483647L) {
-                return wl_alloc_string(0L);
+                return runtime_string.alloc(0L);
             }
 
-            let buffer -> String = wl_alloc_string(size);
+            let buffer -> String = runtime_string.alloc(size);
             if (buffer is null) { return null; }
             let bytes_read -> Int = 0;
-            if (size > 0L && windows.ReadFile(self.handle, wl_string_data(buffer), Int(size), ref bytes_read, nullptr) == 0) {
-                wl_string_set_length(buffer, 0);
+            if (size > 0L && windows.ReadFile(self.handle, runtime_string.data(buffer), Int(size), ref bytes_read, nullptr) == 0) {
+                runtime_string.set_length(buffer, 0);
                 return buffer;
             }
-            wl_string_set_length(buffer, bytes_read);
+            runtime_string.set_length(buffer, bytes_read);
             return buffer;
         }
 
@@ -85,7 +80,7 @@ class File {
         let size -> Long = posix.ftell(self.handle);
         posix.rewind(self.handle);
 
-        let buffer -> String = wl_alloc_string(size);
+        let buffer -> String = runtime_string.alloc(size);
         posix.wl_fread(buffer, 1L, size, self.handle);
         return buffer;
     }
@@ -95,7 +90,7 @@ class File {
         let length -> Long = content.length();
         if (sys.OS == "WINDOWS") {
             let bytes_written -> Int = 0;
-            if (length > 0L) { windows.WriteFile(self.handle, wl_string_data(content), Int(length), ref bytes_written, nullptr); }
+            if (length > 0L) { windows.WriteFile(self.handle, runtime_string.data(content), Int(length), ref bytes_written, nullptr); }
             return;
         }
         posix.wl_fwrite(content, 1L, length, self.handle);

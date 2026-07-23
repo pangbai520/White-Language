@@ -2,20 +2,11 @@
 //
 // String operations use the stored length and never scan for a terminator
 
-extern "C" {
-    // allocation stays behind the bootstrap abi
-    func wl_alloc_string(size -> Long) -> String;
-}
-
-func string_data(value -> String) -> AnyPtr {
-    if (value is null) { return nullptr; }
-    let ptr fields -> AnyPtr = AnyPtr(value);
-    return fields[0];
-}
+import "internal/runtime/string" as runtime_string
 
 func string_value_at(self -> String, idx -> Int) -> Char {
     if (self is null || idx < 0 || idx >= self.length()) { return '\0'; }
-    let ptr bytes -> Byte = string_data(self);
+    let ptr bytes -> Byte = runtime_string.data(self);
     return Char(bytes[idx]);
 }
 
@@ -27,11 +18,11 @@ func string_value_slice(self -> String, start -> Int, end -> Int) -> String {
     if (start > end) { start = end; }
 
     let result_len -> Int = end - start;
-    let result -> String = wl_alloc_string(Long(result_len));
+    let result -> String = runtime_string.alloc(Long(result_len));
     if (result is null || result_len == 0) { return result; }
 
-    let ptr source -> Byte = string_data(self);
-    let ptr output -> Byte = string_data(result);
+    let ptr source -> Byte = runtime_string.data(self);
+    let ptr output -> Byte = runtime_string.data(result);
     let i -> Int = 0;
     while (i < result_len) {
         output[i] = source[start + i];
@@ -47,12 +38,12 @@ func string_concat(left -> String, right -> String) -> String {
     let left_len -> Int = left.length();
     let right_len -> Int = right.length();
     let total_len -> Long = Long(left_len) + Long(right_len);
-    let result -> String = wl_alloc_string(total_len);
+    let result -> String = runtime_string.alloc(total_len);
     if (result is null) { return null; }
 
-    let ptr output -> Byte = string_data(result);
-    let ptr left_bytes -> Byte = string_data(left);
-    let ptr right_bytes -> Byte = string_data(right);
+    let ptr output -> Byte = runtime_string.data(result);
+    let ptr left_bytes -> Byte = runtime_string.data(left);
+    let ptr right_bytes -> Byte = runtime_string.data(right);
     let i -> Int = 0;
     while (i < left_len) {
         output[i] = left_bytes[i];
@@ -77,8 +68,8 @@ func string_compare(left -> String, right -> String) -> Int {
     let common_len -> Int = left_len;
     if (right_len < common_len) { common_len = right_len; }
 
-    let ptr left_bytes -> Byte = string_data(left);
-    let ptr right_bytes -> Byte = string_data(right);
+    let ptr left_bytes -> Byte = runtime_string.data(left);
+    let ptr right_bytes -> Byte = runtime_string.data(right);
     let i -> Int = 0;
     while (i < common_len) {
         let lhs -> Int = Int(left_bytes[i]);
@@ -99,8 +90,8 @@ func string_value_starts_with(self -> String, prefix -> String) -> Bool {
     let prefix_len -> Int = prefix.length();
     if (prefix_len > self_len) { return false; }
 
-    let ptr source -> Byte = string_data(self);
-    let ptr expected -> Byte = string_data(prefix);
+    let ptr source -> Byte = runtime_string.data(self);
+    let ptr expected -> Byte = runtime_string.data(prefix);
     let i -> Int = 0;
     while (i < prefix_len) {
         if (source[i] != expected[i]) { return false; }
@@ -116,8 +107,8 @@ func string_value_ends_with(self -> String, suffix -> String) -> Bool {
     if (suffix_len > self_len) { return false; }
 
     let offset -> Int = self_len - suffix_len;
-    let ptr source -> Byte = string_data(self);
-    let ptr expected -> Byte = string_data(suffix);
+    let ptr source -> Byte = runtime_string.data(self);
+    let ptr expected -> Byte = runtime_string.data(suffix);
     let i -> Int = 0;
     while (i < suffix_len) {
         if (source[offset + i] != expected[i]) { return false; }

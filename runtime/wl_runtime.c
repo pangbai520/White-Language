@@ -158,24 +158,6 @@ void wl_posix_exit(int status) {
 }
 #endif
 
-void __wl_str_set(wl_string* s, int idx, int val) {
-    if (s && s->buf && idx >= 0 && idx < s->cap) {
-        s->buf[idx] = (char)val;
-    }
-}
-
-char __wl_str_get(wl_string* s, int idx) {
-    if (s && s->buf && idx >= 0 && idx < s->len) {
-        return s->buf[idx];
-    }
-    return 0;
-}
-
-void* wl_string_data(wl_string* s) {
-    if (s == NULL) return NULL;
-    return s->buf;
-}
-
 void wl_string_set_length(wl_string* s, int length) {
     if (s == NULL || s->buf == NULL || length < 0 || length > s->cap) return;
     s->len = length;
@@ -186,46 +168,6 @@ wl_string* wl_alloc_string(long long size) {
 // allocate an empty string with inline storage
     if (size < 0) return NULL;
     return wl_alloc_string_storage((size_t)size);
-}
-
-wl_string* wl_string_concat(wl_string* left, wl_string* right) {
-    if (left == NULL || right == NULL || left->buf == NULL || right->buf == NULL) return NULL;
-    if (left->len < 0 || right->len < 0 || left->len > INT_MAX - right->len) return NULL;
-
-    const int length = left->len + right->len;
-    wl_string* result = wl_alloc_string_storage((size_t)length);
-    if (result == NULL) return NULL;
-
-    int i = 0;
-    while (i < left->len) {
-        result->buf[i] = left->buf[i];
-        ++i;
-    }
-    int j = 0;
-    while (j < right->len) {
-        result->buf[left->len + j] = right->buf[j];
-        ++j;
-    }
-    return result;
-}
-
-int wl_string_compare(wl_string* left, wl_string* right) {
-    if (left == right) return 0;
-    if (left == NULL || left->buf == NULL) return -1;
-    if (right == NULL || right->buf == NULL) return 1;
-
-    const int common_length = left->len < right->len ? left->len : right->len;
-    int i = 0;
-    while (i < common_length) {
-        const unsigned char lhs = (unsigned char)left->buf[i];
-        const unsigned char rhs = (unsigned char)right->buf[i];
-        if (lhs < rhs) return -1;
-        if (lhs > rhs) return 1;
-        ++i;
-    }
-    if (left->len < right->len) return -1;
-    if (left->len > right->len) return 1;
-    return 0;
 }
 
 #ifndef _WIN32
@@ -276,58 +218,3 @@ int wl_remove(wl_string* filename) {
     return remove(filename->buf);
 }
 #endif
-
-int wl_format_i128(char* buf, unsigned long long low, long long high) {
-    __int128 val = (__int128)(((unsigned __int128)(unsigned long long)high << 64) | low);
-    if (val == 0) {
-        buf[0] = '0';
-        buf[1] = '\0';
-        return 1;
-    }
-    int is_neg = 0;
-    unsigned __int128 uval;
-    if (val < 0) {
-        is_neg = 1;
-        // negate after conversion so INT128_MIN stays defined
-        uval = (unsigned __int128)0 - (unsigned __int128)val;
-    } else {
-        uval = (unsigned __int128)val;
-    }
-    
-    char temp[64];
-    int pos = 0;
-    while (uval > 0) {
-        temp[pos++] = (char)((uval % 10) + '0');
-        uval /= 10;
-    }
-    if (is_neg) {
-        temp[pos++] = '-';
-    }
-    int i;
-    for (i = 0; i < pos; i++) {
-        buf[i] = temp[pos - 1 - i];
-    }
-    buf[pos] = '\0';
-    return pos;
-}
-
-int wl_format_u128(char* buf, unsigned long long low, unsigned long long high) {
-    unsigned __int128 val = ((unsigned __int128)high << 64) | low;
-    if (val == 0) {
-        buf[0] = '0';
-        buf[1] = '\0';
-        return 1;
-    }
-    char temp[64];
-    int pos = 0;
-    while (val > 0) {
-        temp[pos++] = (char)((val % 10) + '0');
-        val /= 10;
-    }
-    int i;
-    for (i = 0; i < pos; i++) {
-        buf[i] = temp[pos - 1 - i];
-    }
-    buf[pos] = '\0';
-    return pos;
-}
