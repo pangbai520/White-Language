@@ -63,7 +63,8 @@ struct GCTracker(
 struct CompileResult(
     reg  -> String,
     type -> Int,
-    origin_type -> Int
+    origin_type -> Int,
+    owns_ref -> Bool
 )
 
 struct SystemAnnResult(
@@ -132,6 +133,15 @@ struct ArrayInfo(
     base_type -> Int,
     size      -> Int,
     llvm_name -> String
+)
+
+struct SliceParts(
+    start -> String,
+    length -> String,
+    owner -> String,
+    data_slot -> String,
+    size_slot -> String,
+    data -> String
 )
 
 struct CaptureScope(
@@ -721,6 +731,7 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
 
     let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
     if (arr_info is !null) {
+        if (arr_info.size == -1) { return arr_info.llvm_name + "*"; }
         return arr_info.llvm_name;
     }
 
@@ -904,7 +915,8 @@ func is_ref_type(c -> Compiler, type_id -> Int) -> Bool {
     if (type_id == TYPE_GENERIC_METHOD) { return true; }
 
     if (type_id >= 100) {
-        if (c.array_info_map.get("" + type_id) is !null) { return false; }
+        let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
+        if (arr_info is !null) { return arr_info.size == -1; }
         let s_info -> StructInfo = c.struct_id_map.get("" + type_id);
         if (s_info is !null) {
             if (s_info.is_enum) { return false; }
@@ -912,8 +924,18 @@ func is_ref_type(c -> Compiler, type_id -> Int) -> Bool {
         }
         if (c.vector_base_map.get("" + type_id) is !null) { return true; }
         if (c.func_ret_map.get("" + type_id) is !null) { return true; }
+        if (c.method_ret_map.get("" + type_id) is !null) { return true; }
     }
     
+    return false;
+}
+
+func needs_drop(c -> Compiler, type_id -> Int) -> Bool {
+    if (is_ref_type(c, type_id)) { return true; }
+    let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
+    if (arr_info is !null && arr_info.size >= 0) {
+        return needs_drop(c, arr_info.base_type);
+    }
     return false;
 }
 
@@ -1066,6 +1088,21 @@ func get_vector_type_id(c -> Compiler, base_id -> Int) -> Int {
     return new_id;
 }
 
+func get_slice_type_id(c -> Compiler, base_id -> Int) -> Int {
+    let key -> String = "slice_" + base_id;
+    let cached -> SymbolInfo = c.array_type_cache.get(key);
+    if (cached is !null) { return cached.type; }
+
+    let new_id -> Int = c.type_counter;
+    c.type_counter += 1;
+
+    let elem_ty -> String = get_llvm_type_str(c, base_id);
+    let slice_ty -> String = "{ i64, i64, i8*, " + elem_ty + "**, i64* }";
+    c.array_type_cache.put(key, SymbolInfo(reg="", type=new_id, origin_type=0, is_const=false));
+    c.array_info_map.put("" + new_id, ArrayInfo(base_type=base_id, size=-1, llvm_name=slice_ty));
+    return new_id;
+}
+
 func get_expr_type(c -> Compiler, node -> Struct) -> Int {
     if (node is null) { return 0; }
     let base -> BaseNode = node;
@@ -1189,11 +1226,20 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
         let ref_base -> BaseNode = ref_node.node;
         if (ref_base.type == NODE_SLICE_ACCESS) {
             let slice_node -> SliceAccessNode = ref_node.node;
-            if (slice_node.start_idx is null && slice_node.end_idx is null) {
-                let target_type -> Int = get_expr_type(c, slice_node.target);
-                if (target_type == TYPE_STRING) { return TYPE_STRING; }
-                return 0;
+            let target_type -> Int = get_expr_type(c, slice_node.target);
+            if (target_type == TYPE_STRING) { return TYPE_STRING; }
+
+            let elem_type -> Int = 0;
+            if (target_type >= 100) {
+                let arr_info -> ArrayInfo = c.array_info_map.get("" + target_type);
+                if (arr_info is !null) { elem_type = arr_info.base_type; }
+                else {
+                    let vec_info -> SymbolInfo = c.vector_base_map.get("" + target_type);
+                    if (vec_info is !null) { elem_type = vec_info.type; }
+                }
             }
+            if (elem_type != 0) { return get_slice_type_id(c, elem_type); }
+            return 0;
         }
         let base_type -> Int = get_expr_type(c, ref_node.node);
         if (base_type != 0) { return get_ptr_type_id(c, base_type); }
@@ -1226,15 +1272,7 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
         }
         
         if (elem_type != 0) {
-            let cache_key -> String = "slice_" + elem_type;
-            let cached -> SymbolInfo = c.array_type_cache.get(cache_key);
-            if (cached is !null) { return cached.type; }
-            let slice_type_id -> Int = c.type_counter;
-            c.type_counter += 1;
-            c.array_type_cache.put(cache_key, SymbolInfo(reg="", type=slice_type_id, origin_type=0, is_const=false));
-            let llvm_name -> String = "%slice." + slice_type_id;
-            c.array_info_map.put("" + slice_type_id, ArrayInfo(base_type=elem_type, size=-1, llvm_name=llvm_name));
-            return slice_type_id;
+            return get_slice_type_id(c, elem_type);
         }
         return 0;
     }
@@ -1615,23 +1653,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
     if (base.type == NODE_SLICE_TYPE) {
         let s_node -> SliceTypeNode = node;
         let elem_id -> Int = resolve_type(c, s_node.element_type);
-        
-        let cache_key -> String = "slice_" + elem_id;
-        let cached -> SymbolInfo = c.array_type_cache.get(cache_key);
-        if (cached is !null) { return cached.type; }
-        
-        let new_id -> Int = c.type_counter;
-        c.type_counter += 1;
-        c.array_type_cache.put(cache_key, SymbolInfo(reg="", type=new_id, origin_type=0, is_const=false));
-        
-        let elem_ty_str -> String = get_llvm_type_str(c, elem_id);
-        let llvm_name -> String = "%slice." + new_id;
-        c.array_info_map.put("" + new_id, ArrayInfo(base_type=elem_id, size=-1, llvm_name=llvm_name));
-
-        // { i64 length, T* data }
-        c.output_file.write(llvm_name + " = type { i64, " + elem_ty_str + "* }\n\n");
-
-        return new_id;
+        return get_slice_type_id(c, elem_id);
     }
     
     // Named Type (Int, Float, StructName)
@@ -2425,7 +2447,6 @@ func check_out_index(c -> Compiler, target_node -> Struct, index_node -> Struct,
     }
 }
 
-
 // oop
 func is_subclass(c -> Compiler, child_id -> Int, parent_id -> Int) -> Bool {
     if (child_id == parent_id) { return true; }
@@ -2440,4 +2461,9 @@ func is_subclass(c -> Compiler, child_id -> Int, parent_id -> Int) -> Bool {
         curr_parent = p_info.parent_id;
     }
     return false;
+}
+
+// system utils
+func get_target_os() -> String {
+    return sys.OS;
 }

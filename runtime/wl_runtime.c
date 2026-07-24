@@ -12,6 +12,31 @@
 int _fltused = 0x9875;
 void __main(void) {}
 
+#if defined(__x86_64__) || defined(_M_X64)
+// probe each guard page before a large stack allocation
+__attribute__((naked, weak)) void ___chkstk_ms(void) {
+    __asm__ volatile(
+        "pushq %rcx\n\t"
+        "pushq %rax\n\t"
+        "cmpq $0x1000, %rax\n\t"
+        "leaq 24(%rsp), %rcx\n\t"
+        "jb 2f\n\t"
+        "1:\n\t"
+        "subq $0x1000, %rcx\n\t"
+        "testb $0, (%rcx)\n\t"
+        "subq $0x1000, %rax\n\t"
+        "cmpq $0x1000, %rax\n\t"
+        "ja 1b\n\t"
+        "2:\n\t"
+        "subq %rax, %rcx\n\t"
+        "testb $0, (%rcx)\n\t"
+        "popq %rax\n\t"
+        "popq %rcx\n\t"
+        "retq\n\t"
+    );
+}
+#endif
+
 __attribute__((weak)) BOOL WINAPI DllMainCRTStartup(HINSTANCE instance, DWORD reason, LPVOID reserved) {
     (void)instance;
     (void)reason;
