@@ -96,6 +96,7 @@ __declspec(noreturn) __attribute__((weak)) void mainCRTStartup(void) {
     ExitProcess((UINT)status);
 }
 #else
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -107,6 +108,16 @@ typedef struct {
     int len;
     int cap;
 } wl_string;
+
+long long wl_pointer_size(void) {
+    return (long long)sizeof(void*);
+}
+
+#ifdef _WIN32
+int wl_startup_info_size(void) {
+    return (int)sizeof(STARTUPINFOW);
+}
+#endif
 
 enum {
     WL_STRING_TYPE_ID = 5,
@@ -184,6 +195,10 @@ wl_string* wl_getenv(wl_string* name) {
 
 void wl_posix_exit(int status) {
     exit(status);
+}
+
+int wl_last_errno(void) {
+    return errno;
 }
 #endif
 

@@ -4,6 +4,12 @@ import "sys"
 import "internal/platform/windows"
 import "internal/platform/posix"
 
+extern func wl_pointer_size() -> Long from "C";
+
+func pointer_size() -> Long {
+    return wl_pointer_size();
+}
+
 @CompilerLink("memory_alloc")
 func mem_alloc(size -> Long) -> AnyPtr {
     if (size <= 0L) { size = 1L; }

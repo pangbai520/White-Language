@@ -32,7 +32,8 @@ func abort_and_clean(status -> Int) -> Void {
         ACTIVE_FILE.close();
     }
     if (CLEAN_TMP_LL.length() > 0) {
-        file.remove(CLEAN_TMP_LL);
+        file.remove(CLEAN_TMP_LL)?;
+        catch(err) { }
     }
     process.exit(status);
 }
@@ -166,6 +167,11 @@ func throw_import_error(pos -> Position, details -> String) -> Void {
 }
 
 func throw_internal_compiler_error(pos -> Position, details -> String) -> Void {
+    if (pos is null) {
+        builtin.print("InternalCompilerError: " + details);
+        abort_and_clean(1);
+        return;
+    }
     report_error(pos, "InternalCompilerError", details);
 }
 

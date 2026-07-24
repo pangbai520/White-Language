@@ -2,7 +2,7 @@
 import "builtin"
 import "sys"
 import "file"
-import "internal/runtime" as runtime
+import "process"
 import Dict from "dict"
 
 import * from "WhitelangNodes.wl"
@@ -406,7 +406,7 @@ func eval_const_bool(c -> Compiler, node -> Struct, pos -> Position) -> Int {
 func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -> Int, pos -> Position) -> CompileResult {
     if (val_res is null || val_res.reg == "") {
         let dummy_reg -> String = "0";
-        if (is_nullable_complex_type(expected_type) || is_pointer_type(c, expected_type)) {
+        if (is_nullable_reference_type(c, expected_type) || is_pointer_type(c, expected_type)) {
             dummy_reg = "null";
         } else if (expected_type == TYPE_FLOAT) {
             dummy_reg = "0.0";
@@ -692,9 +692,9 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
             WhitelangExceptions.throw_type_error(pos, "Keyword 'null' cannot be assigned to explicit pointer types. Use 'nullptr'.");
             return CompileResult(reg="0", type=expected_type, origin_type=expected_type);
         }
-        if (is_primitive_type(expected_type)) {
-            WhitelangExceptions.throw_type_error(pos, "Primitive types cannot be null.");
-            return CompileResult(reg="0", type=expected_type, origin_type=expected_type);
+        if (!is_nullable_reference_type(c, expected_type)) {
+            WhitelangExceptions.throw_type_error(pos, "Type " + get_type_name(c, expected_type) + " cannot be null.");
+            return CompileResult(reg="zeroinitializer", type=expected_type, origin_type=expected_type);
         }
         return CompileResult(reg="null", type=expected_type, origin_type=expected_type);
     }
@@ -1138,6 +1138,13 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             );
             c.struct_table.put(e_name, info);
             c.struct_id_map.put("" + new_id, info);
+            if (sys_anns.compiler_link_name == "Error") {
+                if (c.error_type_id != 0 && c.error_type_id != new_id) {
+                    WhitelangExceptions.throw_internal_compiler_error(e_node.pos, "Multiple enums are linked as the standard Error type.");
+                    return;
+                }
+                c.error_type_id = new_id;
+            }
         }
         i += 1;
     }
@@ -1210,7 +1217,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
             if ((sys_anns.ann_flags & FLAG_ANN_EXPORT) != 0 || raw_name == "main") {
                 llvm_func_name = raw_name;
             } else {
-                llvm_func_name = mangle_wl_name(c.current_package_prefix, raw_name, arg_types);
+                llvm_func_name = mangle_wl_name(c, c.current_package_prefix, raw_name, arg_types);
             }
 
             if (c.func_table.get(func_key) is !null) {
@@ -1264,7 +1271,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                 }
 
                 let m_key -> String = c_name + "_" + m_raw_name;
-                let m_llvm_name -> String = mangle_wl_name(c_name + ".", m_raw_name, arg_types);
+                let m_llvm_name -> String = mangle_wl_name(c, c_name + ".", m_raw_name, arg_types);
                 
                 if (c.func_table.get(m_key) is !null) {
                     WhitelangExceptions.throw_name_error(m_node.pos, "Method '" + m_key + "' is already defined.");
@@ -1547,6 +1554,9 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
             
             let llvm_ty_str -> String = get_llvm_type_str(c, target_type_id);
             c.output_file.write(c.indent + var_reg + " = alloca " + llvm_ty_str + "\n");
+            if (needs_drop(c, target_type_id)) {
+                c.output_file.write(c.indent + "store " + llvm_ty_str + " zeroinitializer, " + llvm_ty_str + "* " + var_reg + "\n");
+            }
         }
     }
 }
@@ -2314,13 +2324,20 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     c.current_file_func_aliases     = Dict(32);
     c.current_file_global_aliases   = Dict(32);
 
-    let f -> file.File = file.open(final_path);
-    if (f is null) { WhitelangExceptions.throw_import_error(node.pos, "Failed to open: " + final_path); }
-    let source -> String = f.read_all();
+    let f -> file.File = file.open(final_path)?;
+    catch(err) {
+        WhitelangExceptions.throw_import_error(node.pos, "Failed to open module '" + final_path + "' (error " + Int(err) + ").");
+        return;
+    }
+    let source -> String = f.read_all()?;
+    catch(err) {
+        WhitelangExceptions.throw_import_error(node.pos, "Failed to read module '" + final_path + "' (error " + Int(err) + ").");
+        return;
+    }
     f.close();
 
     let lexer -> Lexer = WhitelangLexer.new_lexer(final_path, source);
-    let parser -> Parser = WhitelangParser.Parser(lexer=lexer, current_tok=WhitelangLexer.get_next_token(lexer));
+    let parser -> Parser = WhitelangParser.Parser(lexer=lexer, current_tok=WhitelangLexer.get_next_token(lexer), nesting=0);
     let mod_ast -> Struct = WhitelangParser.parse(parser);
 
     precompile_ast(c, mod_ast, final_path, import_prefix, c.current_dir);
@@ -3002,6 +3019,9 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     }
 
     let f_info -> FuncInfo = c.func_table.get(func_name);
+    if (f_info is null) {
+        return void_result();
+    }
     let ret_type_id -> Int = f_info.ret_type;
     let llvm_ret_type -> String = get_llvm_type_str(c, ret_type_id);
 
@@ -3122,6 +3142,9 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
     let m_name -> String = class_name + "_" + raw_name;
     
     let f_info -> FuncInfo = c.func_table.get(m_name);
+    if (f_info is null) {
+        return void_result();
+    }
     let ret_type_id -> Int = f_info.ret_type;
     let llvm_ret_type -> String = get_llvm_type_str(c, ret_type_id);
 
@@ -3510,9 +3533,13 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
         temp_dir = "/tmp/";
     }
 
-    let tmp_name -> String = temp_dir + "wl_lambda_tmp_" + env_id + ".ll";
+    let tmp_name -> String = temp_dir + "wl_lambda_tmp_" + process.id() + "_" + env_id + ".ll";
     
-    c.output_file = file.create(tmp_name);
+    c.output_file = file.create(tmp_name)?;
+    catch(err) {
+        WhitelangExceptions.throw_internal_compiler_error(func_def.pos, "Cannot create closure IR file '" + tmp_name + "' (error " + Int(err) + ").");
+        return void_result();
+    }
     
     let lambda_name -> String = "lambda." + func_def.name_tok.value + "." + env_id;
     let ret_type_id -> Int = resolve_type(c, func_def.ret_type_tok);
@@ -3611,10 +3638,19 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     
     c.output_file.close();
     c.output_file = old_file;
-    let tmp_read -> file.File = file.open(tmp_name);
-    let lambda_ir -> String = tmp_read.read_all();
+    let tmp_read -> file.File = file.open(tmp_name)?;
+    catch(err) {
+        WhitelangExceptions.throw_internal_compiler_error(func_def.pos, "Cannot reopen closure IR file '" + tmp_name + "' (error " + Int(err) + ").");
+        return void_result();
+    }
+    let lambda_ir -> String = tmp_read.read_all()?;
+    catch(err) {
+        WhitelangExceptions.throw_internal_compiler_error(func_def.pos, "Cannot read closure IR file '" + tmp_name + "' (error " + Int(err) + ").");
+        return void_result();
+    }
     tmp_read.close();
-    file.remove(tmp_name); 
+    file.remove(tmp_name)?;
+    catch(err) { }
 
     c.global_buffer = c.global_buffer + lambda_ir;
 
@@ -5718,7 +5754,11 @@ func compile_catch(c -> Compiler, node -> CatchNode) -> CompileResult {
     c.output_file.write(fail_label + ":\n");
     
     enter_scope(c);
-    c.symbol_table.table.put(node.err_name.value, SymbolInfo(reg=err_reg_ptr, type=TYPE_INT, origin_type=0, is_const=false, func_arg_types=null));
+    if (c.error_type_id == 0) {
+        WhitelangExceptions.throw_internal_compiler_error(node.pos, "The standard Error enum was not registered before compiling a catch block.");
+        return void_result();
+    }
+    c.symbol_table.table.put(node.err_name.value, SymbolInfo(reg=err_reg_ptr, type=c.error_type_id, origin_type=c.error_type_id, is_const=false, func_arg_types=null));
     
     compile_node(c, node.body);
     
@@ -6015,6 +6055,9 @@ func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> Compi
     if (base.type == NODE_DEREF) {
         let d_node -> DerefNode = node;
         let res -> CompileResult = compile_node(c, d_node.node);
+        if (res is null || res.type == TYPE_POISON || res.reg == "") {
+            return CompileResult(reg="poison", type=TYPE_POISON);
+        }
         let i -> Int = 0;
         let curr_reg -> String = res.reg;
         let curr_type -> Int = res.type;
@@ -6469,7 +6512,10 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_DEREF) {
         let d_node -> DerefNode = node;
         let res -> CompileResult = compile_node(c, d_node.node);
-        
+        if (res is null || res.type == TYPE_POISON || res.reg == "") {
+            return CompileResult(reg="poison", type=TYPE_POISON);
+        }
+
         let i -> Int = 0;
         let curr_reg -> String = res.reg;
         let curr_type -> Int = res.type;
@@ -7592,6 +7638,21 @@ func compile_type_cast(c -> Compiler, val_res -> CompileResult, target_type -> I
 
     let src_is_int -> Bool = is_integer_type(val_res.type) || val_res.type == TYPE_BOOL;
     let dst_is_int -> Bool = is_integer_type(target_type) || target_type == TYPE_BOOL;
+
+    let src_info -> StructInfo = c.struct_id_map.get("" + val_res.type);
+    let src_is_enum -> Bool = src_info is !null && src_info.is_enum;
+    if (src_is_enum && is_integer_type(target_type)) {
+        let dst_bits -> Int = get_type_bitwidth(target_type);
+        if (dst_bits == 32) {
+            return CompileResult(reg=val_res.reg, type=target_type, origin_type=0);
+        }
+        if (dst_bits < 32) {
+            c.output_file.write(c.indent + res_reg + " = trunc i32 " + val_res.reg + " to " + dst_ty_str + "\n");
+        } else {
+            c.output_file.write(c.indent + res_reg + " = zext i32 " + val_res.reg + " to " + dst_ty_str + "\n");
+        }
+        return CompileResult(reg=res_reg, type=target_type, origin_type=0);
+    }
     
     let src_is_ptr -> Bool = is_pointer_type(c, val_res.type) || val_res.type == TYPE_STRING || val_res.type == TYPE_ANYPTR || val_res.type == TYPE_NULLPTR;
     let dst_is_ptr -> Bool = is_pointer_type(c, target_type) || target_type == TYPE_STRING || target_type == TYPE_ANYPTR;

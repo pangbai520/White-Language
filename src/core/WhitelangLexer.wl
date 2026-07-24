@@ -23,6 +23,115 @@ func is_alpha(c -> Char) -> Bool {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c == '_');
 }
 
+func is_digit_for_base(c -> Char, base -> Int) -> Bool {
+    if (c >= '0' && c <= '9') {
+        return Int(c) - Int('0') < base;
+    }
+    if (base == 16) {
+        return (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    }
+    return false;
+}
+
+func report_bad_number(l -> Lexer, line -> Int, col -> Int, value -> String) -> Void {
+    let pos -> Position = WhitelangExceptions.Position(idx=0, ln=line, col=col, text=l.text, fn=l.pos.fn);
+    WhitelangExceptions.throw_invalid_syntax(pos, "Invalid numeric literal '" + value + "'.");
+}
+
+func validate_number(l -> Lexer, line -> Int, col -> Int, value -> String, is_float -> Bool) -> Bool {
+    if (value.length() == 0) { return false; }
+
+    let end -> Int = value.length();
+    if is_float {
+        if (value.ends_with("f") || value.ends_with("F")) { end -= 1; }
+        if (end == 0) {
+            report_bad_number(l, line, col, value);
+            return false;
+        }
+
+        let dot_seen -> Bool = false;
+        let digit_seen -> Bool = false;
+        let prev_digit -> Bool = false;
+        let i -> Int = 0;
+        while (i < end) {
+            let ch -> Char = value[i];
+            if (is_digit(ch)) {
+                digit_seen = true;
+                prev_digit = true;
+            } else if (ch == '.') {
+                if (dot_seen) {
+                    report_bad_number(l, line, col, value);
+                    return false;
+                }
+                dot_seen = true;
+                prev_digit = false;
+            } else if (ch == '_') {
+                if (!prev_digit || i + 1 >= end || !is_digit(value[i + 1])) {
+                    report_bad_number(l, line, col, value);
+                    return false;
+                }
+                prev_digit = false;
+            } else {
+                report_bad_number(l, line, col, value);
+                return false;
+            }
+            i += 1;
+        }
+
+        if (!dot_seen || !digit_seen) {
+            report_bad_number(l, line, col, value);
+            return false;
+        }
+        return true;
+    }
+
+    let suffix_len -> Int = 0;
+    if (value.ends_with("ULL") || value.ends_with("ull")) {
+        suffix_len = 3;
+    } else if (value.ends_with("LL") || value.ends_with("ll") ||
+               value.ends_with("UL") || value.ends_with("ul")) {
+        suffix_len = 2;
+    } else if (value.ends_with("U") || value.ends_with("u") ||
+               value.ends_with("L") || value.ends_with("l")) {
+        suffix_len = 1;
+    }
+
+    end -= suffix_len;
+    let base -> Int = 10;
+    let start -> Int = 0;
+    if (end >= 2 && value[0] == '0') {
+        let prefix -> Char = value[1];
+        if (prefix == 'x' || prefix == 'X') { base = 16; start = 2; }
+        else if (prefix == 'b' || prefix == 'B') { base = 2; start = 2; }
+        else if (prefix == 'o' || prefix == 'O') { base = 8; start = 2; }
+    }
+
+    if (start >= end) {
+        report_bad_number(l, line, col, value);
+        return false;
+    }
+
+    let prev_digit -> Bool = false;
+    let i -> Int = start;
+    while (i < end) {
+        let ch -> Char = value[i];
+        if (is_digit_for_base(ch, base)) {
+            prev_digit = true;
+        } else if (ch == '_') {
+            if (!prev_digit || i + 1 >= end || !is_digit_for_base(value[i + 1], base)) {
+                report_bad_number(l, line, col, value);
+                return false;
+            }
+            prev_digit = false;
+        } else {
+            report_bad_number(l, line, col, value);
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+
 func new_lexer(fn -> String, text -> String) -> Lexer {
     let pos -> Position = Position(idx=-1, ln=0, col=-1, text=text, fn=fn);
     let l -> Lexer = Lexer(text=text, pos=pos, current_char='\0');
@@ -143,8 +252,10 @@ func get_number(l -> Lexer) -> Token {
     }
 
     if (dot_count == 1) {
+        validate_number(l, start_line, start_col, value, true);
         return WhitelangTokens.Token(type=TOK_FLOAT, value=value, line=start_line, col=start_col);
     }
+    validate_number(l, start_line, start_col, value, false);
     return WhitelangTokens.Token(type=TOK_INT, value=value, line=start_line, col=start_col);
 }
 

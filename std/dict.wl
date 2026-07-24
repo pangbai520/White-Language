@@ -42,21 +42,22 @@ class Dict {
         let actual_cap -> Int = 8;
         while (actual_cap < cap) {
             if (actual_cap >= 1073741824) {
-                runtime.process_exit(1);
+                runtime.panic_capacity_overflow("Dict");
                 return;
             }
             actual_cap <<= 1;
         }
 
         // keys and variants are stored as pointers, hashes are 32-bit values
-        let ptr new_keys -> String = runtime.mem_alloc_zeroed(Long(actual_cap) * 8L);
-        let ptr new_values -> Variant = runtime.mem_alloc_zeroed(Long(actual_cap) * 8L);
+        let slot_size -> Long = runtime.pointer_size();
+        let ptr new_keys -> String = runtime.mem_alloc_zeroed(Long(actual_cap) * slot_size);
+        let ptr new_values -> Variant = runtime.mem_alloc_zeroed(Long(actual_cap) * slot_size);
         let ptr new_hashes -> Int = runtime.mem_alloc_zeroed(Long(actual_cap) * 4L);
         if (new_keys is nullptr || new_values is nullptr || new_hashes is nullptr) {
             runtime.mem_dealloc(new_keys);
             runtime.mem_dealloc(new_values);
             runtime.mem_dealloc(new_hashes);
-            runtime.process_exit(1);
+            runtime.panic_out_of_memory("Dict");
             return;
         }
 
@@ -87,18 +88,19 @@ class Dict {
 
         // standard x2 growth strategy
         if (old_cap >= 1073741824) {
-            runtime.process_exit(1);
+            runtime.panic_capacity_overflow("Dict");
             return;
         }
         let new_cap -> Int = old_cap << 1;
-        let ptr new_keys -> String = runtime.mem_alloc_zeroed(Long(new_cap) * 8L);
-        let ptr new_vals -> Variant = runtime.mem_alloc_zeroed(Long(new_cap) * 8L);
+        let slot_size -> Long = runtime.pointer_size();
+        let ptr new_keys -> String = runtime.mem_alloc_zeroed(Long(new_cap) * slot_size);
+        let ptr new_vals -> Variant = runtime.mem_alloc_zeroed(Long(new_cap) * slot_size);
         let ptr new_hashes -> Int = runtime.mem_alloc_zeroed(Long(new_cap) * 4L);
         if (new_keys is nullptr || new_vals is nullptr || new_hashes is nullptr) {
             runtime.mem_dealloc(new_keys);
             runtime.mem_dealloc(new_vals);
             runtime.mem_dealloc(new_hashes);
-            runtime.process_exit(1);
+            runtime.panic_out_of_memory("Dict");
             return;
         }
 

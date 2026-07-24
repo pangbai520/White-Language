@@ -24,32 +24,52 @@ func main() -> Int {
     let conversions_ok -> Bool = description == "WhiteLang-42-true-";
 
     let path -> String = "tests_structured_string_runtime.tmp";
-    let writer -> file.File = file.create(path);
-    if (writer is null || !writer.is_open()) {
+    let writer -> file.File = file.create(path)?;
+    catch(err) {
         builtin.print("FAIL: could not create structured String runtime fixture");
         return 1;
     }
-    writer.write(description);
+    writer.write_all(description)?;
+    catch(err) {
+        builtin.print("FAIL: could not write structured String runtime fixture");
+        return 1;
+    }
     writer.close();
 
-    let appender -> file.File = file.append(path);
-    if (appender is null || !appender.is_open()) {
-        file.remove(path);
+    let appender -> file.File = file.append(path)?;
+    catch(err) {
+        file.remove(path)?;
+        catch(cleanup_err) {
+        }
         builtin.print("FAIL: could not append structured String runtime fixture");
         return 1;
     }
-    appender.write("!");
+    appender.write_all("!")?;
+    catch(err) {
+        builtin.print("FAIL: could not append structured String runtime fixture");
+        return 1;
+    }
     appender.close();
 
-    let reader -> file.File = file.open(path);
-    if (reader is null || !reader.is_open()) {
-        file.remove(path);
+    let reader -> file.File = file.open(path)?;
+    catch(err) {
+        file.remove(path)?;
+        catch(cleanup_err) {
+        }
         builtin.print("FAIL: could not reopen structured String runtime fixture");
         return 1;
     }
-    let roundtrip -> String = reader.read_all();
+    let roundtrip -> String = reader.read_all()?;
+    catch(err) {
+        builtin.print("FAIL: could not read structured String runtime fixture");
+        return 1;
+    }
     reader.close();
-    file.remove(path);
+    file.remove(path)?;
+    catch(err) {
+        builtin.print("FAIL: could not remove structured String runtime fixture");
+        return 1;
+    }
 
     let file_ok -> Bool = roundtrip.length() == description.length() + 1 && roundtrip == description + "!";
     if (methods_ok && conversions_ok && file_ok) {

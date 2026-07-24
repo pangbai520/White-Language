@@ -8,7 +8,8 @@ import Lexer from "WhitelangLexer.wl"
 
 struct Parser(
     lexer -> Lexer,
-    current_tok -> Token
+    current_tok -> Token,
+    nesting -> Int
 )
 
 struct TypedIdent(
@@ -521,8 +522,30 @@ func atom(p -> Parser) -> Struct {
 
     // Parenthesized expressions
     if (tok.type == TOK_LPAREN) {
+        if (p.nesting >= 256) {
+            let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+            WhitelangExceptions.throw_invalid_syntax(err_pos, "Expression nesting exceeds the limit of 256.");
+
+            let balance -> Int = 0;
+            while (p.current_tok.type != TOK_EOF) {
+                if (p.current_tok.type == TOK_LPAREN) { balance += 1; }
+                else if (p.current_tok.type == TOK_RPAREN) {
+                    balance -= 1;
+                    parser_advance(p);
+                    if (balance == 0) { break; }
+                    continue;
+                }
+                parser_advance(p);
+            }
+
+            let zero_tok -> Token = Token(type=TOK_INT, value="0", line=tok.line, col=tok.col);
+            return IntNode(type=NODE_INT, tok=zero_tok, pos=err_pos);
+        }
+
+        p.nesting += 1;
         parser_advance(p);
         let node -> Struct = expression(p);
+        p.nesting -= 1;
         
         if (p.current_tok.type != TOK_RPAREN) {
             let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -604,7 +627,9 @@ func atom(p -> Parser) -> Struct {
 
     let err_pos -> Position = WhitelangExceptions.Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
     WhitelangExceptions.throw_invalid_syntax(err_pos, "Unexpected token: " + WhitelangTokens.get_token_name(tok.type));
-    return null;
+    if (p.current_tok.type != TOK_EOF) { parser_advance(p); }
+    let zero_tok -> Token = Token(type=TOK_INT, value="0", line=tok.line, col=tok.col);
+    return IntNode(type=NODE_INT, tok=zero_tok, pos=err_pos);
 }
 
 func parse_args(p -> Parser) -> Vector(Struct) {

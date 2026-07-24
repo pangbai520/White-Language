@@ -19,4 +19,5 @@ enum Error {
     AlreadyExists,
     BrokenPipe,
     DiskFull,
+    NotFound,
 }

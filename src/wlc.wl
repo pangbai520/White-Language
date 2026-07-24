@@ -19,9 +19,9 @@ extern func get_arg(ptr argv -> String, idx -> Int) -> String from "C";
 struct CompilerConfig(
     source_file     -> String,
     output_file     -> String,
-    extra_ldflags   -> String,
+    extra_ldflags   -> Vector(String),
     library_paths   -> Vector(String),
-    extra_files     -> String,
+    extra_files     -> Vector(String),
     is_compile_only -> Bool,  // -c
     is_asm_only     -> Bool,  // -S
     is_emit_llvm    -> Bool,  // --emit-llvm
@@ -35,7 +35,7 @@ struct CompilerConfig(
 )
 
 func print_usage() -> Void {
-    builtin.print("White Language Compiler (v0.2.12)");
+    builtin.print("White Language Compiler (v0.2.13)");
     builtin.print("Usage: wlc <source.wl> [extra_files...] [options]");
     builtin.print("");
     builtin.print("Arguments:");
@@ -75,6 +75,40 @@ func get_base_name(path -> String) -> String {
     return path;
 }
 
+func split_link_flags(value -> String) -> Vector(String) {
+    let result -> Vector(String) = [];
+    let current -> String = "";
+    let quote -> Char = '\0';
+    let i -> Int = 0;
+
+    while (i < value.length()) {
+        let ch -> Char = value[i];
+        if (quote != '\0') {
+            if (ch == quote) {
+                quote = '\0';
+            } else if (ch == '\\' && i + 1 < value.length() && value[i + 1] == quote) {
+                i += 1;
+                current += value.slice(i, i + 1);
+            } else {
+                current += value.slice(i, i + 1);
+            }
+        } else if (ch == '"' || ch == '\'') {
+            quote = ch;
+        } else if (ch == ' ' || ch == '\t') {
+            if (current.length() > 0) {
+                result.append(current);
+                current = "";
+            }
+        } else {
+            current += value.slice(i, i + 1);
+        }
+        i += 1;
+    }
+
+    if (current.length() > 0) { result.append(current); }
+    return result;
+}
+
 func main(argc -> Int, ptr argv -> String) -> Int {
     if (argc < 2) {
         print_usage();
@@ -84,9 +118,9 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     let cfg -> CompilerConfig = CompilerConfig(
         source_file     = "",
         output_file     = "",
-        extra_ldflags   = "",
+        extra_ldflags   = [],
         library_paths   = [],
-        extra_files     = "",
+        extra_files     = [],
         is_compile_only = false,
         is_asm_only     = false,
         is_emit_llvm    = false,
@@ -138,18 +172,18 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         else if (arg == "--ldflags") {
             i++;
             if (i >= argc) { builtin.print("Error: --ldflags requires an argument"); return 1; }
-            cfg.extra_ldflags = cfg.extra_ldflags + " " + get_arg(argv, i);
+            let flags -> Vector(String) = split_link_flags(get_arg(argv, i));
+            let flag_idx -> Int = 0;
+            while (flag_idx < flags.length()) {
+                cfg.extra_ldflags.append(flags[flag_idx]);
+                flag_idx += 1;
+            }
         }
         else {
             if (cfg.source_file.length() == 0) {
                 cfg.source_file = arg;
             } else {
-                let linked_file -> String = "\"" + arg + "\"";
-                if (cfg.extra_files.length() == 0) {
-                    cfg.extra_files = linked_file;
-                } else {
-                    cfg.extra_files = cfg.extra_files + " " + linked_file;
-                }
+                cfg.extra_files.append(arg);
             }
         }
         i++;
@@ -192,7 +226,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
             idx -= 1;
         }
 
-        ll_file = temp_dir + "wlc_tmp_" + file_only + ".ll";
+        ll_file = temp_dir + "wlc_tmp_" + file_only + "_" + process.id() + ".ll";
     }
 
     if (!cfg.keep_temps && !cfg.is_emit_llvm) {
@@ -227,32 +261,54 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     }
 
     log_stage(cfg, "Frontend & Middle-end");
-    let f_in -> file.File = file.open(cfg.source_file);
-    if (f_in is null || !f_in.is_open()) {
-        builtin.print("Error: Could not open " + cfg.source_file);
+    let f_in -> file.File = file.open(cfg.source_file)?;
+    catch(err) {
+        builtin.print("Error: Could not open " + cfg.source_file + " (error " + Int(err) + ")");
         return 1;
     }
-    let source -> String = f_in.read_all();
+    let source -> String = f_in.read_all()?;
+    catch(err) {
+        builtin.print("Error: Could not read " + cfg.source_file + " (error " + Int(err) + ")");
+        return 1;
+    }
     f_in.close();
 
     let lexer -> WhitelangLexer.Lexer = WhitelangLexer.new_lexer(cfg.source_file, source);
-    let parser -> WhitelangParser.Parser = WhitelangParser.Parser(lexer=lexer, current_tok=WhitelangLexer.get_next_token(lexer));
+    let parser -> WhitelangParser.Parser = WhitelangParser.Parser(lexer=lexer, current_tok=WhitelangLexer.get_next_token(lexer), nesting=0);
     let ast -> Struct = WhitelangParser.parse(parser);
 
     WhitelangExceptions.check_errors_and_abort();
+    if (cfg.verbose) { builtin.print("Parsed source: " + cfg.source_file); }
 
     if (cfg.dump_ast) { builtin.print("[Debug] AST Dumped"); }
 
-    let compiler -> WhitelangUtils.Compiler = WhitelangUtils.new_compiler(ll_file, cfg.is_shared);
+    let compiler -> WhitelangUtils.Compiler = WhitelangUtils.new_compiler(ll_file, cfg.is_shared)?;
+    catch(err) {
+        builtin.print("Error: Could not create temporary IR file " + ll_file + " (error " + Int(err) + ")");
+        return 1;
+    }
     compiler.current_dir = WhitelangUtils.get_dir_name(cfg.source_file);
     WhitelangExceptions.ACTIVE_FILE = compiler.output_file;
     WhitelangCompiler.compile(compiler, ast);
+    if (cfg.verbose) { builtin.print("Lowered source to LLVM IR"); }
 
     WhitelangExceptions.check_errors_and_abort();
+    if (compiler.output_file.error() != Error.None) {
+        builtin.print("Error: Could not write temporary IR file " + ll_file);
+        return 1;
+    }
 
     if (cfg.dump_ir) {
-        let f_ir -> file.File = file.open(ll_file);
-        let ir_content -> String = f_ir.read_all();
+        let f_ir -> file.File = file.open(ll_file)?;
+        catch(err) {
+            builtin.print("Error: Could not reopen " + ll_file + " (error " + Int(err) + ")");
+            return 1;
+        }
+        let ir_content -> String = f_ir.read_all()?;
+        catch(err) {
+            builtin.print("Error: Could not read " + ll_file + " (error " + Int(err) + ")");
+            return 1;
+        }
         f_ir.close();
         builtin.print(ir_content);
     }
@@ -279,10 +335,8 @@ func main(argc -> Int, ptr argv -> String) -> Int {
             portable_clang = wl_path + "/tools/llvm/bin/clang";
         }
 
-        let probe -> file.File = file.open(portable_clang);
-        if (probe is !null && probe.is_open()) {
-            probe.close();
-            clang_cmd = "\"" + portable_clang + "\"";
+        if (WhitelangUtils.file_exists(portable_clang)) {
+            clang_cmd = portable_clang;
             has_clang = true;
             if (cfg.verbose) { builtin.print("Using portable LLVM: " + portable_clang); }
         } else {
@@ -290,65 +344,63 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         }
     }
 
-    if (!has_clang) {
-        let check_ret -> Int = 1;
-        if (sys.OS == "WINDOWS") {
-            check_ret = process.shell("where " + clang_cmd + " >nul 2>nul");
-        } else {
-            check_ret = process.shell("which " + clang_cmd + " > /dev/null 2>&1");
-        }
-
-        if (check_ret == 0) {
-            has_clang = true;
-        }
-    }
-
-    if (!has_clang) {
-        builtin.print("Error: Could not find C compiler ('clang').");
-        builtin.print("Please ensure your WhiteLanguage installation is complete, or install 'clang' and add it to your system PATH.");
-        return 1;
-    }
+    if (!has_clang) { has_clang = true; }
     
-    let cmd -> String = clang_cmd;
-    if (cfg.debug_info) { cmd += " -g"; }
-    
-    cmd += " -Wno-override-module " + cfg.opt_level + " \"" + ll_file + "\"";
+    let clang_args -> Vector(String) = [];
+    if (cfg.debug_info) { clang_args.append("-g"); }
+    clang_args.append("-Wno-override-module");
+    clang_args.append(cfg.opt_level);
+    clang_args.append(ll_file);
 
-    if (cfg.extra_files.length() > 0) {
-        cmd += " " + cfg.extra_files;
+    let extra_idx -> Int = 0;
+    while (extra_idx < cfg.extra_files.length()) {
+        clang_args.append(cfg.extra_files[extra_idx]);
+        extra_idx += 1;
     }
 
     if (cfg.is_asm_only) {
-        cmd += " -S";
-        if (cfg.is_emit_llvm) { cmd += " -emit-llvm"; }
-        cmd += " -o \"" + cfg.output_file + "\"";
+        clang_args.append("-S");
+        if (cfg.is_emit_llvm) { clang_args.append("-emit-llvm"); }
+        clang_args.append("-o");
+        clang_args.append(cfg.output_file);
     }
     else if (cfg.is_compile_only) {
-        cmd += " -c";
-        if (cfg.is_emit_llvm) { cmd += " -emit-llvm"; }
-        cmd += " -o \"" + cfg.output_file + "\"";
+        clang_args.append("-c");
+        if (cfg.is_emit_llvm) { clang_args.append("-emit-llvm"); }
+        clang_args.append("-o");
+        clang_args.append(cfg.output_file);
     }
     else {
         if (cfg.is_shared) {
             if (sys.OS == "MACOS") {
-                cmd += " -dynamiclib";
+                clang_args.append("-dynamiclib");
             } else {
-                cmd += " -shared";
+                clang_args.append("-shared");
             }
-            if (sys.OS != "WINDOWS") { cmd += " -fPIC"; }
+            if (sys.OS != "WINDOWS") { clang_args.append("-fPIC"); }
         }
 
         let wl_path -> String = sys.env.get_env("WL_PATH");
         if (wl_path is !null) {
             if (sys.OS == "WINDOWS") {
-                cmd += " \"" + wl_path + "/runtime/wl_runtime.obj\"";
+                clang_args.append(wl_path + "/runtime/wl_runtime.obj");
                 if (cfg.is_shared) {
-                    cmd += " -nostdlib -Xlinker /entry:DllMainCRTStartup -lkernel32 -lshell32";
+                    clang_args.append("-nostdlib");
+                    clang_args.append("-Xlinker");
+                    clang_args.append("/entry:DllMainCRTStartup");
+                    clang_args.append("-lkernel32");
+                    clang_args.append("-lshell32");
                 } else {
-                    cmd += " -nostdlib -Xlinker /entry:mainCRTStartup -Xlinker /subsystem:console -lkernel32 -lshell32";
+                    clang_args.append("-nostdlib");
+                    clang_args.append("-Xlinker");
+                    clang_args.append("/entry:mainCRTStartup");
+                    clang_args.append("-Xlinker");
+                    clang_args.append("/subsystem:console");
+                    clang_args.append("-lkernel32");
+                    clang_args.append("-lshell32");
                 }
             } else {
-                cmd += " \"" + wl_path + "/runtime/wl_runtime.o\"";
+                clang_args.append(wl_path + "/runtime/wl_runtime.o");
             }
         } else {
             builtin.print("Warning: WL_PATH environment variable is not set. Auto-linking of runtime skipped.");
@@ -357,32 +409,51 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         let lib_idx -> Int = 0;
         let path_idx -> Int = 0;
         while (path_idx < cfg.library_paths.length()) {
-            cmd += " -L \"" + cfg.library_paths[path_idx] + "\"";
+            clang_args.append("-L");
+            clang_args.append(cfg.library_paths[path_idx]);
             path_idx += 1;
         }
 
         while (lib_idx < compiler.extra_libs.length()) {
-            cmd += " -l" + compiler.extra_libs[lib_idx];
+            clang_args.append("-l" + compiler.extra_libs[lib_idx]);
             lib_idx += 1;
         }
 
-        if (cfg.extra_ldflags.length() > 0) {
-            cmd += " " + cfg.extra_ldflags;
+        let flag_idx -> Int = 0;
+        while (flag_idx < cfg.extra_ldflags.length()) {
+            clang_args.append(cfg.extra_ldflags[flag_idx]);
+            flag_idx += 1;
         }
 
-        cmd += " -o \"" + cfg.output_file + "\"";
+        clang_args.append("-o");
+        clang_args.append(cfg.output_file);
 
         if (sys.OS != "WINDOWS") {
-            cmd += " -lm -lc";
+            clang_args.append("-lm");
+            clang_args.append("-lc");
         }
     }
 
-    if (cfg.verbose) { builtin.print("Command: " + cmd); }
-    let ret -> Int = process.shell(cmd);
+    if (cfg.verbose) {
+        builtin.print("Program: " + clang_cmd);
+        let arg_idx -> Int = 0;
+        while (arg_idx < clang_args.length()) {
+            builtin.print("  argv[" + arg_idx + "]: " + clang_args[arg_idx]);
+            arg_idx += 1;
+        }
+    }
+    let ret -> Int = process.run(clang_cmd, clang_args)?;
+    catch(err) {
+        builtin.print("Build Failed: Could not start Clang (error " + Int(err) + ")");
+        return 1;
+    }
 
     if (!cfg.keep_temps && cfg.output_file != ll_file) {
         if (cfg.verbose) { builtin.print("Cleaning up: " + ll_file); }
-        file.remove(ll_file);
+        file.remove(ll_file)?;
+        catch(err) {
+            if (cfg.verbose) { builtin.print("Warning: Could not remove temporary file " + ll_file + "."); }
+        }
         WhitelangExceptions.CLEAN_TMP_LL = "";
     }
 

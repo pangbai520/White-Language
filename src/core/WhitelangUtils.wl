@@ -203,7 +203,8 @@ struct Compiler(
     current_catch_label -> String,
     current_catch_err_ptr -> String,
     current_catch_scope -> Struct,
-    extra_libs -> Vector(String)
+    extra_libs -> Vector(String),
+    error_type_id -> Int
 )
 
 struct ParsedModule(
@@ -228,8 +229,8 @@ struct LoopScope(
 
 
 // compiler init & state utils
-func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
-    let f -> file.File = file.create(out_path);
+func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler? {
+    let f -> file.File = file.create(out_path)?;
     // initialize empty scope
     let root_scope -> Scope = Scope(table=Dict(32), parent=null, gc_vars=[], depth=0);
 
@@ -287,7 +288,8 @@ func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler {
         current_catch_label = "",
         current_catch_err_ptr = "",
         current_catch_scope = null,
-        extra_libs = []
+        extra_libs = [],
+        error_type_id = 0
     );
 
     comp.type_drop_list.append(TypeListNode(type=TYPE_GENERIC_FUNCTION));
@@ -741,6 +743,11 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
             return "i8*";
         }
 
+        let m_info -> SymbolInfo = c.method_ret_map.get("" + type_id);
+        if (m_info is !null) {
+            return "i8*";
+        }
+
         let ptr_info -> SymbolInfo = c.ptr_base_map.get("" + type_id);
         if (ptr_info is !null) {
             if (ptr_info.type == TYPE_VOID) { return "i8*"; }
@@ -770,7 +777,8 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
         }
     }
 
-    return "i8*"; // unknown type
+    WhitelangExceptions.throw_internal_compiler_error(null, "Unknown type id " + type_id + " reached LLVM lowering.");
+    return "void";
 }
 
 func get_type_name(c -> Compiler, type_id -> Int) -> String {
@@ -990,26 +998,24 @@ func is_small_primitive_type(t -> Int) -> Bool {
            t == TYPE_UINT16 || t == TYPE_UINT32;
 }
 
-func is_nullable_complex_type(t -> Int) -> Bool {
-// Checks if the type is a nullable reference type handled as an implicit pointer
-
-    return t == TYPE_STRING || t >= 100 || t == TYPE_GENERIC_STRUCT || t == TYPE_GENERIC_CLASS || t == TYPE_GENERIC_FUNCTION || t == TYPE_GENERIC_METHOD;
-}
-
 func is_nullable_reference_type(c -> Compiler, t -> Int) -> Bool {
-    if (t >= 100) {
-        let s_info -> StructInfo = c.struct_id_map.get("" + t);
-        if (s_info is !null && s_info.is_enum) { return false; }
+    if (t == TYPE_STRING || t == TYPE_ANYPTR || t == TYPE_NULLPTR ||
+        t == TYPE_GENERIC_STRUCT || t == TYPE_GENERIC_CLASS ||
+        t == TYPE_GENERIC_FUNCTION || t == TYPE_GENERIC_METHOD) {
+        return true;
     }
-    
-    return t == TYPE_STRING || 
-           t == TYPE_ANYPTR || 
-           t == TYPE_NULLPTR || 
-           t == TYPE_GENERIC_STRUCT || 
-           t == TYPE_GENERIC_CLASS || 
-           t == TYPE_GENERIC_FUNCTION || 
-           t == TYPE_GENERIC_METHOD || 
-           t >= 100;
+
+    if (t < 100) { return false; }
+    let arr_info -> ArrayInfo = c.array_info_map.get("" + t);
+    if (arr_info is !null) { return arr_info.size == -1; }
+    if (c.fallible_base_map.get("" + t) is !null) { return false; }
+    if (c.ptr_base_map.get("" + t) is !null) { return true; }
+    if (c.vector_base_map.get("" + t) is !null) { return true; }
+    if (c.func_ret_map.get("" + t) is !null) { return true; }
+    if (c.method_ret_map.get("" + t) is !null) { return true; }
+
+    let s_info -> StructInfo = c.struct_id_map.get("" + t);
+    return s_info is !null && !s_info.is_enum;
 }
 
 
@@ -1821,7 +1827,93 @@ func get_method_def_sig_str(c -> Compiler, m_node -> MethodDefNode) -> String {
     return ret_str + " (" + args_str + ")*";
 }
 
-func mangle_wl_name(prefix -> String, base_name -> String, arg_types -> Vector(Struct)) -> String {
+func mangle_type(c -> Compiler, type_id -> Int) -> String {
+    if (type_id == TYPE_VOID) { return "v"; }
+    if (type_id == TYPE_BOOL) { return "b"; }
+    if (type_id == TYPE_INT8) { return "a"; }
+    if (type_id == TYPE_INT16) { return "s"; }
+    if (type_id == TYPE_INT) { return "i"; }
+    if (type_id == TYPE_LONG) { return "x"; }
+    if (type_id == TYPE_INT128) { return "n"; }
+    if (type_id == TYPE_BYTE) { return "h"; }
+    if (type_id == TYPE_UINT16) { return "t"; }
+    if (type_id == TYPE_UINT32) { return "j"; }
+    if (type_id == TYPE_UINT64) { return "y"; }
+    if (type_id == TYPE_UINT128) { return "o"; }
+    if (type_id == TYPE_FLOAT32) { return "f"; }
+    if (type_id == TYPE_FLOAT) { return "d"; }
+    if (type_id == TYPE_CHAR) { return "w"; }
+    if (type_id == TYPE_INTSIZE) { return "l"; }
+    if (type_id == TYPE_UINTSIZE) { return "m"; }
+    if (type_id == TYPE_STRING) { return "S"; }
+    if (type_id == TYPE_ANYPTR) { return "Pv"; }
+    if (type_id == TYPE_GENERIC_STRUCT) { return "Gs"; }
+    if (type_id == TYPE_GENERIC_CLASS) { return "Gc"; }
+    if (type_id == TYPE_GENERIC_FUNCTION) { return "Gf"; }
+    if (type_id == TYPE_GENERIC_METHOD) { return "Gm"; }
+    if (type_id == TYPE_GENERIC_ENUM) { return "Ge"; }
+
+    let ptr_info -> SymbolInfo = c.ptr_base_map.get("" + type_id);
+    if (ptr_info is !null) {
+        return "P" + mangle_type(c, ptr_info.type);
+    }
+
+    let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
+    if (arr_info is !null) {
+        if (arr_info.size == -1) {
+            return "Q" + mangle_type(c, arr_info.base_type);
+        }
+        return "A" + arr_info.size + "_" + mangle_type(c, arr_info.base_type);
+    }
+
+    let vec_info -> SymbolInfo = c.vector_base_map.get("" + type_id);
+    if (vec_info is !null) {
+        return "V" + mangle_type(c, vec_info.type);
+    }
+
+    let fallible_info -> SymbolInfo = c.fallible_base_map.get("" + type_id);
+    if (fallible_info is !null) {
+        return "R" + mangle_type(c, fallible_info.type);
+    }
+
+    let func_info -> SymbolInfo = c.func_ret_map.get("" + type_id);
+    if (func_info is !null) {
+        let encoded -> String = "F";
+        let args -> Vector(Struct) = func_info.func_arg_types;
+        let len -> Int = 0; if (args is !null) { len = args.length(); }
+        let i -> Int = 0;
+        while (i < len) {
+            let arg -> TypeListNode = args[i];
+            encoded += mangle_type(c, arg.type);
+            i += 1;
+        }
+        return encoded + "E" + mangle_type(c, func_info.type);
+    }
+
+    let method_info -> SymbolInfo = c.method_ret_map.get("" + type_id);
+    if (method_info is !null) {
+        let encoded -> String = "M";
+        let args -> Vector(Struct) = method_info.func_arg_types;
+        let len -> Int = 0; if (args is !null) { len = args.length(); }
+        let i -> Int = 0;
+        while (i < len) {
+            let arg -> TypeListNode = args[i];
+            encoded += mangle_type(c, arg.type);
+            i += 1;
+        }
+        return encoded + "E" + mangle_type(c, method_info.type);
+    }
+
+    let struct_info -> StructInfo = c.struct_id_map.get("" + type_id);
+    if (struct_info is !null) {
+        return "N" + struct_info.name.length() + struct_info.name + "E";
+    }
+
+    WhitelangExceptions.throw_internal_compiler_error(null, "Cannot mangle unknown type id " + type_id + ".");
+    return "v";
+}
+
+func mangle_wl_name(c -> Compiler, prefix -> String, base_name -> String, arg_types -> Vector(Struct)) -> String {
     if (base_name == "main" && prefix == "") { return "main"; }
     
     let mangled -> String = "_WL";
@@ -1839,14 +1931,7 @@ func mangle_wl_name(prefix -> String, base_name -> String, arg_types -> Vector(S
     let i -> Int = 0;
     while (i < len) {
         let t_node -> TypeListNode = arg_types[i];
-        let t_id -> Int = t_node.type;
-        if (t_id == TYPE_INT) { mangled += "i"; }
-        else if (t_id == TYPE_FLOAT) { mangled += "d"; }
-        else if (t_id == TYPE_BOOL) { mangled += "b"; }
-        else if (t_id == TYPE_BYTE) { mangled += "c"; }
-        else if (t_id == TYPE_LONG) { mangled += "l"; }
-        else if (t_id == TYPE_STRING) { mangled += "s"; }
-        else { mangled += "P"; } // Pointer/Struct/Class
+        mangled += mangle_type(c, t_node.type);
         i += 1;
     }
     return mangled;
@@ -2149,12 +2234,7 @@ func string_escape(s -> String) -> String {
 }
 
 func file_exists(path -> String) -> Bool {
-    let f -> file.File = file.open(path);
-    if (f.handle is nullptr) {
-        return false;
-    }
-    f.close();
-    return true;
+    return file.exists(path);
 }
 
 func get_dir_name(path -> String) -> String {
@@ -2239,15 +2319,39 @@ func to_normpath(path -> String) -> String {
 
 func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> String {
     if (raw_path.ends_with(".wl")) {
+        let final_path -> String = "";
         if (c.current_dir == ".") {
-            return to_normpath(raw_path);
+            final_path = to_normpath(raw_path);
+        } else {
+            final_path = to_normpath(c.current_dir + "/" + raw_path);
         }
-        return to_normpath(c.current_dir + "/" + raw_path);
+
+        let active_wl_path -> String = sys.env.get_env("WL_PATH");
+        if (active_wl_path is !null) {
+            let std_root -> String = to_normpath(active_wl_path + "/std");
+            let internal_root -> String = std_root + "/internal";
+            let importer -> String = to_normpath(c.current_dir);
+            let targets_internal -> Bool = final_path == internal_root || final_path.starts_with(internal_root + "/");
+            let importer_is_std -> Bool = importer == std_root || importer.starts_with(std_root + "/");
+            if (targets_internal && !importer_is_std) {
+                WhitelangExceptions.throw_import_error(pos, "Module '" + raw_path + "' is internal to the standard library.");
+                return "";
+            }
+        }
+        return final_path;
     }
 
     let wl_path -> String = sys.env.get_env("WL_PATH");
     if (wl_path is null) {
         WhitelangExceptions.throw_environment_error("Missing 'WL_PATH' variable.");
+    }
+
+    let std_root -> String = to_normpath(wl_path + "/std");
+    let importer -> String = to_normpath(c.current_dir);
+    let importer_is_std -> Bool = importer == std_root || importer.starts_with(std_root + "/");
+    if ((raw_path == "internal" || raw_path.starts_with("internal/") || raw_path.starts_with("internal\\")) && !importer_is_std) {
+        WhitelangExceptions.throw_import_error(pos, "Module '" + raw_path + "' is internal to the standard library.");
+        return "";
     }
 
     let pkg_entry -> String = wl_path + "/std/" + raw_path + "/_pkg.wl";

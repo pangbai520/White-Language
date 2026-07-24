@@ -3,8 +3,11 @@
 import * from "../../sys/target.wl"
 import "internal/runtime/string" as runtime_string
 
+extern func wl_startup_info_size() -> Int from "C";
+
 extern "system" {
     func GetProcessHeap() -> AnyPtr;
+    func GetCurrentProcessId() -> Int;
     func HeapAlloc(hHeap -> AnyPtr, dwFlags -> Int, dwBytes -> Long) -> AnyPtr;
     func HeapReAlloc(hHeap -> AnyPtr, dwFlags -> Int, lpMem -> AnyPtr, dwBytes -> Long) -> AnyPtr;
     func HeapFree(hHeap -> AnyPtr, dwFlags -> Int, lpMem -> AnyPtr) -> Int;
@@ -15,6 +18,7 @@ extern "system" {
     func GetExitCodeProcess(hProcess -> AnyPtr, lpExitCode -> AnyPtr) -> Int;
     func CloseHandle(hObject -> AnyPtr) -> Int;
     func CreateFileW(lpFileName -> AnyPtr, dwDesiredAccess -> Int, dwShareMode -> Int, lpSecurityAttributes -> AnyPtr, dwCreationDisposition -> Int, dwFlagsAndAttributes -> Int, hTemplateFile -> AnyPtr) -> AnyPtr;
+    func GetFileAttributesW(lpFileName -> AnyPtr) -> Int;
     func GetFileSizeEx(hFile -> AnyPtr, lpFileSize -> AnyPtr) -> Int;
     func ReadFile(hFile -> AnyPtr, lpBuffer -> AnyPtr, nNumberOfBytesToRead -> Int, lpNumberOfBytesRead -> AnyPtr, lpOverlapped -> AnyPtr) -> Int;
     func WriteFile(hFile -> AnyPtr, lpBuffer -> AnyPtr, nNumberOfBytesToWrite -> Int, lpNumberOfBytesWritten -> AnyPtr, lpOverlapped -> AnyPtr) -> Int;
@@ -47,6 +51,7 @@ const CREATE_ALWAYS -> Int = 2;
 const OPEN_EXISTING -> Int = 3;
 const OPEN_ALWAYS -> Int = 4;
 const FILE_ATTRIBUTE_NORMAL -> Int = 128;
+const INVALID_FILE_ATTRIBUTES -> Int = -1;
 const FILE_BEGIN -> Int = 0;
 const FILE_CURRENT -> Int = 1;
 const FILE_END -> Int = 2;
