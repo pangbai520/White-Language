@@ -297,8 +297,7 @@ The compiler currently has the following known issues:
   behaviour. They are unsafe interfaces, even though there is no `unsafe`
   keyword around them today.
 - The internal White ABI can change between compiler releases.
-- Windows x86-64 has had the most testing. Other architectures need more work,
-  especially around native ABI layouts.
+- Windows x86-64, Linux x86-64, and macOS ARM64 are covered by the release pipeline and the main language test suite.
 
 The project is suitable for experimenting with the language, working on the
 compiler, and writing small native programs. I would not currently recommend
