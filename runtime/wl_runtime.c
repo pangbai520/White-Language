@@ -35,6 +35,10 @@ __attribute__((naked, weak)) void ___chkstk_ms(void) {
         "retq\n\t"
     );
 }
+
+__attribute__((naked, weak)) void __chkstk(void) {
+    __asm__ volatile("jmp ___chkstk_ms");
+}
 #endif
 
 __attribute__((weak)) BOOL WINAPI DllMainCRTStartup(HINSTANCE instance, DWORD reason, LPVOID reserved) {

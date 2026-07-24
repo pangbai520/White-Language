@@ -932,9 +932,20 @@ func is_ref_type(c -> Compiler, type_id -> Int) -> Bool {
 
 func needs_drop(c -> Compiler, type_id -> Int) -> Bool {
     if (is_ref_type(c, type_id)) { return true; }
+    if (is_fallible_type(c, type_id)) {
+        return needs_drop(c, get_inner_fallible_type(c, type_id));
+    }
     let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
     if (arr_info is !null && arr_info.size >= 0) {
         return needs_drop(c, arr_info.base_type);
+    }
+    return false;
+}
+
+func result_owns_value(c -> Compiler, type_id -> Int) -> Bool {
+    if (is_ref_type(c, type_id)) { return true; }
+    if (is_fallible_type(c, type_id)) {
+        return needs_drop(c, get_inner_fallible_type(c, type_id));
     }
     return false;
 }

@@ -41,16 +41,42 @@ class Dict {
         // minimum size of 8, then find the next power of 2
         let actual_cap -> Int = 8;
         while (actual_cap < cap) {
+            if (actual_cap >= 1073741824) {
+                runtime.process_exit(1);
+                return;
+            }
             actual_cap <<= 1;
         }
+
+        // keys and variants are stored as pointers, hashes are 32-bit values
+        let ptr new_keys -> String = runtime.mem_alloc_zeroed(Long(actual_cap) * 8L);
+        let ptr new_values -> Variant = runtime.mem_alloc_zeroed(Long(actual_cap) * 8L);
+        let ptr new_hashes -> Int = runtime.mem_alloc_zeroed(Long(actual_cap) * 4L);
+        if (new_keys is nullptr || new_values is nullptr || new_hashes is nullptr) {
+            runtime.mem_dealloc(new_keys);
+            runtime.mem_dealloc(new_values);
+            runtime.mem_dealloc(new_hashes);
+            runtime.process_exit(1);
+            return;
+        }
+
+        self.keys = new_keys;
+        self.values = new_values;
+        self.hashes = new_hashes;
         self.capacity = actual_cap;
         self.size = 0;
         self.tombstones = 0;
+    }
 
-        // keys and variants are stored as pointers, hashes are 32-bit values
-        self.keys   = runtime.mem_alloc_zeroed(Long(actual_cap) * 8L); 
-        self.values = runtime.mem_alloc_zeroed(Long(actual_cap) * 8L); 
-        self.hashes = runtime.mem_alloc_zeroed(Long(actual_cap) * 4L); 
+    method __release_slots(ptr keys -> String, ptr values -> Variant, ptr hashes -> Int, cap -> Int) -> Void {
+        let i -> Int = 0;
+        while (i < cap) {
+            if (hashes[i] >= 2) {
+                keys[i] = null;
+                values[i] = null;
+            }
+            i += 1;
+        }
     }
 
     method __resize() -> Void {
@@ -60,10 +86,26 @@ class Dict {
         let ptr old_hashes -> Int    = self.hashes;
 
         // standard x2 growth strategy
-        self.capacity <<= 1; 
-        self.keys   = runtime.mem_alloc_zeroed(Long(self.capacity) * 8L);
-        self.values = runtime.mem_alloc_zeroed(Long(self.capacity) * 8L);
-        self.hashes = runtime.mem_alloc_zeroed(Long(self.capacity) * 4L);
+        if (old_cap >= 1073741824) {
+            runtime.process_exit(1);
+            return;
+        }
+        let new_cap -> Int = old_cap << 1;
+        let ptr new_keys -> String = runtime.mem_alloc_zeroed(Long(new_cap) * 8L);
+        let ptr new_vals -> Variant = runtime.mem_alloc_zeroed(Long(new_cap) * 8L);
+        let ptr new_hashes -> Int = runtime.mem_alloc_zeroed(Long(new_cap) * 4L);
+        if (new_keys is nullptr || new_vals is nullptr || new_hashes is nullptr) {
+            runtime.mem_dealloc(new_keys);
+            runtime.mem_dealloc(new_vals);
+            runtime.mem_dealloc(new_hashes);
+            runtime.process_exit(1);
+            return;
+        }
+
+        self.capacity = new_cap;
+        self.keys = new_keys;
+        self.values = new_vals;
+        self.hashes = new_hashes;
 
         self.size = 0;
         self.tombstones = 0; 
@@ -77,6 +119,7 @@ class Dict {
             i++;
         }
 
+        self.__release_slots(old_keys, old_vals, old_hashes, old_cap);
         runtime.mem_dealloc(old_keys);
         runtime.mem_dealloc(old_vals);
         runtime.mem_dealloc(old_hashes);
@@ -174,8 +217,8 @@ class Dict {
                 if (self.keys[idx] == key) {
                     // turn this into a "tombstone" so we don't break the probe chain
                     self.hashes[idx] = 1; 
-                    self.keys[idx] = "";  // clear the ref
-                    self.values[idx] = Variant(type_id=0, payload_low=0L, payload_high=0L);
+                    self.keys[idx] = null;
+                    self.values[idx] = null;
                     self.size--;
                     self.tombstones++;
                     return;
@@ -211,6 +254,9 @@ class Dict {
 
     deinit() {
         // standard cleanup to avoid leaking memory
+        if (self.keys is !nullptr && self.values is !nullptr && self.hashes is !nullptr) {
+            self.__release_slots(self.keys, self.values, self.hashes, self.capacity);
+        }
         if (self.keys is !nullptr) {
             runtime.mem_dealloc(self.keys);
             self.keys = nullptr;
