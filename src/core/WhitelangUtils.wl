@@ -196,6 +196,7 @@ struct Compiler(
     global_buffer -> String,
     string_pool -> Dict,
     is_shared -> Bool,
+    emit_source_context -> Bool,
     all_modules -> Vector(Struct),
     is_precompile_phase -> Bool,
     fallible_cache -> Dict,
@@ -229,7 +230,7 @@ struct LoopScope(
 
 
 // compiler init & state utils
-func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler? {
+func new_compiler(out_path -> String, is_shared -> Bool, emit_source_context -> Bool) -> Compiler? {
     let f -> file.File = file.create(out_path)?;
     // initialize empty scope
     let root_scope -> Scope = Scope(table=Dict(32), parent=null, gc_vars=[], depth=0);
@@ -281,6 +282,7 @@ func new_compiler(out_path -> String, is_shared -> Bool) -> Compiler? {
         array_info_map = Dict(32),
         array_type_cache = Dict(32),
         is_shared = is_shared,
+        emit_source_context = emit_source_context,
         all_modules = [],
         is_precompile_phase = true,
         fallible_cache = Dict(32),

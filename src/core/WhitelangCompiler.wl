@@ -1566,11 +1566,11 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
     let hook_int -> String = get_mangled_symbol(c, "print_int", null);
 
     if (hook_raw_str is !null && hook_int is !null) {
-        let header_1 -> String = "RuntimeError: " + msg + "\n    at Line ";
+        let header_1 -> String = "RuntimeError: " + msg + "\n    at " + pos.fn + ":";
         let header_1_id -> Int = register_string_constant(c, header_1);
         let header_1_ptr -> String = get_string_ptr(header_1_id, header_1);
         
-        let header_2 -> String = ", Column ";
+        let header_2 -> String = ":";
         let header_2_id -> Int = register_string_constant(c, header_2);
         let header_2_ptr -> String = get_string_ptr(header_2_id, header_2);
 
@@ -1588,7 +1588,7 @@ func emit_runtime_error(c -> Compiler, pos -> Position, msg -> String) -> Void {
         c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + header_3_ptr + ", i32 " + header_3.length() + ")\n");
 
         let full_text -> String = pos.text;
-        if (full_text.length() > 0) {
+        if (c.emit_source_context && full_text.length() > 0) {
             let current_ln -> Int = 0;
             let scan_idx -> Int = 0;
             let len -> Int = full_text.length();
@@ -2118,13 +2118,13 @@ func compile_arc_hooks(c -> Compiler) -> Void {
     let free_hook -> String = get_mangled_symbol(c, "memory_free", null);
     let exit_hook -> String = get_mangled_symbol(c, "process_exit", null);
 
-    c.output_file.write("define void @__wl_oom() noreturn {\n");
+    c.output_file.write("define internal void @__wl_oom() noreturn {\n");
     c.output_file.write("entry:\n");
     c.output_file.write("  call void @" + exit_hook + "(i32 1)\n");
     c.output_file.write("  unreachable\n");
     c.output_file.write("}\n\n");
 
-    c.output_file.write("define void @__wl_retain(i8* %ptr) {\n");
+    c.output_file.write("define internal void @__wl_retain(i8* %ptr) {\n");
     c.output_file.write("entry:\n");
     c.output_file.write("  %is.null = icmp eq i8* %ptr, null\n");
     c.output_file.write("  br i1 %is.null, label %done, label %work\n");
@@ -2145,7 +2145,7 @@ func compile_arc_hooks(c -> Compiler) -> Void {
     c.output_file.write("  ret void\n");
     c.output_file.write("}\n\n");
 
-    c.output_file.write("define void @__wl_release(i8* %ptr) {\n");
+    c.output_file.write("define internal void @__wl_release(i8* %ptr) {\n");
     c.output_file.write("entry:\n");
     c.output_file.write("  %is.null = icmp eq i8* %ptr, null\n");
     c.output_file.write("  br i1 %is.null, label %done, label %work\n");
@@ -3042,14 +3042,11 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
         arg_idx += 1;
     }
 
-    let linkage -> String = "";
-    if (c.is_shared) {
-        if ((f_info.ann_flags & FLAG_ANN_EXPORT) != 0) {
-            if (sys.OS == "WINDOWS") {
-                linkage = "dllexport ";
-            }
-        } else {
-            linkage = "hidden ";
+    let linkage -> String = "internal ";
+    if (raw_name == "main" || (f_info.ann_flags & FLAG_ANN_EXPORT) != 0) {
+        linkage = "";
+        if (c.is_shared && (f_info.ann_flags & FLAG_ANN_EXPORT) != 0 && sys.OS == "WINDOWS") {
+            linkage = "dllexport ";
         }
     }
 
@@ -3169,7 +3166,7 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
         arg_idx += 1;
     }
 
-    c.output_file.write("define " + llvm_ret_type + " @" + f_info.name + "(" + params_str + ") {\n");
+    c.output_file.write("define internal " + llvm_ret_type + " @" + f_info.name + "(" + params_str + ") {\n");
     c.output_file.write("entry:\n");
 
     let old_sym -> Scope = c.symbol_table;
@@ -3564,7 +3561,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
         p_i += 1;
     }
     
-    c.output_file.write("define " + ret_ty_str + " @" + lambda_name + "(" + sig_def + ") {\nentry:\n");
+    c.output_file.write("define internal " + ret_ty_str + " @" + lambda_name + "(" + sig_def + ") {\nentry:\n");
     let old_sym -> Scope = c.symbol_table;
     let old_depth -> Int = c.scope_depth;
     let old_reg -> Int = c.reg_count;

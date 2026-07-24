@@ -47,7 +47,7 @@ func print_usage() -> Void {
     builtin.print("  -c                     Compile and assemble, but do not link");
     builtin.print("  -S                     Compile only; do not assemble or link");
     builtin.print("  --emit-llvm            Use the LLVM representation for assembler and object files");
-    builtin.print("  -O<level>              Optimization level (0, 1, 2, 3). Default: 2");
+    builtin.print("  -O<level>              Optimization level (0, 1, 2, 3, s, z). Default: 2");
     builtin.print("  -g                     Generate source-level debug information");
     builtin.print("  -L <dir>               Add <dir> to the linker library search path");
     builtin.print("  --library-path <dir>   Add <dir> to the linker library search path");
@@ -154,6 +154,8 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         else if (arg == "-O1") { cfg.opt_level = "-O1"; }
         else if (arg == "-O2") { cfg.opt_level = "-O2"; }
         else if (arg == "-O3") { cfg.opt_level = "-O3"; }
+        else if (arg == "-Os") { cfg.opt_level = "-Os"; }
+        else if (arg == "-Oz") { cfg.opt_level = "-Oz"; }
         else if (arg == "-o") {
             i++;
             if (i >= argc) { builtin.print("Error: -o requires an argument"); return 1; }
@@ -282,7 +284,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
 
     if (cfg.dump_ast) { builtin.print("[Debug] AST Dumped"); }
 
-    let compiler -> WhitelangUtils.Compiler = WhitelangUtils.new_compiler(ll_file, cfg.is_shared)?;
+    let compiler -> WhitelangUtils.Compiler = WhitelangUtils.new_compiler(ll_file, cfg.is_shared, cfg.debug_info)?;
     catch(err) {
         builtin.print("Error: Could not create temporary IR file " + ll_file + " (error " + Int(err) + ")");
         return 1;

@@ -15,6 +15,8 @@ class File {
     let handle -> AnyPtr = nullptr;
     let path -> String = "";
     let last_error -> Error = Error.None;
+    let write_buffer -> String = null;
+    let write_buffer_len -> Int = 0;
 
     init(file_path -> String, mode -> String) {
         self.path = file_path;
@@ -71,6 +73,31 @@ class File {
 
     method error() -> Error {
         return self.last_error;
+    }
+
+    method __flush_write_buffer() -> Bool {
+        if (self.write_buffer_len == 0) { return true; }
+        if (self.handle is nullptr) {
+            self.last_error = Error.IllegalState;
+            return false;
+        }
+        if (sys.OS != "WINDOWS") {
+            self.write_buffer_len = 0;
+            return true;
+        }
+
+        let bytes_written -> Int = 0;
+        if (windows.WriteFile(self.handle, runtime_string.data(self.write_buffer), self.write_buffer_len, ref bytes_written, nullptr) == 0) {
+            self.last_error = platform_errors.last();
+            return false;
+        }
+        if (bytes_written != self.write_buffer_len) {
+            self.last_error = Error.DiskFull;
+            return false;
+        }
+
+        self.write_buffer_len = 0;
+        return true;
     }
 
     method read_all() -> String? {
@@ -133,6 +160,7 @@ class File {
             if (self.last_error == Error.None) { throw Error.IllegalState; }
             throw self.last_error;
         }
+        if (!self.__flush_write_buffer()) { throw self.last_error; }
         let length -> Long = content.length();
         if (sys.OS == "WINDOWS") {
             let bytes_written -> Int = 0;
@@ -160,11 +188,33 @@ class File {
         if (self.handle is nullptr) { return; }
         let length -> Long = content.length();
         if (sys.OS == "WINDOWS") {
-            let bytes_written -> Int = 0;
-            if (length > 0L && windows.WriteFile(self.handle, runtime_string.data(content), Int(length), ref bytes_written, nullptr) == 0) {
-                self.last_error = platform_errors.last();
-            } else if (Long(bytes_written) != length) {
-                self.last_error = Error.DiskFull;
+            if (length <= 0L) { return; }
+            if (self.write_buffer is null) {
+                self.write_buffer = runtime_string.alloc(65536L);
+                if (self.write_buffer is null) {
+                    self.last_error = Error.OutOfMemory;
+                    return;
+                }
+                runtime_string.set_length(self.write_buffer, 0);
+            }
+
+            let ptr source -> Byte = runtime_string.data(content);
+            let ptr target -> Byte = runtime_string.data(self.write_buffer);
+            let source_idx -> Int = 0;
+            let content_len -> Int = Int(length);
+            while (source_idx < content_len) {
+                if (self.write_buffer_len == 65536 && !self.__flush_write_buffer()) { return; }
+                let available -> Int = 65536 - self.write_buffer_len;
+                let count -> Int = content_len - source_idx;
+                if (count > available) { count = available; }
+
+                let i -> Int = 0;
+                while (i < count) {
+                    target[self.write_buffer_len + i] = source[source_idx + i];
+                    i += 1;
+                }
+                self.write_buffer_len += count;
+                source_idx += count;
             }
             return;
         }
@@ -180,15 +230,20 @@ class File {
     method close_checked() -> Void? {
         let pending_error -> Error = self.last_error;
         if (self.handle is !nullptr) {
+            if (!self.__flush_write_buffer() && pending_error == Error.None) {
+                pending_error = self.last_error;
+            }
             let closed -> Bool = false;
             if (sys.OS == "WINDOWS") { closed = windows.CloseHandle(self.handle) != 0; }
             else { closed = posix.fclose(self.handle) == 0; }
             self.handle = nullptr;
-            if (!closed) {
+            if (!closed && pending_error == Error.None) {
                 self.last_error = platform_errors.last();
-                throw self.last_error;
+                pending_error = self.last_error;
             }
         }
+        self.write_buffer = null;
+        self.write_buffer_len = 0;
         if (pending_error != Error.None) {
             self.last_error = pending_error;
             throw pending_error;
