@@ -431,6 +431,7 @@ struct EnumDefNode(
     name_tok -> Token,
     fields   -> Vector(Struct),
     annotations -> Vector(Struct),
+    is_error -> Bool,
     pos      -> Position
 )
 

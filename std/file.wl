@@ -71,7 +71,7 @@ class File {
         }
     }
 
-    method error() -> Error {
+    method last_error() -> Error {
         return self.last_error;
     }
 
@@ -266,19 +266,19 @@ class File {
 
 func open(path -> String) -> File? {
     let result -> File = File(path, "rb");
-    if (!result.is_open()) { throw result.error(); }
+    if (!result.is_open()) { throw result.last_error(); }
     return result;
 }
 
 func create(path -> String) -> File? {
     let result -> File = File(path, "wb");
-    if (!result.is_open()) { throw result.error(); }
+    if (!result.is_open()) { throw result.last_error(); }
     return result;
 }
 
 func append(path -> String) -> File? {
     let result -> File = File(path, "ab");
-    if (!result.is_open()) { throw result.error(); }
+    if (!result.is_open()) { throw result.last_error(); }
     return result;
 }
 

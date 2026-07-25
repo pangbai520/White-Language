@@ -43,6 +43,7 @@ const TYPE_FLOAT32 -> Int = 23;
 
 const TYPE_INTSIZE  -> Int = 24;
 const TYPE_UINTSIZE -> Int = 25;
+const TYPE_ANY_ERROR -> Int = 26;
 
 const TYPE_POISON -> Int = 98;
 const TYPE_NULLPTR -> Int = 99;
@@ -124,6 +125,7 @@ struct StructInfo(
     vtable      -> Vector(Struct),
     ann_flags   -> Int,
     is_enum     -> Bool,
+    is_error    -> Bool,
     is_interface -> Bool,
     interfaces  -> Vector(Struct),
     compiler_link_name -> String
@@ -206,8 +208,7 @@ struct Compiler(
     current_catch_label -> String,
     current_catch_err_ptr -> String,
     current_catch_scope -> Struct,
-    extra_libs -> Vector(String),
-    error_type_id -> Int
+    extra_libs -> Vector(String)
 )
 
 struct ParsedModule(
@@ -296,8 +297,7 @@ func new_compiler(out_path -> String, is_shared -> Bool, emit_source_context -> 
         current_catch_label = "",
         current_catch_err_ptr = "",
         current_catch_scope = null,
-        extra_libs = [],
-        error_type_id = 0
+        extra_libs = []
     );
 
     comp.type_drop_list.append(TypeListNode(type=TYPE_GENERIC_FUNCTION));
@@ -784,6 +784,7 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_METHOD) { return "i8*"; }
     if (type_id == TYPE_GENERIC_ENUM) { return "i32"; }
     if (type_id == TYPE_ANYPTR) { return "i8*"; }
+    if (type_id == TYPE_ANY_ERROR) { return "{ i64, i32 }"; }
     
     if (type_id == TYPE_POISON) { return "void"; } // dummy type for poison variables
 
@@ -836,10 +837,10 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
         let fll_info -> SymbolInfo = c.fallible_base_map.get("" + type_id);
         if (fll_info is !null) {
             if (fll_info.type == TYPE_VOID) {
-                return "{ i1, i32 }";
+                return "{ i1, { i64, i32 } }";
             }
             let elem_ty -> String = get_llvm_type_str(c, fll_info.type);
-            return "{ i1, i32, " + elem_ty + " }";
+            return "{ i1, { i64, i32 }, " + elem_ty + " }";
         }
     }
 
@@ -866,6 +867,7 @@ func get_type_name(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_GENERIC_ENUM) { return "Enum"; }
     if (type_id == TYPE_AUTO) { return "Auto"; }
     if (type_id == TYPE_ANYPTR) { return "AnyPtr"; }
+    if (type_id == TYPE_ANY_ERROR) { return "AnyError"; }
 
     if (type_id == TYPE_INT8)  { return "Int8"; }
     if (type_id == TYPE_INT16) { return "Int16"; }
@@ -961,6 +963,12 @@ func is_fallible_type(c -> Compiler, type_id -> Int) -> Bool {
     return false;
 }
 
+func is_error_type(c -> Compiler, type_id -> Int) -> Bool {
+    if (type_id == TYPE_ANY_ERROR) { return true; }
+    let info -> StructInfo = c.struct_id_map.get("" + type_id);
+    return info is !null && info.is_enum && info.is_error;
+}
+
 func get_inner_fallible_type(c -> Compiler, type_id -> Int) -> Int {
     if (type_id >= 100) {
         let key -> String = "" + type_id;
@@ -1052,7 +1060,7 @@ func is_numeric_type(t -> Int) -> Bool {
 func is_primitive_type(t -> Int) -> Bool {
 // Checks if the type is a non-nullable value type stored directly on the stack or in registers.
 
-    return is_numeric_type(t) || t == TYPE_BOOL;
+    return is_numeric_type(t) || t == TYPE_BOOL || t == TYPE_ANY_ERROR;
 }
 
 func is_small_primitive_type(t -> Int) -> Bool {
@@ -1896,6 +1904,7 @@ func mangle_type(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_UINTSIZE) { return "m"; }
     if (type_id == TYPE_STRING) { return "S"; }
     if (type_id == TYPE_ANYPTR) { return "Pv"; }
+    if (type_id == TYPE_ANY_ERROR) { return "E"; }
     if (type_id == TYPE_GENERIC_STRUCT) { return "Gs"; }
     if (type_id == TYPE_GENERIC_CLASS) { return "Gc"; }
     if (type_id == TYPE_GENERIC_FUNCTION) { return "Gf"; }

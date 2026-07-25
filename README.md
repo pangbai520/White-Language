@@ -105,7 +105,7 @@ Operations which can fail return `T?` (or `Void?`):
 
 ```rs
 import "file"
-import Error from "builtin/errors"
+import Error from "errors"
 
 func read_config(path -> String) -> String? {
     let input -> file.File = file.open(path)?;
@@ -120,7 +120,7 @@ func main() -> Int {
         if (err == Error.FileNotFound) {
             print("config.txt does not exist");
         } else {
-            print("could not read config: " + err);
+            print("could not read config, error code " + Int(err));
         }
         return 1;
     }
@@ -130,8 +130,61 @@ func main() -> Int {
 }
 ```
 
-`err` is the `Error` enum, not an integer error code. If a function is itself
-fallible, a `?` without a following `catch` propagates the error.
+`catch(err)` receives an error value carrying both its error domain and numeric
+code. Compare it directly with a concrete member such as
+`Error.FileNotFound`. `Int(err)` extracts only the numeric code. If a function
+is itself fallible, a `?` without a following `catch` propagates the complete
+error value.
+
+Libraries can define errors without adding members to the standard `Error`
+type:
+
+```rs
+error JsonError {
+    UnexpectedToken,
+    InvalidEscape
+}
+
+func parse_json() -> Int? {
+    throw JsonError.UnexpectedToken;
+}
+```
+
+Error domains are kept during `?` propagation and rethrowing, so identically
+numbered members from different libraries do not compare equal.
+
+Standard input, output and error are available through `io`:
+
+```rs
+import "io"
+
+func main() -> Int {
+    io.stdout.write_all("name: ")?;
+    catch(err) { return 1; }
+
+    let name -> String = io.stdin.read_line()?;
+    catch(err) { return 1; }
+
+    io.stdout.write_line("hello, " + name)?;
+    catch(err) { return 1; }
+    return 0;
+}
+```
+
+`read_bytes` may return fewer bytes than requested. `read_full` either fills the
+request or reports `Error.EndOfFile`; `write_all` handles short writes. Use
+these APIs for pipes and binary protocols. `print` is the convenient formatted
+front end and deliberately keeps its old `Void` contract, so it cannot report
+an output failure to its caller.
+
+For interactive input, the prelude provides a small prompt wrapper:
+
+```wl
+let name -> String = input.read("name: ")?;
+```
+
+`input.read_bytes`, `input.read_full`, `input.read_until`, `input.read_all` and
+`input.skip_bytes` add a prompt to their matching `io.stdin` operation.
 
 Slices are left-closed and right-open. An ordinary slice is a shallow copy:
 
@@ -211,7 +264,8 @@ The options I use most often are:
 
 ```text
 -o <file>       choose the output name
--O0 ... -O3     set the optimization level
+-O0 ... -O3     optimize for runtime speed
+-Os / -Oz       optimize for binary size
 -c              emit an object file
 -S              emit assembly
 --emit-llvm     emit LLVM IR
@@ -227,19 +281,23 @@ The options I use most often are:
 You need an existing White compiler to build the compiler source:
 
 ```bash
-wlc src/wlc.wl -O3 -o wlc_new
+wlc src/wlc.wl -Oz -o wlc_new
 ```
 
 or on Windows:
 
 ```bash
-wlc src/wlc.wl -O3 -o wlc_new.exe
+wlc src/wlc.wl -Oz -o wlc_new.exe
 ```
 
 The existing compiler gets its standard library and runtime from `WL_PATH`.
 When changing syntax or compiler intrinsics, remember that this first build is
 still being parsed by the old compiler. A change which requires its own new
 syntax needs to be staged rather than committed as a bootstrap loop.
+
+The release compiler is built with `-Oz`. On the compiler's large generated IR
+this produces a substantially smaller binary and spends less time in LLVM,
+without making the compiler frontend slower.
 
 ## Runtime notes
 

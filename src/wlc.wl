@@ -296,7 +296,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     if (cfg.verbose) { builtin.print("Lowered source to LLVM IR"); }
 
     WhitelangExceptions.check_errors_and_abort();
-    if (compiler.output_file.error() != Error.None) {
+    if (compiler.output_file.last_error() != Error.None) {
         builtin.print("Error: Could not write temporary IR file " + ll_file);
         return 1;
     }

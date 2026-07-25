@@ -26,7 +26,7 @@ func synchronize(p -> Parser) -> Void {
             return;
         }
         let type -> Int = p.current_tok.type;
-        if (type == TOK_FUNC || type == TOK_LET || type == TOK_CONST || type == TOK_IF || type == TOK_WHILE || type == TOK_FOR || type == TOK_RETURN || type == TOK_CLASS || type == TOK_STRUCT) {
+        if (type == TOK_FUNC || type == TOK_LET || type == TOK_CONST || type == TOK_IF || type == TOK_WHILE || type == TOK_FOR || type == TOK_RETURN || type == TOK_CLASS || type == TOK_STRUCT || type == TOK_ENUM || type == TOK_ERROR) {
             return;
         }
         parser_advance(p);
@@ -79,7 +79,9 @@ func parse(p -> Parser) -> Struct {
         } else if (p.current_tok.type == TOK_CLASS) {
             stmt = parse_class_def(p, anns);
         } else if (p.current_tok.type == TOK_ENUM) {
-            stmt = parse_enum_def(p, anns);
+            stmt = parse_enum_def(p, anns, false);
+        } else if (p.current_tok.type == TOK_ERROR) {
+            stmt = parse_enum_def(p, anns, true);
         } else if (p.current_tok.type == TOK_INTERFACE) {
             stmt = parse_interface_def(p, anns);
         } else if (p.current_tok.type == TOK_IMPORT) { 
@@ -1308,7 +1310,7 @@ func func_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
     
     if (p.current_tok.type != TOK_IDENTIFIER) {
         let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-        throw_invalid_syntax(err_pos, "Expected function name.");
+        throw_invalid_syntax(err_pos, "expected a function name after 'func'");
     }
     let name_tok -> Token = p.current_tok;
     parser_advance(p);
@@ -1924,21 +1926,23 @@ func parse_class_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
     return ClassDefNode(type=NODE_CLASS_DEF, pos=pos, name_tok=name_tok, parent_tok=parent_tok, interfaces=interfaces, fields=fields, methods=methods, annotations=anns);
 }
 
-func parse_enum_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
+func parse_enum_def(p -> Parser, anns -> Vector(Struct), is_error -> Bool) -> Struct {
     let start_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+    let kind -> String = "enum";
+    if (is_error) { kind = "error"; }
 
-    parser_advance(p); // skip 'enum'
+    parser_advance(p); // skip 'enum' or 'error'
 
     if (p.current_tok.type != TOK_IDENTIFIER) {
         let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-        throw_invalid_syntax(err_pos, "Expected enum name.");
+        throw_invalid_syntax(err_pos, "expected a name after '" + kind + "'");
     }
     let name_tok -> Token = p.current_tok;
     parser_advance(p);
 
     if (p.current_tok.type != TOK_LBRACE) {
         let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-        throw_invalid_syntax(err_pos, "Expected '{' after enum name.");
+        throw_invalid_syntax(err_pos, "expected '{' after " + kind + " name '" + name_tok.value + "'");
     }
     parser_advance(p); // skip '{'
 
@@ -1947,7 +1951,7 @@ func parse_enum_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
     while (p.current_tok.type != TOK_RBRACE && p.current_tok.type != TOK_EOF) {
         if (p.current_tok.type != TOK_IDENTIFIER) {
             let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-            throw_invalid_syntax(err_pos, "Expected identifier in enum fields.");
+            throw_invalid_syntax(err_pos, "expected a member name in " + kind + " '" + name_tok.value + "'");
             parser_advance(p);
             continue;
         }
@@ -1967,7 +1971,7 @@ func parse_enum_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
             parser_advance(p);
         } else if (p.current_tok.type != TOK_RBRACE) {
             let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-            throw_invalid_syntax(err_pos, "Expected ',' or '}' in enum definition.");
+            throw_invalid_syntax(err_pos, "expected ',' or '}' after " + kind + " member '" + field_name_tok.value + "'");
             break;
         }
     }
@@ -1976,8 +1980,8 @@ func parse_enum_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
         parser_advance(p);
     } else {
         let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-        throw_invalid_syntax(err_pos, "Expected '}' to close enum definition.");
+        throw_invalid_syntax(err_pos, "expected '}' to close " + kind + " '" + name_tok.value + "'");
     }
 
-    return EnumDefNode(type=NODE_ENUM_DEF, name_tok=name_tok, fields=fields, pos=start_pos, annotations=anns);
+    return EnumDefNode(type=NODE_ENUM_DEF, name_tok=name_tok, fields=fields, pos=start_pos, annotations=anns, is_error=is_error);
 }

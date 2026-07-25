@@ -25,6 +25,26 @@ func type_fingerprint(c -> Compiler, type_id -> Int) -> UInt64 {
     if (hash == UInt64(0)) { return UInt64(1); }
     return hash;
 }
+
+func emit_error_value(c -> Compiler, value -> CompileResult, pos -> Position) -> CompileResult {
+    // attach a stable error-domain id to a concrete error enum value
+    if (value.type == TYPE_ANY_ERROR) { return value; }
+
+    let error_type -> Int = value.type;
+    if (!is_error_type(c, error_type) && is_error_type(c, value.origin_type)) {
+        error_type = value.origin_type;
+    }
+    if (!is_error_type(c, error_type)) {
+        throw_type_error(pos, "cannot use " + get_type_name(c, value.type) + " as an error");
+        return void_result();
+    }
+
+    let with_domain -> String = next_reg(c);
+    c.output_file.write(c.indent + with_domain + " = insertvalue { i64, i32 } undef, i64 " + type_fingerprint(c, error_type) + ", 0\n");
+    let result -> String = next_reg(c);
+    c.output_file.write(c.indent + result + " = insertvalue { i64, i32 } " + with_domain + ", i32 " + value.reg + ", 1\n");
+    return CompileResult(reg=result, type=TYPE_ANY_ERROR);
+}
 func is_os_expr(c -> Compiler, node -> Struct) -> Bool {
     if (node is null) { return false; }
     let base -> BaseNode = node;
@@ -1037,6 +1057,7 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 ann_flags=sys_anns.ann_flags,
                 compiler_link_name=sys_anns.compiler_link_name,
                 is_enum=false,
+                is_error=false,
                 is_interface=false,
                 interfaces=null
             );
@@ -1063,6 +1084,7 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 ann_flags=sys_anns.ann_flags,
                 compiler_link_name=sys_anns.compiler_link_name,
                 is_enum=false,
+                is_error=false,
                 is_interface=false,
                 interfaces=c_node.interfaces
             );
@@ -1088,6 +1110,7 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 ann_flags=sys_anns.ann_flags,
                 compiler_link_name=sys_anns.compiler_link_name,
                 is_enum=false,
+                is_error=false,
                 is_interface=true,
                 interfaces=null
             );
@@ -1114,18 +1137,12 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                 ann_flags=sys_anns.ann_flags,
                 compiler_link_name=sys_anns.compiler_link_name,
                 is_enum=true,
+                is_error=e_node.is_error || sys_anns.compiler_link_name == "Error",
                 is_interface=false,
                 interfaces=null
             );
             c.struct_table.put(e_name, info);
             c.struct_id_map.put("" + new_id, info);
-            if (sys_anns.compiler_link_name == "Error") {
-                if (c.error_type_id != 0 && c.error_type_id != new_id) {
-                    throw_internal_compiler_error(e_node.pos, "Multiple enums are linked as the standard Error type.");
-                    return;
-                }
-                c.error_type_id = new_id;
-            }
         }
         i += 1;
     }
@@ -1508,7 +1525,7 @@ func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
         let err_reg -> String = next_reg(c);
         c_node.alloc_id = c.alloc_regs.length();
         c.alloc_regs.append(err_reg);
-        c.output_file.write(c.indent + err_reg + " = alloca i32\n");
+        c.output_file.write(c.indent + err_reg + " = alloca { i64, i32 }\n");
         
         hoist_allocas(c, c_node.stmt);
         hoist_allocas(c, c_node.body);
@@ -3509,7 +3526,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     }
     let llvm_env_name -> String = "{ " + env_body + " }";
 
-    let env_info -> StructInfo = StructInfo(name=env_struct_name, type_id=env_id, fields=env_fields, llvm_name=llvm_env_name, init_body=null, is_class=false, vtable_name="", parent_id=0, vtable=null, is_enum=false, is_interface=false, interfaces=null, ann_flags=0, compiler_link_name="");
+    let env_info -> StructInfo = StructInfo(name=env_struct_name, type_id=env_id, fields=env_fields, llvm_name=llvm_env_name, init_body=null, is_class=false, vtable_name="", parent_id=0, vtable=null, is_enum=false, is_error=false, is_interface=false, interfaces=null, ann_flags=0, compiler_link_name="");
     c.struct_id_map.put("" + env_id, env_info);
     c.type_drop_list.append(TypeListNode(type=env_id));
 
@@ -3747,7 +3764,7 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
             let ret_val_1 -> String = next_reg(c);
             c.output_file.write(c.indent + ret_val_1 + " = insertvalue " + target_ty + " undef, i1 false, 0\n");
             let ret_val_2 -> String = next_reg(c);
-            c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + target_ty + " " + ret_val_1 + ", i32 0, 1\n");
+            c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + target_ty + " " + ret_val_1 + ", { i64, i32 } zeroinitializer, 1\n");
             
             if (inner_ret_type != TYPE_VOID) {
                 let ret_val_3 -> String = next_reg(c);
@@ -3775,7 +3792,7 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
                     let ret_val_1 -> String = next_reg(c);
                     c.output_file.write(c.indent + ret_val_1 + " = insertvalue " + target_ty + " undef, i1 false, 0\n");
                     let ret_val_2 -> String = next_reg(c);
-                    c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + target_ty + " " + ret_val_1 + ", i32 0, 1\n");
+                    c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + target_ty + " " + ret_val_1 + ", { i64, i32 } zeroinitializer, 1\n");
                     cleanup_all_scopes(c);
                     c.output_file.write(c.indent + "ret " + target_ty + " " + ret_val_2 + "\n");
                     return void_result();
@@ -5721,7 +5738,7 @@ func compile_try_unwrap(c -> Compiler, node -> TryUnwrapNode) -> CompileResult {
     c.output_file.write(c.indent + err_val_reg + " = extractvalue " + fallible_llvm_ty + " " + expr_res.reg + ", 1\n");
     
     if (c.current_catch_label is !null && c.current_catch_label != "") {
-        c.output_file.write(c.indent + "store i32 " + err_val_reg + ", i32* " + c.current_catch_err_ptr + "\n");
+        c.output_file.write(c.indent + "store { i64, i32 } " + err_val_reg + ", { i64, i32 }* " + c.current_catch_err_ptr + "\n");
         c.output_file.write(c.indent + "br label %" + c.current_catch_label + "\n\n");
     } else {
         if (!is_fallible_type(c, c.current_ret_type)) {
@@ -5731,7 +5748,7 @@ func compile_try_unwrap(c -> Compiler, node -> TryUnwrapNode) -> CompileResult {
         let ret_val_1 -> String = next_reg(c);
         c.output_file.write(c.indent + ret_val_1 + " = insertvalue " + cur_ret_llvm_ty + " undef, i1 true, 0\n");
         let ret_val_2 -> String = next_reg(c);
-        c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + cur_ret_llvm_ty + " " + ret_val_1 + ", i32 " + err_val_reg + ", 1\n");
+        c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + cur_ret_llvm_ty + " " + ret_val_1 + ", { i64, i32 } " + err_val_reg + ", 1\n");
         
         cleanup_all_scopes(c);
         
@@ -5774,11 +5791,7 @@ func compile_catch(c -> Compiler, node -> CatchNode) -> CompileResult {
     c.output_file.write(fail_label + ":\n");
     
     enter_scope(c);
-    if (c.error_type_id == 0) {
-        throw_internal_compiler_error(node.pos, "The standard Error enum was not registered before compiling a catch block.");
-        return void_result();
-    }
-    c.symbol_table.table.put(node.err_name.value, SymbolInfo(reg=err_reg_ptr, type=c.error_type_id, origin_type=c.error_type_id, is_const=false, func_arg_types=null));
+    c.symbol_table.table.put(node.err_name.value, SymbolInfo(reg=err_reg_ptr, type=TYPE_ANY_ERROR, origin_type=TYPE_ANY_ERROR, is_const=false, func_arg_types=null));
     
     compile_node(c, node.body);
     
@@ -5786,7 +5799,8 @@ func compile_catch(c -> Compiler, node -> CatchNode) -> CompileResult {
     let b_node -> BlockNode = node.body;
     if (b_node.stmts is !null && b_node.stmts.length() > 0) {
         let last -> BaseNode = b_node.stmts[b_node.stmts.length() - 1];
-        if (last.type == NODE_RETURN || last.type == NODE_BREAK || last.type == NODE_CONTINUE) {
+        if (last.type == NODE_RETURN || last.type == NODE_BREAK ||
+            last.type == NODE_CONTINUE || last.type == NODE_THROW) {
             last_stmt_returns = true;
         }
     }
@@ -5805,20 +5819,22 @@ func compile_catch(c -> Compiler, node -> CatchNode) -> CompileResult {
 
 func compile_throw(c -> Compiler, node -> ThrowNode) -> CompileResult {
     let res -> CompileResult = compile_node(c, node.value);
-    
-    let res_s_info -> StructInfo = c.struct_id_map.get("" + res.type);
-    if (res_s_info is null) { res_s_info = c.struct_id_map.get("" + res.origin_type); }
-    
-    if (res_s_info is null || !res_s_info.is_enum || res_s_info.compiler_link_name != "Error") {
-        throw_type_error(node.pos, "Only Enums marked with @CompilerLink(\"Error\") can be thrown.");
+
+    let error_type -> Int = res.type;
+    if (!is_error_type(c, error_type) && is_error_type(c, res.origin_type)) {
+        error_type = res.origin_type;
+    }
+    if (!is_error_type(c, error_type)) {
+        throw_type_error(node.pos, "cannot throw " + get_type_name(c, res.type) + "; expected an error value");
         return void_result();
     }
-    
-    let err_val_reg -> String = res.reg;
+
+    let error_value -> CompileResult = emit_error_value(c, res, node.pos);
+    let err_val_reg -> String = error_value.reg;
     
     if (c.current_catch_label is !null && c.current_catch_label != "") {
         cleanup_scopes_until(c, c.current_catch_scope);
-        c.output_file.write(c.indent + "store i32 " + err_val_reg + ", i32* " + c.current_catch_err_ptr + "\n");
+        c.output_file.write(c.indent + "store { i64, i32 } " + err_val_reg + ", { i64, i32 }* " + c.current_catch_err_ptr + "\n");
         c.output_file.write(c.indent + "br label %" + c.current_catch_label + "\n\n");
     } else {
         if (!is_fallible_type(c, c.current_ret_type)) {
@@ -5830,7 +5846,7 @@ func compile_throw(c -> Compiler, node -> ThrowNode) -> CompileResult {
         let ret_val_1 -> String = next_reg(c);
         c.output_file.write(c.indent + ret_val_1 + " = insertvalue " + target_ty + " undef, i1 true, 0\n");
         let ret_val_2 -> String = next_reg(c);
-        c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + target_ty + " " + ret_val_1 + ", i32 " + err_val_reg + ", 1\n");
+        c.output_file.write(c.indent + ret_val_2 + " = insertvalue " + target_ty + " " + ret_val_1 + ", { i64, i32 } " + err_val_reg + ", 1\n");
         
         cleanup_all_scopes(c);
         c.output_file.write(c.indent + "ret " + target_ty + " " + ret_val_2 + "\n\n");
@@ -6168,6 +6184,45 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
             throw_type_error(node.pos, "Invalid operator. Do not use '==' or '!=' with null/nullptr. Use 'is' or 'is !'.");
             return void_result();
         }
+    }
+
+    if (left.type == TYPE_ANY_ERROR || right.type == TYPE_ANY_ERROR) {
+        if (op_type != TOK_EE && op_type != TOK_NE) {
+            throw_type_error(node.pos, "operator '" + node.op_tok.value + "' is not defined for error values");
+            return void_result();
+        }
+        if (!is_error_type(c, left.type) || !is_error_type(c, right.type)) {
+            let other_type -> Int = right.type;
+            if (left.type != TYPE_ANY_ERROR) { other_type = left.type; }
+            throw_type_error(node.pos, "cannot compare an error value with " + get_type_name(c, other_type));
+            return void_result();
+        }
+
+        left = emit_error_value(c, left, node.pos);
+        right = emit_error_value(c, right, node.pos);
+
+        let left_domain -> String = next_reg(c);
+        let right_domain -> String = next_reg(c);
+        let left_code -> String = next_reg(c);
+        let right_code -> String = next_reg(c);
+        c.output_file.write(c.indent + left_domain + " = extractvalue { i64, i32 } " + left.reg + ", 0\n");
+        c.output_file.write(c.indent + right_domain + " = extractvalue { i64, i32 } " + right.reg + ", 0\n");
+        c.output_file.write(c.indent + left_code + " = extractvalue { i64, i32 } " + left.reg + ", 1\n");
+        c.output_file.write(c.indent + right_code + " = extractvalue { i64, i32 } " + right.reg + ", 1\n");
+
+        let domain_equal -> String = next_reg(c);
+        let code_equal -> String = next_reg(c);
+        let equal -> String = next_reg(c);
+        c.output_file.write(c.indent + domain_equal + " = icmp eq i64 " + left_domain + ", " + right_domain + "\n");
+        c.output_file.write(c.indent + code_equal + " = icmp eq i32 " + left_code + ", " + right_code + "\n");
+        c.output_file.write(c.indent + equal + " = and i1 " + domain_equal + ", " + code_equal + "\n");
+        if (op_type == TOK_EE) {
+            return CompileResult(reg=equal, type=TYPE_BOOL);
+        }
+
+        let not_equal -> String = next_reg(c);
+        c.output_file.write(c.indent + not_equal + " = xor i1 " + equal + ", true\n");
+        return CompileResult(reg=not_equal, type=TYPE_BOOL);
     }
 
     // String
@@ -7667,6 +7722,12 @@ func compile_type_cast(c -> Compiler, val_res -> CompileResult, target_type -> I
         return convert_to_string(c, val_res);
     }
 
+    if (val_res.type == TYPE_ANY_ERROR && is_integer_type(target_type)) {
+        let code -> String = next_reg(c);
+        c.output_file.write(c.indent + code + " = extractvalue { i64, i32 } " + val_res.reg + ", 1\n");
+        return compile_type_cast(c, CompileResult(reg=code, type=TYPE_INT), target_type, pos);
+    }
+
     let src_is_float -> Bool = val_res.type == TYPE_FLOAT || val_res.type == TYPE_FLOAT32;
     let dst_is_float -> Bool = target_type == TYPE_FLOAT || target_type == TYPE_FLOAT32;
 
@@ -8331,6 +8392,7 @@ func compile_start(c -> Compiler) -> Void {
         ann_flags=FLAG_ANN_INTRINSIC,
         compiler_link_name="",
         is_enum=false,
+        is_error=false,
         is_interface=false,
         interfaces=null
     );
@@ -8349,6 +8411,7 @@ func compile_start(c -> Compiler) -> Void {
         ann_flags=FLAG_ANN_INTRINSIC,
         compiler_link_name="",
         is_enum=false,
+        is_error=false,
         is_interface=false,
         interfaces=null
     );
