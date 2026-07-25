@@ -1300,7 +1300,7 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
             let s_info -> StructInfo = c.struct_id_map.get("" + target_type);
             if (s_info is !null && s_info.name == "Dict") { return TYPE_GENERIC_STRUCT; }
         }
-        if (target_type == TYPE_STRING) { return TYPE_CHAR; }
+        if (target_type == TYPE_STRING) { return TYPE_BYTE; }
         return 0;
     }
 

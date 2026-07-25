@@ -128,6 +128,8 @@ func peek_type(p -> Parser) -> Int {
     let save_ln   -> Int = l.pos.ln;
     let save_col  -> Int = l.pos.col;
     let save_char -> Char = l.current_char;
+    let save_width -> Int = l.current_width;
+    let save_valid -> Bool = l.current_valid;
     
     // get next token
     let tok -> Token = WhitelangLexer.get_next_token(l);
@@ -139,6 +141,8 @@ func peek_type(p -> Parser) -> Int {
     p_pos.ln  = save_ln;
     p_pos.col = save_col;
     l.current_char = save_char;
+    l.current_width = save_width;
+    l.current_valid = save_valid;
     
     return type;
 }

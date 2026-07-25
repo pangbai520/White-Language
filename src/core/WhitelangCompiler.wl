@@ -700,6 +700,11 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
     }
 
     if (expected_type == TYPE_INT && val_res.type == TYPE_BYTE) { return promote_to_int(c, val_res); }
+    if (expected_type == TYPE_CHAR && val_res.type == TYPE_BYTE) {
+        let char_reg -> String = next_reg(c);
+        c.output_file.write(c.indent + char_reg + " = zext i8 " + val_res.reg + " to i32\n");
+        return CompileResult(reg=char_reg, type=TYPE_CHAR, origin_type=TYPE_BYTE);
+    }
     if (expected_type == TYPE_LONG && val_res.type == TYPE_INT) { return promote_to_long(c, val_res); }
     if (expected_type == TYPE_FLOAT && val_res.type == TYPE_INT) { return promote_to_float(c, val_res); }
     if (expected_type == TYPE_FLOAT && val_res.type == TYPE_LONG) { return promote_to_float(c, val_res); }
@@ -971,34 +976,10 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
     }
 
     if (res.type == TYPE_CHAR) {
-        // allocate struct + 2 bytes + 1 null
-        let obj_i8 -> String = emit_alloc_obj(c, "19", "" + TYPE_STRING, "i8*");
-        let new_str_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + new_str_ptr + " = bitcast i8* " + obj_i8 + " to %struct.$String*\n");
-        
-        let buf_ptr_i8 -> String = next_reg(c);
-        c.output_file.write(c.indent + buf_ptr_i8 + " = getelementptr inbounds i8, i8* " + obj_i8 + ", i32 16\n");
-
-        let char_i8 -> String = next_reg(c);
-        c.output_file.write(c.indent + char_i8 + " = trunc i32 " + res.reg + " to i8\n");
-        c.output_file.write(c.indent + "store i8 " + char_i8 + ", i8* " + buf_ptr_i8 + "\n");
-
-        let next_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + next_ptr + " = getelementptr inbounds i8, i8* " + buf_ptr_i8 + ", i32 1\n");
-        c.output_file.write(c.indent + "store i8 0, i8* " + next_ptr + "\n");
-
-        let out_buf_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_buf_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 0\n");
-        c.output_file.write(c.indent + "store i8* " + buf_ptr_i8 + ", i8** " + out_buf_field + "\n");
-        
-        let out_len_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_len_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 1\n");
-        c.output_file.write(c.indent + "store i32 1, i32* " + out_len_field + "\n");
-        let out_cap_field -> String = next_reg(c);
-        c.output_file.write(c.indent + out_cap_field + " = getelementptr inbounds %struct.$String, %struct.$String* " + new_str_ptr + ", i32 0, i32 2\n");
-        c.output_file.write(c.indent + "store i32 1, i32* " + out_cap_field + "\n");
-
-        return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
+        let format_hook -> String = get_mangled_symbol(c, "utf8_encode_char", null);
+        let result -> String = next_reg(c);
+        c.output_file.write(c.indent + result + " = call %struct.$String* @" + format_hook + "(i32 " + res.reg + ")\n");
+        return CompileResult(reg=result, type=TYPE_STRING);
     }
 
     // fallback for null uses an immortal string literal and requires no allocation.
@@ -5226,10 +5207,7 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
         let load_reg -> String = next_reg(c);
         c.output_file.write(c.indent + load_reg + " = load i8, i8* " + addr_reg + "\n");
         
-        let char_reg -> String = next_reg(c);
-        c.output_file.write(c.indent + char_reg + " = zext i8 " + load_reg + " to i32\n");
-        
-        return CompileResult(reg=char_reg, type=TYPE_CHAR, origin_type=0);
+        return CompileResult(reg=load_reg, type=TYPE_BYTE, origin_type=0);
     }
 
     if (is_pointer_type(c, target_res.type)) {
@@ -5465,12 +5443,8 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
 
             let ptr_reg -> String = next_reg(c);
             c.output_file.write(c.indent + ptr_reg + " = getelementptr inbounds i8, i8* " + src_buf + ", i64 " + idx_i64 + "\n");
-            val_res = emit_implicit_cast(c, val_res, TYPE_CHAR, node.pos);
-
-            let val_i8 -> String = next_reg(c);
-            c.output_file.write(c.indent + val_i8 + " = trunc i32 " + val_res.reg + " to i8\n");
-
-            c.output_file.write(c.indent + "store i8 " + val_i8 + ", i8* " + ptr_reg + "\n");
+            val_res = emit_implicit_cast(c, val_res, TYPE_BYTE, node.pos);
+            c.output_file.write(c.indent + "store i8 " + val_res.reg + ", i8* " + ptr_reg + "\n");
             return val_res;
         }
 
@@ -6248,6 +6222,20 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         let res_reg -> String = next_reg(c);
         c.output_file.write(c.indent + res_reg + " = call double @llvm.pow.f64(double " + left.reg + ", double " + right.reg + ")\n");
         return CompileResult(reg=res_reg, type=TYPE_FLOAT);
+    }
+
+    if ((left.type == TYPE_CHAR && right.type == TYPE_BYTE) ||
+        (left.type == TYPE_BYTE && right.type == TYPE_CHAR)) {
+        if (left.type == TYPE_BYTE) {
+            let promoted -> String = next_reg(c);
+            c.output_file.write(c.indent + promoted + " = zext i8 " + left.reg + " to i32\n");
+            left = CompileResult(reg=promoted, type=TYPE_CHAR, origin_type=TYPE_BYTE);
+        }
+        if (right.type == TYPE_BYTE) {
+            let promoted -> String = next_reg(c);
+            c.output_file.write(c.indent + promoted + " = zext i8 " + right.reg + " to i32\n");
+            right = CompileResult(reg=promoted, type=TYPE_CHAR, origin_type=TYPE_BYTE);
+        }
     }
 
     if (left.type == TYPE_CHAR || right.type == TYPE_CHAR) {

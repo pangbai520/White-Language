@@ -10,6 +10,8 @@ let CLEAN_TMP_LL -> String = "";
 let ACTIVE_FILE -> file.File = null;
 let ERROR_BUFFER -> Vector(String) = null;
 let REPORTED_ERRORS -> Dict = null;
+let STRUCTURED_ERRORS -> Vector(Struct) = null;
+let COLLECT_ERRORS_ONLY -> Bool = false;
 
 struct Position(
     idx  -> Int,
@@ -18,6 +20,29 @@ struct Position(
     text -> String,
     fn   -> String
 )
+
+struct CompilerDiagnostic(
+    category -> String,
+    message  -> String,
+    pos      -> Position
+)
+
+func reset_errors() -> Void {
+    GLOBAL_ERROR_COUNT = 0;
+    LAST_ERROR_FILE = "";
+    ERROR_BUFFER = [];
+    REPORTED_ERRORS = null;
+    STRUCTURED_ERRORS = [];
+}
+
+func begin_error_collection() -> Void {
+    reset_errors();
+    COLLECT_ERRORS_ONLY = true;
+}
+
+func end_error_collection() -> Void {
+    COLLECT_ERRORS_ONLY = false;
+}
 
 func advance_pos(pos -> Position, current_char -> Char) -> Void {
     pos.idx = pos.idx + 1;
@@ -41,12 +66,15 @@ func abort_and_clean(status -> Int) -> Void {
 }
 
 func report_error(pos -> Position, name -> String, details -> String) -> Void {
+    if (COLLECT_ERRORS_ONLY && GLOBAL_ERROR_COUNT >= 50) { return; }
     let error_key -> String = pos.fn + ":" + pos.ln + ":" + pos.col + ":" + name + ":" + details;
     if (REPORTED_ERRORS is null) { REPORTED_ERRORS = Dict(32); }
     if (REPORTED_ERRORS.contains_key(error_key)) { return; }
     REPORTED_ERRORS.put(error_key, true);
 
     GLOBAL_ERROR_COUNT = GLOBAL_ERROR_COUNT + 1;
+    if (STRUCTURED_ERRORS is null) { STRUCTURED_ERRORS = []; }
+    STRUCTURED_ERRORS.append(CompilerDiagnostic(category=name, message=details, pos=pos));
 
     let ln -> Int = pos.ln + 1;
     let col -> Int = pos.col + 1;
@@ -135,7 +163,7 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
     err_msg += name + ": " + details + "\n\n";
     ERROR_BUFFER.append(err_msg);
 
-    if (GLOBAL_ERROR_COUNT > 50) {
+    if (GLOBAL_ERROR_COUNT > 50 && !COLLECT_ERRORS_ONLY) {
         ERROR_BUFFER.append("fatal error: too many errors emitted, stopping now\n");
         check_errors_and_abort();
     }

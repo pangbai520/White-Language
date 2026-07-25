@@ -8,9 +8,16 @@ import * from "WhitelangExceptions.wl"
 struct Lexer(
     text -> String,
     pos  -> Position, 
-    current_char -> Char
+    current_char -> Char,
+    current_width -> Int,
+    current_valid -> Bool
 )
 
+struct Utf8Unit(
+    value -> Char,
+    width -> Int,
+    valid -> Bool
+)
 
 func is_space(c -> Char) -> Bool {
     return (c == ' ') || (c == '\t') || (c == '\n') || (c == '\r');
@@ -22,6 +29,60 @@ func is_digit(c -> Char) -> Bool {
 
 func is_alpha(c -> Char) -> Bool {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c == '_');
+}
+
+func decode_utf8_unit(text -> String, offset -> Int) -> Utf8Unit {
+    // lexer offsets remain byte based even though current_char is a Unicode scalar
+    if (offset < 0 || offset >= text.length()) {
+        return Utf8Unit(value='\0', width=0, valid=true);
+    }
+
+    let first -> Int = Int(text[offset]);
+    if (first <= 127) {
+        return Utf8Unit(value=Char(first), width=1, valid=true);
+    }
+
+    if (first >= 194 && first <= 223 && offset + 1 < text.length()) {
+        let second -> Int = Int(text[offset + 1]);
+        if (second >= 128 && second <= 191) {
+            let scalar -> Int = ((first & 31) << 6) | (second & 63);
+            return Utf8Unit(value=Char(scalar), width=2, valid=true);
+        }
+    }
+
+    if (first >= 224 && first <= 239 && offset + 2 < text.length()) {
+        let second -> Int = Int(text[offset + 1]);
+        let third -> Int = Int(text[offset + 2]);
+        let second_valid -> Bool = second >= 128 && second <= 191;
+        if (first == 224) { second_valid = second >= 160 && second <= 191; }
+        if (first == 237) { second_valid = second >= 128 && second <= 159; }
+        if (second_valid && third >= 128 && third <= 191) {
+            let scalar -> Int =
+                ((first & 15) << 12) | ((second & 63) << 6) | (third & 63);
+            return Utf8Unit(value=Char(scalar), width=3, valid=true);
+        }
+    }
+
+    if (first >= 240 && first <= 244 && offset + 3 < text.length()) {
+        let second -> Int = Int(text[offset + 1]);
+        let third -> Int = Int(text[offset + 2]);
+        let fourth -> Int = Int(text[offset + 3]);
+        let second_valid -> Bool = second >= 128 && second <= 191;
+        if (first == 240) { second_valid = second >= 144 && second <= 191; }
+        if (first == 244) { second_valid = second >= 128 && second <= 143; }
+        if (second_valid &&
+            third >= 128 && third <= 191 &&
+            fourth >= 128 && fourth <= 191) {
+            let scalar -> Int =
+                ((first & 7) << 18) |
+                ((second & 63) << 12) |
+                ((third & 63) << 6) |
+                (fourth & 63);
+            return Utf8Unit(value=Char(scalar), width=4, valid=true);
+        }
+    }
+
+    return Utf8Unit(value=Char(65533), width=1, valid=false);
 }
 
 func is_digit_for_base(c -> Char, base -> Int) -> Bool {
@@ -134,18 +195,37 @@ func validate_number(l -> Lexer, line -> Int, col -> Int, value -> String, is_fl
 }
 
 func new_lexer(fn -> String, text -> String) -> Lexer {
-    let pos -> Position = Position(idx=-1, ln=0, col=-1, text=text, fn=fn);
-    let l -> Lexer = Lexer(text=text, pos=pos, current_char='\0');
-    lexer_advance(l);
+    let pos -> Position = Position(idx=0, ln=0, col=0, text=text, fn=fn);
+    let unit -> Utf8Unit = decode_utf8_unit(text, 0);
+    let l -> Lexer = Lexer(
+        text=text,
+        pos=pos,
+        current_char=unit.value,
+        current_width=unit.width,
+        current_valid=unit.valid
+    );
     return l;
 }
 
 func lexer_advance(l -> Lexer) -> Void {
-    advance_pos(l.pos, l.current_char);
+    if (l.current_char == '\0') { return; }
+    let previous_width -> Int = l.current_width;
+    if (l.current_char == '\n') {
+        l.pos.ln += 1;
+        l.pos.col = 0;
+    } else {
+        l.pos.col += previous_width;
+    }
+    l.pos.idx += previous_width;
     if (l.pos.idx < l.text.length()) {
-        l.current_char = l.text[l.pos.idx];
+        let unit -> Utf8Unit = decode_utf8_unit(l.text, l.pos.idx);
+        l.current_char = unit.value;
+        l.current_width = unit.width;
+        l.current_valid = unit.valid;
     } else {
         l.current_char = '\0';
+        l.current_width = 0;
+        l.current_valid = true;
     }
 }
 
@@ -178,7 +258,7 @@ func get_string(l -> Lexer) -> Token {
             lexer_advance(l); // consume the escaped char
         } else {
             let idx -> Int = l.pos.idx;
-            result += l.text.slice(idx, idx + 1);
+            result += l.text.slice(idx, idx + l.current_width);
             lexer_advance(l);
         }
     }
@@ -357,6 +437,11 @@ func handle_slash(l -> Lexer) -> Token {
 
 func get_next_token(l -> Lexer) -> Token {
     while (l.current_char != '\0') {
+        if (!l.current_valid) {
+            throw_illegal_char(l.pos, "Invalid UTF-8 byte in source.");
+            lexer_advance(l);
+            continue;
+        }
         if (is_space(l.current_char)) {
             lexer_advance(l);
             continue;

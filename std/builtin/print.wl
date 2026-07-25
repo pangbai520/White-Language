@@ -33,8 +33,9 @@ func write_raw_string(data -> AnyPtr) -> Void {
 
 @CompilerLink("print_char")
 func write_char(c -> Char) -> Void {
-    let char_buf -> Byte = Byte(c);
-    write_bytes(ref char_buf, 1);
+    let encoded -> String = runtime_string.encode_utf8_char(c);
+    if (encoded is null) { return; }
+    write_bytes(runtime_string.data(encoded), encoded.length());
 }
 
 @CompilerLink("print_int")
