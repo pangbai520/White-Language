@@ -72,8 +72,8 @@ func __join(chunks -> Vector(String), total_length -> Int) -> String? {
     return result;
 }
 
-func read(max_bytes -> Int) -> String? {
-// read up to max_bytes; an empty string marks end of input
+func read_bytes(max_bytes -> Int) -> String? {
+// read up to max_bytes, an empty string marks end of input
     if (max_bytes < 0) { throw Error.InvalidArgument; }
     if (max_bytes == 0) {
         let empty -> String = runtime_string.alloc(0L);
@@ -97,8 +97,8 @@ func read(max_bytes -> Int) -> String? {
     return result;
 }
 
-func read_exact(byte_count -> Int) -> String? {
-// read exactly byte_count bytes; a short final read reports EndOfFile
+func read_full(byte_count -> Int) -> String? {
+// read exactly byte_count bytes, a short final read reports EndOfFile
     if (byte_count < 0) { throw Error.InvalidArgument; }
     let result -> String = runtime_string.alloc(Long(byte_count));
     if (result is null) { throw Error.OutOfMemory; }
@@ -149,7 +149,7 @@ func read_until(delimiter -> Char) -> String? {
 }
 
 func read_line() -> String? {
-// remove one trailing LF or CRLF; EOF remains distinct from an empty line
+// remove one trailing LF or CRLF, EOF remains distinct from an empty line
     let line -> String = read_until('\n')?;
     let end -> Int = line.length();
     if (end > 0 && line[end - 1] == '\n') { end -= 1; }
@@ -157,13 +157,13 @@ func read_line() -> String? {
     return line.slice(0, end);
 }
 
-func read_to_end() -> String? {
+func read_all() -> String? {
 // consume all remaining bytes from standard input
     let chunks -> Vector(String) = [];
     let total_length -> Int = 0;
 
     while true {
-        let chunk -> String = read(__BUFFER_SIZE)?;
+        let chunk -> String = read_bytes(__BUFFER_SIZE)?;
         if (chunk.length() == 0) {
             let result -> String = __join(chunks, total_length)?;
             return result;
@@ -174,14 +174,14 @@ func read_to_end() -> String? {
     }
 }
 
-func discard(byte_count -> Int) -> Int? {
-// discard up to byte_count bytes and return the number consumed
+func skip_bytes(byte_count -> Int) -> Int? {
+// skip up to byte_count bytes and return the number consumed
     if (byte_count < 0) { throw Error.InvalidArgument; }
-    let discarded -> Int = 0;
-    while (discarded < byte_count) {
-        let chunk -> String = read(byte_count - discarded)?;
-        if (chunk.length() == 0) { return discarded; }
-        discarded += chunk.length();
+    let skipped -> Int = 0;
+    while (skipped < byte_count) {
+        let chunk -> String = read_bytes(byte_count - skipped)?;
+        if (chunk.length() == 0) { return skipped; }
+        skipped += chunk.length();
     }
-    return discarded;
+    return skipped;
 }
