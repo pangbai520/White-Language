@@ -6,6 +6,7 @@ extern func realloc(block -> AnyPtr, size -> Long) -> AnyPtr from "C";
 extern func free(block -> AnyPtr) -> Void from "C";
 
 extern func write(fd -> Int, buf -> AnyPtr, count -> Long) -> Long from "C";
+extern func read(fd -> Int, buf -> AnyPtr, count -> Long) -> Long from "C";
 extern func wl_getenv(name -> String) -> String from "C";
 extern func system_call(command -> String) -> Int from "C";
 extern func wl_posix_exit(status -> Int) -> Void from "C";

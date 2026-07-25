@@ -5,6 +5,8 @@ enum Error {
     OutOfMemory,
     NotSupported,
     Interrupted,
+    EndOfFile,
+    WriteZero,
     InvalidArgument,
     OutOfBounds,
     TypeMismatch,

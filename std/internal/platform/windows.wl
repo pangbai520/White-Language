@@ -26,6 +26,7 @@ extern "system" {
     func DeleteFileW(lpFileName -> AnyPtr) -> Int;
     func ExitProcess(uExitCode -> Int) -> Void;
     func GetStdHandle(nStdHandle -> Int) -> AnyPtr;
+    func SetConsoleCP(wCodePageID -> Int) -> Int;
     func SetConsoleOutputCP(wCodePageID -> Int) -> Int;
     func GetConsoleMode(hConsoleHandle -> AnyPtr, lpMode -> AnyPtr) -> Int;
     func WriteConsoleW(hConsoleOutput -> AnyPtr, lpBuffer -> AnyPtr, nNumberOfCharsToWrite -> Int, lpNumberOfCharsWritten -> AnyPtr, lpReserved -> AnyPtr) -> Int;
@@ -33,11 +34,14 @@ extern "system" {
     func WideCharToMultiByte(CodePage -> Int, dwFlags -> Int, lpWideCharStr -> AnyPtr, cchWideChar -> Int, lpMultiByteStr -> AnyPtr, cbMultiByte -> Int, lpDefaultChar -> AnyPtr, lpUsedDefaultChar -> AnyPtr) -> Int;
 }
 
+const STD_INPUT_HANDLE -> Int = -10;
 const STD_OUTPUT_HANDLE -> Int = -11;
 const STD_ERROR_HANDLE -> Int = -12;
 const CP_UTF8 -> Int = 65001;
 const HEAP_ZERO_MEMORY -> Int = 8;
 const ERROR_ENVVAR_NOT_FOUND -> Int = 203;
+const ERROR_HANDLE_EOF -> Int = 38;
+const ERROR_BROKEN_PIPE -> Int = 109;
 
 const INFINITE -> Int = -1;
 const WAIT_FAILED -> Int = -1;
