@@ -1,8 +1,9 @@
 // core/WhitelangLexer.wl
 import "builtin"
 
+import "WhitelangTokens.wl"
 import * from "WhitelangTokens.wl"
-import Position from "WhitelangExceptions.wl"
+import * from "WhitelangExceptions.wl"
 
 struct Lexer(
     text -> String,
@@ -34,8 +35,8 @@ func is_digit_for_base(c -> Char, base -> Int) -> Bool {
 }
 
 func report_bad_number(l -> Lexer, line -> Int, col -> Int, value -> String) -> Void {
-    let pos -> Position = WhitelangExceptions.Position(idx=0, ln=line, col=col, text=l.text, fn=l.pos.fn);
-    WhitelangExceptions.throw_invalid_syntax(pos, "Invalid numeric literal '" + value + "'.");
+    let pos -> Position = Position(idx=0, ln=line, col=col, text=l.text, fn=l.pos.fn);
+    throw_invalid_syntax(pos, "Invalid numeric literal '" + value + "'.");
 }
 
 func validate_number(l -> Lexer, line -> Int, col -> Int, value -> String, is_float -> Bool) -> Bool {
@@ -140,7 +141,7 @@ func new_lexer(fn -> String, text -> String) -> Lexer {
 }
 
 func lexer_advance(l -> Lexer) -> Void {
-    WhitelangExceptions.advance_pos(l.pos, l.current_char);
+    advance_pos(l.pos, l.current_char);
     if (l.pos.idx < l.text.length()) {
         l.current_char = l.text[l.pos.idx];
     } else {
@@ -187,7 +188,7 @@ func get_string(l -> Lexer) -> Token {
         return WhitelangTokens.Token(type=TOK_STR_LIT, value=result, line=start_ln, col=start_col);
     }
     
-    WhitelangExceptions.throw_illegal_char(l.pos, "Unterminated string literal. ");
+    throw_illegal_char(l.pos, "Unterminated string literal. ");
     return WhitelangTokens.Token(type=TOK_STR_LIT, value=result, line=start_ln, col=start_col);
 }
 
@@ -216,7 +217,7 @@ func get_char_literal(l -> Lexer) -> Token {
     if (l.current_char == '\'') {
         lexer_advance(l); // skip closing '
     } else {
-        WhitelangExceptions.throw_illegal_char(l.pos, "Unterminated char literal.");
+        throw_illegal_char(l.pos, "Unterminated char literal.");
     }
 
     return WhitelangTokens.Token(type=TOK_CHAR_LIT, value="" + char_val, line=start_ln, col=start_col);
@@ -346,7 +347,7 @@ func handle_slash(l -> Lexer) -> Token {
                 }
             } else { lexer_advance(l); }
         }
-        if (comment_closed == 0) { WhitelangExceptions.throw_illegal_char(l.pos, "Unterminated block comment."); }
+        if (comment_closed == 0) { throw_illegal_char(l.pos, "Unterminated block comment."); }
         return null;
     }
 
@@ -527,7 +528,7 @@ func get_next_token(l -> Lexer) -> Token {
         if (char == ':') { lexer_advance(l); return WhitelangTokens.Token(type=TOK_COLON, value=":", line=char_line, col=char_col); }
         if (char == '?') { lexer_advance(l); return WhitelangTokens.Token(type=TOK_QUESTION, value="?", line=char_line, col=char_col); }
 
-        WhitelangExceptions.throw_illegal_char(l.pos, "unknown character '" + char + "'. ");
+        throw_illegal_char(l.pos, "unknown character '" + char + "'. ");
         lexer_advance(l);
         continue;
     }

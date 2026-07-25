@@ -2,11 +2,11 @@
 import "builtin"
 import "sys"
 import "file"
-
-import * from "WhitelangNodes.wl"
-import Position from "WhitelangExceptions.wl"
-import Token from "WhitelangTokens.wl"
 import Dict from "dict"
+
+import "WhitelangTokens.wl"
+import * from "WhitelangNodes.wl"
+import * from "WhitelangExceptions.wl"
 
 // Type constants
 const TYPE_INT   -> Int = 1;
@@ -176,10 +176,12 @@ struct Compiler(
     method_ret_map -> Dict,
     declared_externs -> Dict,
     imported_modules -> Dict,
+    module_prefix_owners -> Dict,
+    module_id -> Int,
     current_package_prefix -> String,
-    loaded_packages -> Dict,
-    loaded_files -> Dict,
+    current_module_is_package -> Bool,
     current_file_visible_prefixes -> Dict,
+    current_file_namespaces -> Dict,
     current_file_type_aliases -> Dict,
     alloc_regs -> Vector(String),
     current_dir -> String,
@@ -212,8 +214,10 @@ struct ParsedModule(
     path -> String,
     prefix -> String,
     dir -> String,
+    is_package -> Bool,
     ast -> Struct,
     visible -> Dict,
+    namespaces -> Dict,
     types -> Dict,
     funcs -> Dict,
     globals -> Dict,
@@ -259,7 +263,11 @@ func new_compiler(out_path -> String, is_shared -> Bool, emit_source_context -> 
         method_ret_map=Dict(32),
         declared_externs=Dict(32),
         imported_modules=Dict(32),
+        module_prefix_owners=Dict(32),
+        module_id=0,
+        current_module_is_package=false,
         current_file_visible_prefixes = Dict(32),
+        current_file_namespaces = Dict(32),
         current_file_type_aliases = Dict(32),
         alloc_regs = [],
         current_dir = ".",
@@ -270,8 +278,6 @@ func new_compiler(out_path -> String, is_shared -> Bool, emit_source_context -> 
         global_var_aliases = Dict(32),
         compiler_link = Dict(16),
         current_package_prefix = "",
-        loaded_packages = Dict(32),
-        loaded_files = Dict(32),
         current_dir = ".",
         curr_func = null,
         expected_type = 0,
@@ -313,6 +319,41 @@ func next_label(c -> Compiler) -> String {
 
 func void_result() -> CompileResult {
     return CompileResult(reg="", type=TYPE_VOID);
+}
+
+func module_member_name(prefix -> String, path_parts -> Vector(String), field_name -> String) -> String {
+    let result -> String = prefix;
+    let i -> Int = path_parts.length() - 1;
+    while (i >= 0) {
+        result += path_parts[i] + ".";
+        i -= 1;
+    }
+    return result + field_name;
+}
+
+func register_import_namespaces(c -> Compiler, table -> Dict, pos -> Position) -> Void {
+    let i -> Int = 0;
+    while (i < table.capacity) {
+        if (table.hashes[i] >= 2) {
+            let name -> String = table.keys[i];
+            let dot -> Int = 0;
+            while (dot < name.length() && name[dot] != '.') { dot += 1; }
+            if (dot > 0 && dot < name.length()) {
+                let namespace -> String = name.slice(0, dot);
+                if (c.current_file_visible_prefixes.get(namespace) is !null) {
+                    report_import_collision(c, pos, "module", namespace);
+                } else {
+                    c.current_file_namespaces.put(namespace, true);
+                }
+            }
+        }
+        i += 1;
+    }
+}
+
+func is_visible_namespace(c -> Compiler, name -> String) -> Bool {
+    if (c.current_file_visible_prefixes.get(name) is !null) { return true; }
+    return c.current_file_namespaces.get(name) is !null;
 }
 
 
@@ -371,7 +412,8 @@ func get_field_by_index(s_info -> StructInfo, index -> Int) -> FieldInfo {
 }
 
 func export_module_symbols(c -> Compiler, prefix -> String, as_submodule -> Bool, module_name -> String) -> Void {
-    if (c.current_package_prefix == "") { return; }
+    if (c.current_package_prefix == "" || !c.current_module_is_package) { return; }
+    if (as_submodule && module_name.starts_with("__")) { return; }
     
     let p_len -> Int = prefix.length();
     let export_prefix -> String = c.current_package_prefix;
@@ -476,16 +518,11 @@ func export_module_symbols(c -> Compiler, prefix -> String, as_submodule -> Bool
 func report_import_collision(c -> Compiler, pos -> Position, kind -> String, name -> String) -> Void {
 // imports are bound in both passes; only codegen emits diagnostics
     if (!c.is_precompile_phase) {
-        WhitelangExceptions.throw_import_error(pos, "Name collision for " + kind + " '" + name + "'. Please use explicit alias.");
+        throw_import_error(pos, "Name collision for " + kind + " '" + name + "'. Please use explicit alias.");
     }
 }
 
 func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) -> Void {
-    if (prefix != "") {
-        let bare_prefix -> String = prefix.slice(0, prefix.length() - 1);
-        c.current_file_visible_prefixes.put(bare_prefix, "1");
-    }
-
     let symbols -> Vector(Struct) = node.symbols;
     let s_len -> Int = 0; if (symbols is !null) { s_len = symbols.length(); }
     let i -> Int = 0;
@@ -623,7 +660,10 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
                 }
                 k += 1;
             }
-            
+
+            register_import_namespaces(c, c.current_file_func_aliases, node.pos);
+            register_import_namespaces(c, c.current_file_type_aliases, node.pos);
+            register_import_namespaces(c, c.current_file_global_aliases, node.pos);
             i += 1;
             continue;
         }
@@ -631,14 +671,14 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
         let orig_name -> String = curr_sym.name_tok.value;
 
         if (orig_name.starts_with("__")) {
-            WhitelangExceptions.throw_import_error(node.pos, "Cannot import '" + orig_name + "', symbol not found in module.");
+            throw_import_error(node.pos, "Cannot import '" + orig_name + "', symbol not found in module.");
             return;
         }
 
         let target_name -> String = orig_name;
 
         if (curr_sym.alias_tok is !null) {
-            let a_tok -> Token = curr_sym.alias_tok;
+            let a_tok -> WhitelangTokens.Token = curr_sym.alias_tok;
             target_name = a_tok.value;
         }
 
@@ -683,9 +723,33 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
         }
 
         if (!found && !c.is_precompile_phase) {
-            WhitelangExceptions.throw_import_error(node.pos, "Cannot import '" + orig_name + "', symbol not found in module.");
+            throw_import_error(node.pos, "Cannot import '" + orig_name + "', symbol not found in module.");
         }
 
+        i += 1;
+    }
+}
+
+func export_named_imports(c -> Compiler, node -> ImportNode) -> Void {
+    if (!c.current_module_is_package || node.symbols is null) { return; }
+
+    let i -> Int = 0;
+    while (i < node.symbols.length()) {
+        let symbol -> ImportSymbolNode = node.symbols[i];
+        if (symbol.name_tok.type == WhitelangTokens.TOK_MUL) { return; }
+
+        let target_name -> String = symbol.name_tok.value;
+        if (symbol.alias_tok is !null) { target_name = symbol.alias_tok.value; }
+        let export_name -> String = c.current_package_prefix + target_name;
+
+        let mapped_func -> String = c.current_file_func_aliases.get(target_name);
+        if (mapped_func is !null) { c.global_func_aliases.put(export_name, mapped_func); }
+
+        let mapped_type -> String = c.current_file_type_aliases.get(target_name);
+        if (mapped_type is !null) { c.global_type_aliases.put(export_name, mapped_type); }
+
+        let mapped_global -> String = c.current_file_global_aliases.get(target_name);
+        if (mapped_global is !null) { c.global_var_aliases.put(export_name, mapped_global); }
         i += 1;
     }
 }
@@ -779,7 +843,7 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
         }
     }
 
-    WhitelangExceptions.throw_internal_compiler_error(null, "Unknown type id " + type_id + " reached LLVM lowering.");
+    throw_internal_compiler_error(null, "Unknown type id " + type_id + " reached LLVM lowering.");
     return "void";
 }
 
@@ -1302,7 +1366,7 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
         if (is_fallible_type(c, base_type)) {
             return get_inner_fallible_type(c, base_type);
         }
-        WhitelangExceptions.throw_invalid_syntax(t_node.pos, "Cannot use '?' on a non-fallible type.");
+        throw_invalid_syntax(t_node.pos, "Cannot use '?' on a non-fallible type.");
         return 0;
     }
 
@@ -1365,18 +1429,14 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
                     let inner_v -> VarAccessNode = curr_obj;
                     let root_name -> String = inner_v.name_tok.value;
                     if (find_symbol(c, root_name) is null) {
-                        let root_marker -> StringConstant = c.loaded_packages.get(root_name);
-                        if (root_marker is null) { root_marker = c.loaded_files.get(root_name); }
-                        
                         let full_name -> String = "";
-                        if (root_marker is !null) {
-                            let full_path -> String = root_marker.value;
-                            let p_idx -> Int = path_parts.length() - 1;
-                            while (p_idx >= 0) {
-                                full_path = full_path + path_parts[p_idx] + ".";
-                                p_idx -= 1;
-                            }
-                            full_name = full_path + f.field_name;
+                        let module_prefix -> String = c.current_file_visible_prefixes.get(root_name);
+                        if (module_prefix is !null) {
+                            full_name = module_member_name(module_prefix, path_parts, f.field_name);
+                        } else {
+                            let source_name -> String = module_member_name(root_name + ".", path_parts, f.field_name);
+                            let mapped_func -> String = c.current_file_func_aliases.get(source_name);
+                            if (mapped_func is !null) { full_name = mapped_func; }
                         }
                         let g_alias_f -> String = c.global_func_aliases.get(full_name);
                         if (g_alias_f is !null) { full_name = g_alias_f; }
@@ -1578,7 +1638,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         let fll_node -> FallibleTypeNode = node;
         let base_id -> Int = resolve_type(c, fll_node.base_type);
         if (is_fallible_type(c, base_id)) {
-            WhitelangExceptions.throw_type_error(fll_node.pos, "Cannot create a nested fallible type (e.g. T??).");
+            throw_type_error(fll_node.pos, "Cannot create a nested fallible type (e.g. T??).");
         }
         return get_fallible_type_id(c, base_id);
     }
@@ -1611,7 +1671,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
         let base_id -> Int = resolve_type(c, p_node.base_type);
 
         if (base_id == TYPE_VOID) {
-            WhitelangExceptions.throw_type_error(p_node.pos, "Cannot create a pointer to 'Void' (it has no size and no value), use 'AnyPtr' instead.");
+            throw_type_error(p_node.pos, "Cannot create a pointer to 'Void' (it has no size and no value), use 'AnyPtr' instead.");
             return TYPE_ANYPTR;
         }
         
@@ -1637,7 +1697,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
 
         let parsed_size -> Long = string_to_long(arr_node.size_tok.value, arr_node.pos);
         if (parsed_size < 0L || parsed_size > 2147483647L) {
-            WhitelangExceptions.throw_overflow_error(arr_node.pos, "Array size overflows maximum allowed 32-bit limit.");
+            throw_overflow_error(arr_node.pos, "Array size overflows maximum allowed 32-bit limit.");
             return 0;
         }
 
@@ -1724,7 +1784,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
             if (s_info is !null) { return s_info.type_id; }
         }
 
-        WhitelangExceptions.throw_type_error(v.pos, "Unknown type: " + name);
+        throw_type_error(v.pos, "Unknown type: " + name);
     }
 
     if (base.type == NODE_FIELD_ACCESS) {
@@ -1742,26 +1802,21 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
             let pkg_node -> VarAccessNode = curr_obj;
             let pkg_name -> String = pkg_node.name_tok.value;
             let type_name -> String = f_acc.field_name;
+            if (type_name.starts_with("__")) {
+                if (!c.is_precompile_phase) {
+                    throw_type_error(f_acc.pos, "Unknown module type: " + pkg_name + "." + type_name);
+                }
+                return TYPE_POISON;
+            }
 
             let full_name -> String = "";
-            let pkg_marker -> StringConstant = c.loaded_packages.get(pkg_name);
-            if (pkg_marker is null) { pkg_marker = c.loaded_files.get(pkg_name); }
-            if (pkg_marker is !null) {
-                let full_path -> String = pkg_marker.value;
-                let p_idx -> Int = path_parts.length() - 1;
-                while (p_idx >= 0) {
-                    full_path = full_path + path_parts[p_idx] + ".";
-                    p_idx -= 1;
-                }
-                full_name = full_path + type_name;
+            let module_prefix -> String = c.current_file_visible_prefixes.get(pkg_name);
+            if (module_prefix is !null) {
+                full_name = module_member_name(module_prefix, path_parts, type_name);
             } else {
-                full_name = pkg_name + ".";
-                let p_idx -> Int = path_parts.length() - 1;
-                while (p_idx >= 0) {
-                    full_name = full_name + path_parts[p_idx] + ".";
-                    p_idx -= 1;
-                }
-                full_name = full_name + type_name;
+                let source_name -> String = module_member_name(pkg_name + ".", path_parts, type_name);
+                let mapped_type -> String = c.current_file_type_aliases.get(source_name);
+                if (mapped_type is !null) { full_name = mapped_type; }
             }
 
             let s_info -> StructInfo = c.struct_table.get(full_name);
@@ -1773,7 +1828,7 @@ func resolve_type(c -> Compiler, node -> Struct) -> Int {
                 if (type_s_info is !null) { return type_s_info.type_id; }
             }
             
-            WhitelangExceptions.throw_type_error(f_acc.pos, "Unknown module type: " + full_name);
+            throw_type_error(f_acc.pos, "Unknown module type: " + full_name);
         }
     }
     
@@ -1903,7 +1958,7 @@ func mangle_type(c -> Compiler, type_id -> Int) -> String {
         return "N" + struct_info.name.length() + struct_info.name + "E";
     }
 
-    WhitelangExceptions.throw_internal_compiler_error(null, "Cannot mangle unknown type id " + type_id + ".");
+    throw_internal_compiler_error(null, "Cannot mangle unknown type id " + type_id + ".");
     return "v";
 }
 
@@ -1943,7 +1998,7 @@ func get_mangled_symbol(c -> Compiler, link_name -> String, pos -> Position) -> 
     }
 
     if (name is null && pos is !null) {
-        WhitelangExceptions.throw_type_error(pos, "Missing CompilerLink hook '" + link_name + "'. Did you import 'builtin'?");
+        throw_type_error(pos, "Missing CompilerLink hook '" + link_name + "'. Did you import 'builtin'?");
         return "__wl_missing_hook";
     }
 
@@ -1962,19 +2017,19 @@ func consume_annotations(anns -> Vector(Struct), default_name -> String) -> Syst
         
         if (name == "ExportLib") {
             if (ann_node.args is !null && ann_node.args.length() > 0) {
-                WhitelangExceptions.throw_invalid_syntax(ann_node.pos, "@" + name + " annotation cannot have arguments.");
+                throw_invalid_syntax(ann_node.pos, "@" + name + " annotation cannot have arguments.");
             }
             res.ann_flags = res.ann_flags | FLAG_ANN_EXPORT;
         } else if (name == "CompilerIntrinsic") {
             let arg_count -> Int = 0;
             if (ann_node.args is !null) { arg_count = ann_node.args.length(); }
             if (arg_count > 1) {
-                WhitelangExceptions.throw_invalid_syntax(ann_node.pos, "@CompilerIntrinsic accepts at most one string literal argument.");
+                throw_invalid_syntax(ann_node.pos, "@CompilerIntrinsic accepts at most one string literal argument.");
             } else if (arg_count == 1) {
                 let a_node -> ArgNode = ann_node.args[0];
                 let base_val -> BaseNode = a_node.val;
                 if (base_val is null || base_val.type != NODE_STRING) {
-                    WhitelangExceptions.throw_invalid_syntax(ann_node.pos, "@CompilerIntrinsic argument must be a string literal.");
+                    throw_invalid_syntax(ann_node.pos, "@CompilerIntrinsic argument must be a string literal.");
                 } else {
                     let str_node -> StringNode = a_node.val;
                     res.intrinsic_name = str_node.tok.value;
@@ -1987,7 +2042,7 @@ func consume_annotations(anns -> Vector(Struct), default_name -> String) -> Syst
                 let a_node -> ArgNode = ann_node.args[0];
                 let base_val -> BaseNode = a_node.val;
                 if (base_val is null || base_val.type != NODE_STRING) {
-                    WhitelangExceptions.throw_invalid_syntax(ann_node.pos, "@CompilerLink argument must be a string literal.");
+                    throw_invalid_syntax(ann_node.pos, "@CompilerLink argument must be a string literal.");
                 } else {
                     let str_node -> StringNode = a_node.val;
                     link_name = str_node.tok.value;
@@ -1996,7 +2051,7 @@ func consume_annotations(anns -> Vector(Struct), default_name -> String) -> Syst
             res.compiler_link_name = link_name;
             res.ann_flags = res.ann_flags | FLAG_ANN_COMP_LINK;
         } else {
-            WhitelangExceptions.throw_type_error(ann_node.pos, "Unknown system annotation: @" + name + ". User-defined annotations are not supported.");
+            throw_type_error(ann_node.pos, "Unknown system annotation: @" + name + ". User-defined annotations are not supported.");
         }
         i += 1;
     }
@@ -2047,7 +2102,7 @@ func string_to_int(val_str -> String, pos -> Position) -> Int {
         if is_valid {
             val = val * base_val + digit;
         } else {
-            WhitelangExceptions.throw_invalid_syntax(pos, "Invalid character in numeric literal '" + val_str + "'");
+            throw_invalid_syntax(pos, "Invalid character in numeric literal '" + val_str + "'");
             return 0;
         }
         j += 1;
@@ -2190,7 +2245,7 @@ func string_to_long(val_str -> String, pos -> Position) -> Long {
         if is_valid {
             val = val * base_val + digit;
         } else {
-            WhitelangExceptions.throw_invalid_syntax(pos, "Invalid character in numeric literal '" + val_str + "'");
+            throw_invalid_syntax(pos, "Invalid character in numeric literal '" + val_str + "'");
             return 0L;
         }
         
@@ -2311,6 +2366,21 @@ func to_normpath(path -> String) -> String {
     return res;
 }
 
+func import_security_path(path -> String) -> String {
+    if (sys.OS != "WINDOWS") { return path; }
+    let result -> String = "";
+    let i -> Int = 0;
+    while (i < path.length()) {
+        let ch -> Char = path[i];
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = Char(Int(ch) + 32);
+        }
+        result += ch;
+        i += 1;
+    }
+    return result;
+}
+
 func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> String {
     if (raw_path.ends_with(".wl")) {
         let final_path -> String = "";
@@ -2322,13 +2392,14 @@ func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> 
 
         let active_wl_path -> String = sys.env.get_env("WL_PATH");
         if (active_wl_path is !null) {
-            let std_root -> String = to_normpath(active_wl_path + "/std");
+            let std_root -> String = import_security_path(to_normpath(active_wl_path + "/std"));
             let internal_root -> String = std_root + "/internal";
-            let importer -> String = to_normpath(c.current_dir);
-            let targets_internal -> Bool = final_path == internal_root || final_path.starts_with(internal_root + "/");
+            let importer -> String = import_security_path(to_normpath(c.current_dir));
+            let checked_final_path -> String = import_security_path(final_path);
+            let targets_internal -> Bool = checked_final_path == internal_root || checked_final_path.starts_with(internal_root + "/");
             let importer_is_std -> Bool = importer == std_root || importer.starts_with(std_root + "/");
             if (targets_internal && !importer_is_std) {
-                WhitelangExceptions.throw_import_error(pos, "Module '" + raw_path + "' is internal to the standard library.");
+                throw_import_error(pos, "Module '" + raw_path + "' is internal to the standard library.");
                 return "";
             }
         }
@@ -2337,14 +2408,15 @@ func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> 
 
     let wl_path -> String = sys.env.get_env("WL_PATH");
     if (wl_path is null) {
-        WhitelangExceptions.throw_environment_error("Missing 'WL_PATH' variable.");
+        throw_environment_error("Missing 'WL_PATH' variable.");
     }
 
-    let std_root -> String = to_normpath(wl_path + "/std");
-    let importer -> String = to_normpath(c.current_dir);
+    let std_root -> String = import_security_path(to_normpath(wl_path + "/std"));
+    let importer -> String = import_security_path(to_normpath(c.current_dir));
     let importer_is_std -> Bool = importer == std_root || importer.starts_with(std_root + "/");
-    if ((raw_path == "internal" || raw_path.starts_with("internal/") || raw_path.starts_with("internal\\")) && !importer_is_std) {
-        WhitelangExceptions.throw_import_error(pos, "Module '" + raw_path + "' is internal to the standard library.");
+    let checked_raw_path -> String = import_security_path(raw_path);
+    if ((checked_raw_path == "internal" || checked_raw_path.starts_with("internal/") || checked_raw_path.starts_with("internal\\")) && !importer_is_std) {
+        throw_import_error(pos, "Module '" + raw_path + "' is internal to the standard library.");
         return "";
     }
 
@@ -2358,7 +2430,7 @@ func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> 
         return to_normpath(file_entry);
     }
 
-    WhitelangExceptions.throw_import_error(pos, "Cannot find module '" + raw_path + "'. Searched:\n - " + pkg_entry + "\n - " + file_entry);
+    throw_import_error(pos, "Cannot find module '" + raw_path + "'. Searched:\n - " + pkg_entry + "\n - " + file_entry);
     return "";
 }
 
@@ -2532,7 +2604,7 @@ func check_out_index(c -> Compiler, target_node -> Struct, index_node -> Struct,
         let idx_val -> Long = string_to_long(i_node.tok.value, i_node.pos);
 
         if (idx_val < 0) {
-            WhitelangExceptions.throw_index_error(pos, "Negative index " + val_str + " is not supported yet.");
+            throw_index_error(pos, "Negative index " + val_str + " is not supported yet.");
         }
 
         let base_target -> BaseNode = target_node;
@@ -2541,7 +2613,7 @@ func check_out_index(c -> Compiler, target_node -> Struct, index_node -> Struct,
             let count -> Int = vec_node.count;
             
             if (idx_val >= count) {
-                WhitelangExceptions.throw_index_error(pos, "Index " + val_str + " is out of bounds for vector of size " + count + ".");
+                throw_index_error(pos, "Index " + val_str + " is out of bounds for vector of size " + count + ".");
             }
         }
 
@@ -2550,7 +2622,7 @@ func check_out_index(c -> Compiler, target_node -> Struct, index_node -> Struct,
             let s_len -> Int = str_node.tok.value.length();
 
             if (idx_val >= s_len) {
-                WhitelangExceptions.throw_index_error(pos, "Index " + val_str + " is out of bounds for string of length " + s_len + ".");
+                throw_index_error(pos, "Index " + val_str + " is out of bounds for string of length " + s_len + ".");
             }
         }
     }

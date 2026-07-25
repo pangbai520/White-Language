@@ -2,12 +2,14 @@
 import "builtin"
 import "file"
 import "process"
+import Dict from "dict"
 
 let GLOBAL_ERROR_COUNT -> Int = 0;
 let LAST_ERROR_FILE -> String = "";
 let CLEAN_TMP_LL -> String = "";
 let ACTIVE_FILE -> file.File = null;
 let ERROR_BUFFER -> Vector(String) = null;
+let REPORTED_ERRORS -> Dict = null;
 
 struct Position(
     idx  -> Int,
@@ -39,6 +41,11 @@ func abort_and_clean(status -> Int) -> Void {
 }
 
 func report_error(pos -> Position, name -> String, details -> String) -> Void {
+    let error_key -> String = pos.fn + ":" + pos.ln + ":" + pos.col + ":" + name + ":" + details;
+    if (REPORTED_ERRORS is null) { REPORTED_ERRORS = Dict(32); }
+    if (REPORTED_ERRORS.contains_key(error_key)) { return; }
+    REPORTED_ERRORS.put(error_key, true);
+
     GLOBAL_ERROR_COUNT = GLOBAL_ERROR_COUNT + 1;
 
     let ln -> Int = pos.ln + 1;
