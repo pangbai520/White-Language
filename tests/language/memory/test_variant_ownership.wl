@@ -3,7 +3,7 @@
 // Focus: Variant payloads, Dict slot cleanup, and fallible reference transfer.
 import "builtin"
 import "dict"
-import Error from "builtin/errors"
+import Error from "errors"
 
 
 let DROPPED -> Int = 0;

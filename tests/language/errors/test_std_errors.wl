@@ -5,12 +5,12 @@
 import "builtin"
 import "file"
 import "sys"
-import Error from "builtin/errors"
+import "errors"
 
 func missing_file_reports_error() -> Bool {
     let input -> file.File = file.open("__whitelang_missing_file_7ce66f31__")?;
     catch(err) {
-        return err == Error.FileNotFound;
+        return err == errors.Error.FileNotFound;
     }
     input.close();
     return false;
@@ -19,7 +19,7 @@ func missing_file_reports_error() -> Bool {
 func missing_env_reports_error() -> Bool {
     let value -> String = sys.env.get("__WHITELANG_MISSING_ENV_7CE66F31__")?;
     catch(err) {
-        return err == Error.NotFound;
+        return err == errors.Error.NotFound;
     }
     return value is null;
 }

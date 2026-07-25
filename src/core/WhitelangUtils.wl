@@ -1377,14 +1377,6 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
                                 p_idx -= 1;
                             }
                             full_name = full_path + f.field_name;
-                        } else {
-                            full_name = root_name + ".";
-                            let p_idx -> Int = path_parts.length() - 1;
-                            while (p_idx >= 0) {
-                                full_name = full_name + path_parts[p_idx] + ".";
-                                p_idx -= 1;
-                            }
-                            full_name = full_name + f.field_name;
                         }
                         let g_alias_f -> String = c.global_func_aliases.get(full_name);
                         if (g_alias_f is !null) { full_name = g_alias_f; }

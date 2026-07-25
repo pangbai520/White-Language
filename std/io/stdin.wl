@@ -2,7 +2,7 @@
 
 import "internal/io" as standard_io
 import "internal/runtime/string" as runtime_string
-import Error from "builtin/errors"
+import Error from "errors"
 
 const __BUFFER_SIZE -> Int = 8192;
 
@@ -98,7 +98,7 @@ func read(max_bytes -> Int) -> String? {
 }
 
 func read_exact(byte_count -> Int) -> String? {
-// read exactly byte_count bytes, a short final read reports EndOfFile
+// read exactly byte_count bytes; a short final read reports EndOfFile
     if (byte_count < 0) { throw Error.InvalidArgument; }
     let result -> String = runtime_string.alloc(Long(byte_count));
     if (result is null) { throw Error.OutOfMemory; }
@@ -149,7 +149,7 @@ func read_until(delimiter -> Char) -> String? {
 }
 
 func read_line() -> String? {
-// remove one trailing LF or CRLF, EOF remains distinct from an empty line
+// remove one trailing LF or CRLF; EOF remains distinct from an empty line
     let line -> String = read_until('\n')?;
     let end -> Int = line.length();
     if (end > 0 && line[end - 1] == '\n') { end -= 1; }

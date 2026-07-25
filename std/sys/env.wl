@@ -4,7 +4,7 @@ import * from "target.wl"
 import "internal/platform/windows"
 import "internal/platform/posix"
 import "internal/platform/errors" as platform_errors
-import Error from "builtin/errors"
+import Error from "errors"
 
 func get(name -> String) -> String? {
     if (name is null || name.length() == 0) { throw Error.InvalidArgument; }

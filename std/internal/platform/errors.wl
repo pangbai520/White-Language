@@ -1,7 +1,7 @@
 // platform error conversion
 
 import * from "../../sys/target.wl"
-import Error from "../../builtin/errors.wl"
+import Error from "../../errors.wl"
 import "windows.wl"
 import "posix.wl"
 

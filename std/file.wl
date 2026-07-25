@@ -5,7 +5,7 @@ import "internal/platform/windows"
 import "internal/platform/posix"
 import "internal/platform/errors" as platform_errors
 import "internal/runtime/string" as runtime_string
-import Error from "builtin/errors"
+import Error from "errors"
 
 const SEEK_SET -> Int = 0;
 const SEEK_CUR -> Int = 1;

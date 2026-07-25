@@ -5,7 +5,7 @@ import "builtin"
 
 
 func fail_func() -> Int? {
-    throw builtin.Error.Unknown;
+    throw Error.Unknown;
 }
 
 func test_loop_break() -> Void {

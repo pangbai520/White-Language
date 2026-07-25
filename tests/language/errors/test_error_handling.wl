@@ -3,7 +3,7 @@
 // Focus: Fallible function propagation (?), catch blocks with control flow, and complex type support.
 
 import "builtin"
-import Error from "builtin/errors"
+import Error from "errors"
 
 func may_fail(x -> Int) -> Int? {
     if (x < 0) { throw Error.PermissionDenied; }

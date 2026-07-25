@@ -3,6 +3,7 @@ import "builtin"
 import "sys"
 import "process"
 import "file"
+import Error from "errors"
 
 // Core components
 import "core/WhitelangTokens.wl"

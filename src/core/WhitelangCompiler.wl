@@ -4267,19 +4267,23 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
                 is_module = true;
             } else {
                 let mapped_root -> String = c.current_file_type_aliases.get(root_name);
+                if (mapped_root is null) {
+                    let local_type_name -> String = c.current_package_prefix + root_name;
+                    if (c.struct_table.get(local_type_name) is !null) {
+                        mapped_root = local_type_name;
+                    }
+                }
                 if (mapped_root is !null) {
                     full_name = mapped_root + ".";
-                } else {
-                    full_name = root_name + ".";
-                }
-                let p_idx -> Int = path_parts.length() - 1;
-                while (p_idx >= 0) {
-                    full_name = full_name + path_parts[p_idx] + ".";
-                    p_idx -= 1;
-                }
-                full_name = full_name + node.field_name;
-                if (c.global_symbol_table.get(full_name) is !null) {
-                    is_module = true;
+                    let p_idx -> Int = path_parts.length() - 1;
+                    while (p_idx >= 0) {
+                        full_name = full_name + path_parts[p_idx] + ".";
+                        p_idx -= 1;
+                    }
+                    full_name = full_name + node.field_name;
+                    if (c.global_symbol_table.get(full_name) is !null) {
+                        is_module = true;
+                    }
                 }
             }
         }
@@ -8333,6 +8337,11 @@ func compile(c -> Compiler, node -> Struct) -> Void {
     let fake_syms -> Vector(Struct) = [];
     fake_syms.append(star_sym);
 
+    // error is a language-level prelude item, not part of the builtin namespace
+    let fake_error_path -> Token = Token(type=TOK_STR_LIT, value="errors", line=0, col=0);
+    let fake_error_import -> ImportNode = ImportNode(type=NODE_IMPORT, path_tok=fake_error_path, symbols=fake_syms, alias_tok=null, pos=fake_pos);
+    compile_import(c, fake_error_import);
+
     // builtin is the prelude and carries the hooks required by generated code
     let fake_builtin_path -> Token = Token(type=TOK_STR_LIT, value="builtin", line=0, col=0);
     let fake_builtin_import -> ImportNode = ImportNode(type=NODE_IMPORT, path_tok=fake_builtin_path, symbols=fake_syms, alias_tok=null, pos=fake_pos);
@@ -8340,6 +8349,10 @@ func compile(c -> Compiler, node -> Struct) -> Void {
 
     let fake_import -> ImportNode = ImportNode(type=NODE_IMPORT, path_tok=fake_path, symbols=fake_syms, alias_tok=null, pos=fake_pos);
     compile_import(c, fake_import);
+
+    // prelude dependencies must not become implicit module namespaces
+    c.loaded_files.remove("errors");
+    c.current_file_visible_prefixes.remove("errors");
 
     if (c.struct_table.get("dict.Variant") is null) {
         WhitelangExceptions.throw_import_error(fake_pos, "Missing required intrinsic item '@CompilerIntrinsic struct Variant'. The standard library 'dict.wl' may be corrupted or missing.");

@@ -4,7 +4,7 @@ import "sys"
 import "internal/platform/windows"
 import "internal/platform/posix"
 import "internal/platform/errors" as platform_errors
-import Error from "builtin/errors"
+import Error from "errors"
 
 const STDIN -> Int = 0;
 const STDOUT -> Int = 1;
