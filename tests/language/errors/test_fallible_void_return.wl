@@ -1,0 +1,31 @@
+// Test: FALLIBLE_VOID_IMPLICIT_SUCCESS
+// File: tests/language/errors/test_fallible_void_return.wl
+// Focus: Falling off the end of Void? functions and methods returns success.
+
+import "builtin"
+
+func succeeds() -> Void? {
+}
+
+class Worker {
+    method succeeds() -> Void? {
+    }
+}
+
+func main() -> Int {
+    succeeds()?;
+    catch(err) {
+        builtin.print("FAIL: Void? function returned an undefined error");
+        return 1;
+    }
+
+    let worker -> Worker = Worker();
+    worker.succeeds()?;
+    catch(err) {
+        builtin.print("FAIL: Void? method returned an undefined error");
+        return 2;
+    }
+
+    builtin.print("PASS: Void? implicit success");
+    return 0;
+}

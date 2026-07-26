@@ -1,0 +1,19 @@
+error JsonError {
+    UnexpectedEnd,
+    UnexpectedToken,
+    TrailingData,
+    InvalidUtf8,
+    InvalidNumber,
+    InvalidEscape,
+    InvalidControlCharacter,
+    InvalidUnicodeEscape,
+    NestingTooDeep,
+    TypeMismatch,
+    MissingKey,
+    IndexOutOfBounds,
+    NumberNotInteger,
+    NumberOutOfRange,
+    InvalidIndent,
+    InvalidOption,
+    InvalidValue
+}

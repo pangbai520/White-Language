@@ -2471,7 +2471,8 @@ func must_terminate(c -> Compiler, node -> Struct) -> Bool {
     if (node is null) { return false; }
     let base -> BaseNode = node;
 
-    if (base.type == NODE_RETURN || base.type == NODE_BREAK || base.type == NODE_CONTINUE) {
+    if (base.type == NODE_RETURN || base.type == NODE_BREAK ||
+        base.type == NODE_CONTINUE || base.type == NODE_THROW) {
         return true;
     }
 
@@ -2497,6 +2498,15 @@ func must_terminate(c -> Compiler, node -> Struct) -> Bool {
                 must_terminate(c, if_node.else_body)) {
                 return true;
             }
+        }
+    }
+
+    if (base.type == NODE_WHILE) {
+        let loop -> WhileNode = node;
+        let condition -> BaseNode = loop.condition;
+        if (condition is !null && condition.type == NODE_BOOL) {
+            let boolean -> BooleanNode = loop.condition;
+            return boolean.value == 1 && !loop_body_has_break(loop.body);
         }
     }
     return false;
@@ -2926,9 +2936,14 @@ func compile_while(c -> Compiler, node -> WhileNode) -> CompileResult {
 
     c.output_file.write("\n" + label_body + ":\n");
     compile_node(c, node.body);
-    c.output_file.write(c.indent + "br label %" + label_cond + "\n");
+    if (!must_terminate(c, node.body)) {
+        c.output_file.write(c.indent + "br label %" + label_cond + "\n");
+    }
 
     c.output_file.write("\n" + label_end + ":\n");
+    if (must_terminate(c, node)) {
+        c.output_file.write(c.indent + "unreachable\n");
+    }
     c.loop_stack = current_scope.parent;
     return void_result();
 }
@@ -3040,6 +3055,33 @@ func compile_ptr_assign(c -> Compiler, node -> PtrAssignNode) -> CompileResult {
     return val_res;
 }
 
+func loop_body_has_break(node -> Struct) -> Bool {
+    if (node is null) { return false; }
+    let base -> BaseNode = node;
+    if (base.type == NODE_BREAK) { return true; }
+    if (base.type == NODE_WHILE || base.type == NODE_FOR) { return false; }
+    if (base.type == NODE_BLOCK) {
+        let block -> BlockNode = node;
+        let i -> Int = 0;
+        while (block.stmts is !null && i < block.stmts.length()) {
+            if (loop_body_has_break(block.stmts[i])) { return true; }
+            i += 1;
+        }
+        return false;
+    }
+    if (base.type == NODE_IF) {
+        let branch -> IfNode = node;
+        return loop_body_has_break(branch.body) ||
+               loop_body_has_break(branch.else_body);
+    }
+    if (base.type == NODE_CATCH) {
+        let caught -> CatchNode = node;
+        return loop_body_has_break(caught.stmt) ||
+               loop_body_has_break(caught.body);
+    }
+    return false;
+}
+
 func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     let raw_name -> String = node.name_tok.value;
 
@@ -3125,35 +3167,18 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
 
     compile_node(c, node.body);
 
-    let block -> BlockNode = node.body;
-    let stmts -> Vector(Struct) = block.stmts;
-    let last_stmt -> Struct = null;
-    
-    if (stmts is !null) {
-        let len -> Int = stmts.length();
-        if (len > 0) {
-            last_stmt = stmts[len - 1];
-        }
-    }
-
-    let has_term -> Bool = false;
-    if (last_stmt is !null) {
-        let base -> BaseNode = last_stmt;
-        if (base.type == NODE_RETURN) { has_term = true; }
-    }
+    let has_term -> Bool = must_terminate(c, node.body);
 
     if (!has_term) {
         cleanup_all_scopes(c);
         if (ret_type_id == TYPE_VOID) {
             c.output_file.write(c.indent + "ret void\n");
+        } else if (is_fallible_type(c, ret_type_id) &&
+                   get_inner_fallible_type(c, ret_type_id) == TYPE_VOID) {
+            c.output_file.write(c.indent + "ret " + llvm_ret_type + " zeroinitializer\n");
         } else {
-            let zero_val -> String = "0";
-            if (ret_type_id == TYPE_FLOAT) { zero_val = "0.0"; }
-            else if (is_fallible_type(c, ret_type_id)) { zero_val = "undef"; }
-            else if (is_nullable_reference_type(c, ret_type_id)) { zero_val = "null"; }
-            else if (is_pointer_type(c, ret_type_id)) { zero_val = "null"; }
-            
-            c.output_file.write(c.indent + "ret " + llvm_ret_type + " " + zero_val + "\n");
+            throw_type_error(node.pos, "missing return");
+            c.output_file.write(c.indent + "ret " + llvm_ret_type + " undef\n");
         }
     }
     
@@ -3239,31 +3264,18 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
     hoist_allocas(c, node.body);
     compile_node(c, node.body);
 
-    let block -> BlockNode = node.body;
-    let stmts -> Vector(Struct) = block.stmts;
-    let last_stmt -> Struct = null;
-    if (stmts is !null) {
-        let len -> Int = stmts.length();
-        if (len > 0) { last_stmt = stmts[len - 1]; }
-    }
-
-    let has_term -> Bool = false;
-    if (last_stmt is !null) {
-        let base -> BaseNode = last_stmt;
-        if (base.type == NODE_RETURN) { has_term = true; }
-    }
+    let has_term -> Bool = must_terminate(c, node.body);
 
     if (!has_term) {
         cleanup_all_scopes(c);
         if (ret_type_id == TYPE_VOID) {
             c.output_file.write(c.indent + "ret void\n");
+        } else if (is_fallible_type(c, ret_type_id) &&
+                   get_inner_fallible_type(c, ret_type_id) == TYPE_VOID) {
+            c.output_file.write(c.indent + "ret " + llvm_ret_type + " zeroinitializer\n");
         } else {
-            let zero_val -> String = "0";
-            if (ret_type_id == TYPE_FLOAT) { zero_val = "0.0"; }
-            else if (is_fallible_type(c, ret_type_id)) { zero_val = "undef"; }
-            else if (is_nullable_reference_type(c, ret_type_id)) { zero_val = "null"; }
-            else if (is_pointer_type(c, ret_type_id)) { zero_val = "null"; }
-            c.output_file.write(c.indent + "ret " + llvm_ret_type + " " + zero_val + "\n");
+            throw_type_error(node.pos, "missing return");
+            c.output_file.write(c.indent + "ret " + llvm_ret_type + " undef\n");
         }
     }
     
