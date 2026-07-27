@@ -263,6 +263,21 @@ class FrontendWorkspace {
             );
         }
 
+        return self.resolve_reference(path, reference);
+    }
+
+    method resolve_reference(
+        path -> String,
+        reference -> SymbolReference
+    ) -> SymbolDefinition {
+        let document -> WorkspaceSource = self.find(path);
+        if (document is null ||
+            document.result is null ||
+            !document.result.valid ||
+            reference is null) {
+            return null;
+        }
+
         if (reference.definition is !null) {
             let definition -> SymbolDefinition = reference.definition;
             if (definition.kind == SYMBOL_IMPORT) {

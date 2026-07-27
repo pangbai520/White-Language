@@ -83,4 +83,24 @@ class SourceMap {
             utf16_column=utf16_column
         );
     }
+
+    method range(
+        file -> String,
+        line -> Int,
+        byte_column -> Int,
+        byte_width -> Int
+    ) -> WhitelangExceptions.SourceRange {
+        // token ranges stay line-local; multiline trivia is handled by the token encoder
+        let width -> Int = byte_width;
+        if (width < 0) { width = 0; }
+        let start -> WhitelangExceptions.SourcePosition =
+            self.position(line, byte_column);
+        let finish -> WhitelangExceptions.SourcePosition =
+            self.position(line, byte_column + width);
+        return WhitelangExceptions.SourceRange(
+            file=file,
+            start=start,
+            end=finish
+        );
+    }
 }

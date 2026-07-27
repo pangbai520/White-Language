@@ -1,6 +1,6 @@
 // semantic token collection and protocol encoding
 import Dict from "dict"
-import "../protocol/_pkg.wl" as protocol
+import "json"
 import "../frontend/_pkg.wl" as source
 import "../compiler/_pkg.wl" as compiler
 
@@ -81,7 +81,11 @@ func __binding_from_definition(
     );
 }
 
-func __build_bindings(result -> source.FrontendResult) -> Dict {
+func __build_bindings(
+    result -> source.FrontendResult,
+    workspace -> source.FrontendWorkspace,
+    path -> String
+) -> Dict {
     let bindings -> Dict = Dict(64);
     __index_document_symbols(result.syntax.symbols, bindings, true);
 
@@ -103,13 +107,19 @@ func __build_bindings(result -> source.FrontendResult) -> Dict {
     while (i < result.semantics.references.length()) {
         let reference -> source.SymbolReference =
             result.semantics.references[i];
-        if (reference.definition is !null) {
+        let definition -> source.SymbolDefinition = reference.definition;
+        if (definition is null ||
+            definition.kind == source.SYMBOL_IMPORT ||
+            definition.kind == source.SYMBOL_MODULE) {
+            definition = workspace.resolve_reference(path, reference);
+        }
+        if (definition is !null) {
             bindings.put(
                 __token_key(
                     reference.range.start.line,
                     reference.range.start.utf16_column
                 ),
-                __binding_from_definition(reference.definition, false)
+                __binding_from_definition(definition, false)
             );
         }
         i += 1;
@@ -292,9 +302,8 @@ func semantic_tokens(
         return tokens;
     }
 
-    let bindings -> Dict = __build_bindings(result);
-    let source_map -> source.SourceMap =
-        source.SourceMap(result.syntax.source);
+    let bindings -> Dict = __build_bindings(result, workspace, path);
+    let source_map -> source.SourceMap = result.syntax.source_map;
     let lexer -> compiler.WhitelangLexer.Lexer =
         compiler.WhitelangLexer.new_lexer_trivia(
             result.syntax.path,
@@ -340,19 +349,6 @@ func semantic_tokens(
                    token.type == compiler.WhitelangTokens.TOK_TYPE) {
             let binding -> __TokenBinding =
                 bindings[__token_key(token.line, start.utf16_column)];
-            if (binding is null ||
-                binding.kind == source.SYMBOL_IMPORT ||
-                binding.kind == source.SYMBOL_MODULE) {
-                let resolved -> source.SymbolDefinition =
-                    workspace.definition(
-                        path,
-                        token.line,
-                        start.utf16_column
-                    );
-                if (resolved is !null) {
-                    binding = __binding_from_definition(resolved, false);
-                }
-            }
             if (binding is !null) {
                 token_type = __semantic_type(binding.kind);
                 modifiers = __binding_modifiers(binding);
@@ -381,30 +377,37 @@ func semantic_tokens(
     return tokens;
 }
 
-func __encode_modifiers(modifiers -> Vector(String)) -> String {
-    let result -> String = "[";
+func __json_modifiers(modifiers -> Vector(String)) -> json.Value? {
+    let result -> json.Value = json.array();
     let i -> Int = 0;
     while (i < modifiers.length()) {
-        if (i > 0) { result += ","; }
-        result += protocol.quote(modifiers[i]);
+        result.append(json.string(modifiers[i])?)?;
         i += 1;
     }
-    return result + "]";
+    return result;
 }
 
-func encode_semantic_tokens(tokens -> Vector(Struct)) -> String {
-    let result -> String = "[";
+func __encode_semantic_tokens(tokens -> Vector(Struct)) -> String? {
+    let result -> json.Value = json.array();
     let i -> Int = 0;
     while (i < tokens.length()) {
         let token -> SemanticToken = tokens[i];
-        if (i > 0) { result += ","; }
-        result +=
-            "{\"line\":" + token.line +
-            ",\"character\":" + token.character +
-            ",\"length\":" + token.length +
-            ",\"type\":" + protocol.quote(token.token_type) +
-            ",\"modifiers\":" + __encode_modifiers(token.modifiers) + "}";
+        let encoded -> json.Value = json.object();
+        encoded.set("line", json.integer(Long(token.line))?)?;
+        encoded.set("character", json.integer(Long(token.character))?)?;
+        encoded.set("length", json.integer(Long(token.length))?)?;
+        encoded.set("type", json.string(token.token_type)?)?;
+        encoded.set("modifiers", __json_modifiers(token.modifiers)?)?;
+        result.append(encoded)?;
         i += 1;
     }
-    return result + "]";
+    return json.encode(result)?;
+}
+
+func encode_semantic_tokens(tokens -> Vector(Struct)) -> String {
+    let encoded -> String = __encode_semantic_tokens(tokens)?;
+    catch(err) {
+        return "[]";
+    }
+    return encoded;
 }

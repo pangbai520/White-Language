@@ -17,6 +17,12 @@ func main() -> Int {
     let document -> source.FrontendDocument =
         source.parse_document("memory.wl", source_text);
 
+    if (document.source_map is null ||
+        document.source_map.line_count() != 8) {
+        builtin.print("FAIL: document source map");
+        return 1;
+    }
+
     if (document.symbols.length() != 3) {
         builtin.print("FAIL: top-level document symbols");
         return 1;

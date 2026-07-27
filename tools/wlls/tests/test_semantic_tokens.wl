@@ -6,6 +6,25 @@ import "builtin"
 import "../internal/frontend/_pkg.wl" as source
 import "../internal/analysis/_pkg.wl" as analysis
 
+func has_token(
+    tokens -> Vector(Struct),
+    line -> Int,
+    character -> Int,
+    token_type -> String
+) -> Bool {
+    let i -> Int = 0;
+    while (i < tokens.length()) {
+        let token -> analysis.SemanticToken = tokens[i];
+        if (token.line == line &&
+            token.character == character &&
+            token.token_type == token_type) {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
 func main() -> Int {
     let path -> String = "memory.wl";
     let text -> String =
@@ -83,6 +102,25 @@ func main() -> Int {
         constant_use.modifiers.length() != 1 ||
         constant_use.modifiers[0] != "readonly") {
         builtin.print("FAIL: semantic reference tokens");
+        return 1;
+    }
+
+    workspace.update(
+        "project/math.wl",
+        1,
+        "func add(left -> Int, right -> Int) -> Int { return left + right; }\n"
+    );
+    let imported_path -> String = "project/main.wl";
+    let imported -> source.FrontendResult = workspace.update(
+        imported_path,
+        1,
+        "import add from \"math.wl\"\n" +
+        "func main() -> Int { return add(1, 2); }\n"
+    );
+    let imported_tokens -> Vector(Struct) =
+        analysis.semantic_tokens(imported, workspace, imported_path);
+    if (!has_token(imported_tokens, 1, 28, "function")) {
+        builtin.print("FAIL: imported function token");
         return 1;
     }
 

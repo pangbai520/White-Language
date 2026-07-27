@@ -148,7 +148,7 @@ func __definition(
     let definition -> SymbolDefinition = SymbolDefinition(
         token.value,
         kind,
-        token_span(document.syntax.path, document.syntax.source, token)
+        token_span(document.syntax.path, document.syntax.source_map, token)
     );
     document.definitions.append(definition);
     scope.define(definition);
@@ -268,7 +268,7 @@ func __reference(
 ) -> SymbolReference {
     let reference -> SymbolReference = SymbolReference(
         token.value,
-        token_span(document.syntax.path, document.syntax.source, token),
+        token_span(document.syntax.path, document.syntax.source_map, token),
         scope.find(token.value)
     );
     document.references.append(reference);
