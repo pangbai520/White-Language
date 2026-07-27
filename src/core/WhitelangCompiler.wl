@@ -1143,6 +1143,9 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             );
             c.struct_table.put(e_name, info);
             c.struct_id_map.put("" + new_id, info);
+            if (info.is_error) {
+                c.error_types.append(info);
+            }
         }
         i += 1;
     }
@@ -1243,12 +1246,21 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
             let m_idx -> Int = 0;
             while (m_idx < m_len) {
                 let m_node -> MethodDefNode = m_vec[m_idx];
-                let m_raw_name -> String = m_node.name_tok.value;
+                let m_raw_name -> String = method_base_name(c, m_node);
 
                 let ret_id -> Int = resolve_type(c, m_node.return_type);
                 if (ret_id == TYPE_AUTO) { 
                     throw_type_error(m_node.pos, "Auto return type deduction is not supported in methods."); 
                     return; 
+                }
+                if (m_node.name_tok.value == "$type") {
+                    let target_id -> Int = ret_id;
+                    if (is_fallible_type(c, target_id)) {
+                        target_id = get_inner_fallible_type(c, target_id);
+                    }
+                    if (!is_conversion_target(target_id)) {
+                        throw_type_error(m_node.pos, "conversion target " + get_type_name(c, target_id) + " is not a built-in value type");
+                    }
                 }
                 let arg_types -> Vector(Struct) = [];
 
@@ -1272,7 +1284,15 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                 let m_llvm_name -> String = mangle_wl_name(c, c_name + ".", m_raw_name, arg_types);
                 
                 if (c.func_table.get(m_key) is !null) {
-                    throw_name_error(m_node.pos, "Method '" + m_key + "' is already defined.");
+                    if (m_node.name_tok.value == "$type") {
+                        let target_id -> Int = ret_id;
+                        if (is_fallible_type(c, target_id)) {
+                            target_id = get_inner_fallible_type(c, target_id);
+                        }
+                        throw_name_error(m_node.pos, "class '" + c_name + "' already defines a conversion to " + get_type_name(c, target_id));
+                    } else {
+                        throw_name_error(m_node.pos, "Method '" + m_key + "' is already defined.");
+                    }
                     return;
                 }
 
@@ -2457,7 +2477,16 @@ func compile_ast_pass(c -> Compiler, p_mod -> ParsedModule) -> Void {
     i = 0;
     while (i < len) {
         let base -> BaseNode = stmts[i];
-        if (base.type != NODE_IMPORT) {
+        if (base.type == NODE_ENUM_DEF) {
+            compile_node(c, stmts[i]);
+        }
+        i += 1;
+    }
+
+    i = 0;
+    while (i < len) {
+        let base -> BaseNode = stmts[i];
+        if (base.type != NODE_IMPORT && base.type != NODE_ENUM_DEF) {
             compile_node(c, stmts[i]);
         }
         i += 1;
@@ -2749,7 +2778,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
 
         if is_valid_struct {
             let fake_args -> Vector(Struct) = [];
-            let fake_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=fake_args, pos=node.pos);
+            let fake_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=fake_args, pos=node.pos, preserve_fallible=false);
             let val_res -> CompileResult = null;
             
             if (s_info.is_class) {
@@ -3194,7 +3223,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
 }
 
 func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNode) -> CompileResult {
-    let raw_name -> String = node.name_tok.value;
+    let raw_name -> String = method_base_name(c, node);
     let m_name -> String = class_name + "_" + raw_name;
     
     let f_info -> FuncInfo = c.func_table.get(m_name);
@@ -4139,7 +4168,7 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
     let mm_idx -> Int = 0;
     while (mm_idx < mm_len) {
         let m_node -> MethodDefNode = my_methods[mm_idx];
-        let raw_m_name -> String = m_node.name_tok.value;
+        let raw_m_name -> String = method_base_name(c, m_node);
         
         if (raw_m_name != "$init") {
             let m_name -> String = class_name + "_" + raw_m_name;
@@ -5199,7 +5228,7 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
         if has_get {
             let fake_args -> Vector(Struct) = [];
             fake_args.append(ArgNode(val=node.index_node, name=null));
-            let fake_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=fake_args, pos=node.pos);
+            let fake_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=fake_args, pos=node.pos, preserve_fallible=false);
             return compile_class_method_call(c, s_info, target_res, "get", fake_call);
         }
     }
@@ -5356,7 +5385,7 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
             let fake_args -> Vector(Struct) = [];
             fake_args.append(ArgNode(val=node.index_node, name=null));
             fake_args.append(ArgNode(val=node.value, name=null));
-            let fake_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=fake_args, pos=node.pos);
+            let fake_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=fake_args, pos=node.pos, preserve_fallible=false);
             compile_class_method_call(c, s_info, target_res, "put", fake_call);
             return void_result();
         }
@@ -5669,7 +5698,7 @@ func compile_map_lit(c -> Compiler, lit_node -> Struct) -> CompileResult {
 
     let init_args -> Vector(Struct) = [];
     init_args.append(ArgNode(val=cap_node, name=null));
-    let fake_init_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=init_args, pos=node.pos);
+    let fake_init_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=init_args, pos=node.pos, preserve_fallible=false);
 
     let dict_res -> CompileResult = compile_class_init(c, dict_info, fake_init_call);
 
@@ -5680,7 +5709,7 @@ func compile_map_lit(c -> Compiler, lit_node -> Struct) -> CompileResult {
         let put_args -> Vector(Struct) = [];
         put_args.append(ArgNode(val=pair.key, name=null));
         put_args.append(ArgNode(val=pair.value, name=null));
-        let fake_put_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=put_args, pos=node.pos);
+        let fake_put_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=put_args, pos=node.pos, preserve_fallible=false);
         
         compile_class_method_call(c, dict_info, dict_res, "put", fake_put_call);
         i += 1;
@@ -5731,7 +5760,21 @@ func compile_try_unwrap(c -> Compiler, node -> TryUnwrapNode) -> CompileResult {
     let fallible_type -> Int = expr_res.type;
     
     if (!is_fallible_type(c, fallible_type)) {
+        let expr_base -> BaseNode = node.expr;
+        if (expr_base.type == NODE_CALL) {
+            let call -> CallNode = node.expr;
+            let callee_base -> BaseNode = call.callee;
+            if (callee_base.type == NODE_VAR_ACCESS) {
+                let callee -> VarAccessNode = call.callee;
+                let target_type -> Int = get_builtin_cast_target(callee.name_tok.value);
+                if (target_type != 0) {
+                    throw_invalid_syntax(node.pos, "conversion to " + get_type_name(c, target_type) + " cannot fail; remove '?'");
+                    return void_result();
+                }
+            }
+        }
         throw_invalid_syntax(node.pos, "Cannot use '?' on a non-fallible type.");
+        return void_result();
     }
     
     let inner_type -> Int = get_inner_fallible_type(c, fallible_type);
@@ -7090,27 +7133,8 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         }
 
         if (func_name != "") {
-            let is_cast -> Bool = false;
-            let cast_target -> Int = 0;
-
-            if (func_name == "Int" || func_name == "Int32") { cast_target = TYPE_INT; is_cast = true; }
-            else if (func_name == "Long" || func_name == "Int64") { cast_target = TYPE_LONG; is_cast = true; }
-            else if (func_name == "Float" || func_name == "Float64") { cast_target = TYPE_FLOAT; is_cast = true; }
-            else if (func_name == "Byte" || func_name == "UInt8") { cast_target = TYPE_BYTE; is_cast = true; }
-            else if (func_name == "Int8") { cast_target = TYPE_INT8; is_cast = true; }
-            else if (func_name == "Int16") { cast_target = TYPE_INT16; is_cast = true; }
-            else if (func_name == "Int128") { cast_target = TYPE_INT128; is_cast = true; }
-            else if (func_name == "UInt16") { cast_target = TYPE_UINT16; is_cast = true; }
-            else if (func_name == "UInt32") { cast_target = TYPE_UINT32; is_cast = true; }
-            else if (func_name == "UInt64") { cast_target = TYPE_UINT64; is_cast = true; }
-            else if (func_name == "UInt128") { cast_target = TYPE_UINT128; is_cast = true; }
-            else if (func_name == "Float32") { cast_target = TYPE_FLOAT32; is_cast = true; }
-            else if (func_name == "IntSize") { cast_target = TYPE_INTSIZE; is_cast = true; }
-            else if (func_name == "UIntSize") { cast_target = TYPE_UINTSIZE; is_cast = true; }
-            else if (func_name == "Bool") { cast_target = TYPE_BOOL; is_cast = true; }
-            else if (func_name == "Char") { cast_target = TYPE_CHAR; is_cast = true; }
-            else if (func_name == "AnyPtr") { cast_target = TYPE_ANYPTR; is_cast = true; }
-            else if (func_name == "String") { cast_target = TYPE_STRING; is_cast = true; }
+            let cast_target -> Int = get_builtin_cast_target(func_name);
+            let is_cast -> Bool = cast_target != 0;
 
             if is_cast {
                 let args -> Vector(Struct) = n_call.args;
@@ -7120,12 +7144,41 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                     return void_result();
                 }
                 let arg_curr -> ArgNode = args[0];
+                if (!validate_explicit_literal_cast(arg_curr.val, cast_target, n_call.pos)) {
+                    return void_result();
+                }
                 let old_exp -> Int = c.expected_type;
                 c.expected_type = 0;
+                let arg_base -> BaseNode = arg_curr.val;
+                if (arg_base.type == NODE_INT && is_integer_type(cast_target) &&
+                    cast_target != TYPE_CHAR) {
+                    c.expected_type = cast_target;
+                }
                 let val_res -> CompileResult = compile_node(c, arg_curr.val);
                 c.expected_type = old_exp;
 
-                return compile_type_cast(c, val_res, cast_target, n_call.pos);
+                let source_info -> StructInfo = c.struct_id_map.get("" + val_res.type);
+                let conversion -> FuncInfo = find_class_conversion(source_info, cast_target);
+                if (conversion is !null) {
+                    let no_args -> Vector(Struct) = [];
+                    let conversion_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=no_args, pos=n_call.pos, preserve_fallible=false);
+                    let converted -> CompileResult = compile_class_method_call(
+                        c,
+                        source_info,
+                        val_res,
+                        conversion_method_name(cast_target),
+                        conversion_call
+                    );
+                    if (is_fallible_type(c, converted.type) && !n_call.preserve_fallible) {
+                        return unwrap_conversion_or_panic(c, converted, val_res.type, cast_target, n_call.pos);
+                    }
+                    return converted;
+                }
+
+                if (is_numeric_literal_expression(arg_curr.val)) {
+                    return compile_type_cast(c, val_res, cast_target, n_call.pos);
+                }
+                return compile_explicit_type_cast(c, val_res, cast_target, n_call.pos, n_call.preserve_fallible);
             }
 
             if (!is_package_call) {
@@ -7722,6 +7775,462 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     return null;
 }
 
+func integer_max_literal(type_id -> Int) -> String {
+    if (type_id == TYPE_INT8) { return "127"; }
+    if (type_id == TYPE_INT16) { return "32767"; }
+    if (type_id == TYPE_INT) { return "2147483647"; }
+    if (type_id == TYPE_LONG || type_id == TYPE_INTSIZE) { return "9223372036854775807"; }
+    if (type_id == TYPE_INT128) { return "170141183460469231731687303715884105727"; }
+    if (type_id == TYPE_BYTE) { return "255"; }
+    if (type_id == TYPE_UINT16) { return "65535"; }
+    if (type_id == TYPE_UINT32) { return "4294967295"; }
+    if (type_id == TYPE_UINT64 || type_id == TYPE_UINTSIZE) { return "18446744073709551615"; }
+    if (type_id == TYPE_UINT128) { return "340282366920938463463374607431768211455"; }
+    return "";
+}
+
+func signed_negative_limit(type_id -> Int) -> UInt128 {
+    if (type_id == TYPE_INT8) { return UInt128(128); }
+    if (type_id == TYPE_INT16) { return UInt128(32768); }
+    if (type_id == TYPE_INT) { return UInt128(2147483648UL); }
+    if (type_id == TYPE_LONG || type_id == TYPE_INTSIZE) { return UInt128(9223372036854775808UL); }
+    if (type_id == TYPE_INT128) { return 170141183460469231731687303715884105728ULL; }
+    return UInt128(0);
+}
+
+func positive_integer_limit(type_id -> Int) -> UInt128 {
+    if (type_id == TYPE_INT8) { return UInt128(127); }
+    if (type_id == TYPE_INT16) { return UInt128(32767); }
+    if (type_id == TYPE_INT) { return UInt128(2147483647); }
+    if (type_id == TYPE_LONG || type_id == TYPE_INTSIZE) { return UInt128(9223372036854775807L); }
+    if (type_id == TYPE_INT128) { return 170141183460469231731687303715884105727ULL; }
+    if (type_id == TYPE_BYTE) { return UInt128(255); }
+    if (type_id == TYPE_UINT16) { return UInt128(65535); }
+    if (type_id == TYPE_UINT32) { return UInt128(4294967295UL); }
+    if (type_id == TYPE_UINT64 || type_id == TYPE_UINTSIZE) { return UInt128(18446744073709551615UL); }
+    if (type_id == TYPE_UINT128) { return 340282366920938463463374607431768211455ULL; }
+    return UInt128(0);
+}
+
+func parse_decimal_float_literal(raw -> String) -> Float {
+    let end -> Int = raw.length();
+    if (raw.ends_with("f") || raw.ends_with("F")) { end -= 1; }
+
+    let result -> Float = 0.0;
+    let fraction_scale -> Float = 0.1;
+    let in_fraction -> Bool = false;
+    let i -> Int = 0;
+    while (i < end) {
+        let ch -> Char = raw[i];
+        if (ch == '.') {
+            in_fraction = true;
+        } else if (ch != '_') {
+            let digit -> Int = Int(ch) - Int('0');
+            if (!in_fraction) {
+                result = result * 10.0 + Float(digit);
+            } else {
+                result += Float(digit) * fraction_scale;
+                fraction_scale *= 0.1;
+            }
+        }
+        i += 1;
+    }
+    return result;
+}
+
+func float_integer_limit(type_id -> Int) -> Float {
+    let bits -> Int = get_type_bitwidth(type_id);
+    if (is_signed_integer(type_id)) { bits -= 1; }
+    let limit -> Float = 1.0;
+    let i -> Int = 0;
+    while (i < bits) {
+        limit *= 2.0;
+        i += 1;
+    }
+    return limit;
+}
+
+func is_numeric_literal_expression(node -> Struct) -> Bool {
+    if (node is null) { return false; }
+    let base -> BaseNode = node;
+    if (base.type == NODE_INT || base.type == NODE_FLOAT ||
+        base.type == NODE_CHAR || base.type == NODE_BOOL) {
+        return true;
+    }
+    if (base.type == NODE_UNARYOP) {
+        let unary -> UnaryOpNode = node;
+        if (unary.op_tok.type == TOK_PLUS || unary.op_tok.type == TOK_SUB) {
+            return is_numeric_literal_expression(unary.node);
+        }
+    }
+    return false;
+}
+
+func validate_explicit_literal_cast(node -> Struct, target_type -> Int, pos -> Position) -> Bool {
+    if (node is null) { return true; }
+    let base -> BaseNode = node;
+    let magnitude -> UInt128 = UInt128(0);
+    let negative -> Bool = false;
+    let literal_text -> String = "";
+    let is_float_literal -> Bool = false;
+    let float_value -> Float = 0.0;
+
+    if (base.type == NODE_INT) {
+        let integer -> IntNode = node;
+        literal_text = integer.tok.value;
+        magnitude = parse_const_uint128(integer.tok.value, integer.pos);
+    } else if (base.type == NODE_FLOAT) {
+        let float_node -> FloatNode = node;
+        literal_text = float_node.tok.value;
+        float_value = parse_decimal_float_literal(float_node.tok.value);
+        is_float_literal = true;
+    } else if (base.type == NODE_CHAR) {
+        let char_node -> CharNode = node;
+        literal_text = "'" + char_node.tok.value + "'";
+        magnitude = UInt128(string_to_int(char_node.tok.value, char_node.pos));
+    } else if (base.type == NODE_BOOL) {
+        return true;
+    } else if (base.type == NODE_UNARYOP) {
+        let unary -> UnaryOpNode = node;
+        let inner_base -> BaseNode = unary.node;
+        if (unary.op_tok.type != TOK_SUB) { return true; }
+        if (inner_base.type == NODE_INT) {
+            let integer -> IntNode = unary.node;
+            literal_text = "-" + integer.tok.value;
+            magnitude = parse_const_uint128(integer.tok.value, integer.pos);
+            negative = magnitude != UInt128(0);
+        } else if (inner_base.type == NODE_FLOAT) {
+            let float_node -> FloatNode = unary.node;
+            literal_text = "-" + float_node.tok.value;
+            float_value = 0.0 - parse_decimal_float_literal(float_node.tok.value);
+            is_float_literal = true;
+        } else {
+            return true;
+        }
+    } else {
+        return true;
+    }
+
+    let target_name -> String = get_type_name(null, target_type);
+    if (is_float_literal) {
+        if (!is_integer_type(target_type) && target_type != TYPE_BOOL) { return true; }
+        let valid -> Bool = true;
+        if (target_type == TYPE_BOOL) {
+            valid = float_value == 0.0 || float_value == 1.0;
+        } else if (target_type == TYPE_CHAR) {
+            valid = float_value >= 0.0 && float_value < 1114112.0 &&
+                    (float_value < 55296.0 || float_value >= 57344.0);
+        } else {
+            let limit -> Float = float_integer_limit(target_type);
+            if (is_unsigned_integer(target_type)) {
+                valid = float_value >= 0.0 && float_value < limit;
+            } else {
+                valid = float_value >= 0.0 - limit && float_value < limit;
+            }
+        }
+        if (!valid) {
+            throw_overflow_error(pos, "constant " + literal_text + " overflows " + target_name);
+            return false;
+        }
+        return true;
+    }
+
+    if (target_type == TYPE_BOOL) {
+        if (negative || magnitude > UInt128(1)) {
+            throw_type_error(pos, "cannot convert constant " + literal_text + " to Bool; expected 0 or 1");
+            return false;
+        }
+        return true;
+    }
+    if (target_type == TYPE_CHAR) {
+        if (negative || magnitude > UInt128(1114111) ||
+            (magnitude >= UInt128(55296) && magnitude <= UInt128(57343))) {
+            throw_overflow_error(pos, "constant " + literal_text + " is not a valid Unicode scalar value");
+            return false;
+        }
+        return true;
+    }
+    if (!is_integer_type(target_type)) { return true; }
+
+    if (!negative) {
+        let max_value -> UInt128 = positive_integer_limit(target_type);
+        if (max_value != UInt128(0) && magnitude > max_value) {
+            throw_overflow_error(pos, "constant " + literal_text + " overflows " + target_name);
+            return false;
+        }
+        return true;
+    }
+
+    if (is_unsigned_integer(target_type)) {
+        throw_overflow_error(pos, "constant " + literal_text + " overflows " + target_name);
+        return false;
+    }
+    let limit -> UInt128 = signed_negative_limit(target_type);
+    if (limit != UInt128(0) && magnitude > limit) {
+        throw_overflow_error(pos, "constant " + literal_text + " overflows " + target_name);
+        return false;
+    }
+    return true;
+}
+
+func integer_upper_bound(type_id -> Int) -> String {
+    if (type_id == TYPE_INT8) { return "128.0"; }
+    if (type_id == TYPE_INT16) { return "32768.0"; }
+    if (type_id == TYPE_INT) { return "2147483648.0"; }
+    if (type_id == TYPE_LONG || type_id == TYPE_INTSIZE) { return "9223372036854775808.0"; }
+    if (type_id == TYPE_INT128) { return "170141183460469231731687303715884105728.0"; }
+    if (type_id == TYPE_BYTE) { return "256.0"; }
+    if (type_id == TYPE_UINT16) { return "65536.0"; }
+    if (type_id == TYPE_UINT32) { return "4294967296.0"; }
+    if (type_id == TYPE_UINT64 || type_id == TYPE_UINTSIZE) { return "18446744073709551616.0"; }
+    if (type_id == TYPE_UINT128) { return "340282366920938463463374607431768211456.0"; }
+    return "";
+}
+
+func integer_lower_bound(type_id -> Int) -> String {
+    if (is_unsigned_integer(type_id)) { return "0.0"; }
+    if (type_id == TYPE_INT8) { return "-128.0"; }
+    if (type_id == TYPE_INT16) { return "-32768.0"; }
+    if (type_id == TYPE_INT) { return "-2147483648.0"; }
+    if (type_id == TYPE_LONG || type_id == TYPE_INTSIZE) { return "-9223372036854775808.0"; }
+    if (type_id == TYPE_INT128) { return "-170141183460469231731687303715884105728.0"; }
+    return "0.0";
+}
+
+func append_cast_condition(c -> Compiler, current -> String, next -> String) -> String {
+    if (current.length() == 0) { return next; }
+    let combined -> String = next_reg(c);
+    c.output_file.write(c.indent + combined + " = and i1 " + current + ", " + next + "\n");
+    return combined;
+}
+
+func emit_integer_cast_check(c -> Compiler, value -> String, source_type -> Int, target_type -> Int) -> String {
+    let llvm_type -> String = get_llvm_type_str(c, source_type);
+    let signed_source -> Bool = is_signed_integer(source_type);
+    let source_bits -> Int = get_type_bitwidth(source_type);
+    let target_bits -> Int = get_type_bitwidth(target_type);
+    let valid -> String = "";
+
+    if (target_type == TYPE_BOOL) {
+        let is_zero -> String = next_reg(c);
+        let is_one -> String = next_reg(c);
+        let result -> String = next_reg(c);
+        c.output_file.write(c.indent + is_zero + " = icmp eq " + llvm_type + " " + value + ", 0\n");
+        c.output_file.write(c.indent + is_one + " = icmp eq " + llvm_type + " " + value + ", 1\n");
+        c.output_file.write(c.indent + result + " = or i1 " + is_zero + ", " + is_one + "\n");
+        return result;
+    }
+
+    if (target_type == TYPE_CHAR) {
+        if (signed_source) {
+            let non_negative -> String = next_reg(c);
+            c.output_file.write(c.indent + non_negative + " = icmp sge " + llvm_type + " " + value + ", 0\n");
+            valid = append_cast_condition(c, valid, non_negative);
+        }
+        if (source_bits >= 32) {
+            let below_limit -> String = next_reg(c);
+            let predicate -> String = "ule";
+            if (signed_source) { predicate = "sle"; }
+            c.output_file.write(c.indent + below_limit + " = icmp " + predicate + " " + llvm_type + " " + value + ", 1114111\n");
+            valid = append_cast_condition(c, valid, below_limit);
+        }
+        let can_reach_surrogates -> Bool = source_bits >= 32 ||
+            (!signed_source && source_bits >= 16);
+        if (can_reach_surrogates) {
+            let below_surrogates -> String = next_reg(c);
+            let above_surrogates -> String = next_reg(c);
+            let outside_surrogates -> String = next_reg(c);
+            let less_predicate -> String = "ult";
+            let greater_predicate -> String = "ugt";
+            if (signed_source) {
+                less_predicate = "slt";
+                greater_predicate = "sgt";
+            }
+            c.output_file.write(c.indent + below_surrogates + " = icmp " + less_predicate + " " + llvm_type + " " + value + ", 55296\n");
+            c.output_file.write(c.indent + above_surrogates + " = icmp " + greater_predicate + " " + llvm_type + " " + value + ", 57343\n");
+            c.output_file.write(c.indent + outside_surrogates + " = or i1 " + below_surrogates + ", " + above_surrogates + "\n");
+            valid = append_cast_condition(c, valid, outside_surrogates);
+        }
+        if (valid.length() == 0) { return "true"; }
+        return valid;
+    }
+
+    let source_unsigned -> Bool = is_unsigned_integer(source_type);
+    let target_unsigned -> Bool = is_unsigned_integer(target_type);
+    if (!source_unsigned && target_unsigned) {
+        let non_negative -> String = next_reg(c);
+        c.output_file.write(c.indent + non_negative + " = icmp sge " + llvm_type + " " + value + ", 0\n");
+        valid = append_cast_condition(c, valid, non_negative);
+        if (target_bits < source_bits) {
+            let below_max -> String = next_reg(c);
+            c.output_file.write(c.indent + below_max + " = icmp sle " + llvm_type + " " + value + ", " + integer_max_literal(target_type) + "\n");
+            valid = append_cast_condition(c, valid, below_max);
+        }
+    } else if (source_unsigned && !target_unsigned) {
+        let below_max -> String = next_reg(c);
+        c.output_file.write(c.indent + below_max + " = icmp ule " + llvm_type + " " + value + ", " + integer_max_literal(target_type) + "\n");
+        valid = append_cast_condition(c, valid, below_max);
+    } else if (source_bits > target_bits) {
+        let below_max -> String = next_reg(c);
+        let predicate -> String = "ule";
+        if (signed_source) { predicate = "sle"; }
+        c.output_file.write(c.indent + below_max + " = icmp " + predicate + " " + llvm_type + " " + value + ", " + integer_max_literal(target_type) + "\n");
+        valid = append_cast_condition(c, valid, below_max);
+        if (signed_source) {
+            let above_min -> String = next_reg(c);
+            c.output_file.write(c.indent + above_min + " = icmp sge " + llvm_type + " " + value + ", " + get_signed_min_literal(target_type) + "\n");
+            valid = append_cast_condition(c, valid, above_min);
+        }
+    }
+
+    if (valid.length() == 0) { return "true"; }
+    return valid;
+}
+
+func emit_float_cast_check(c -> Compiler, value -> String, source_type -> Int, target_type -> Int) -> String {
+    let llvm_type -> String = get_llvm_type_str(c, source_type);
+    if (target_type == TYPE_BOOL) {
+        let is_zero -> String = next_reg(c);
+        let is_one -> String = next_reg(c);
+        let valid -> String = next_reg(c);
+        c.output_file.write(c.indent + is_zero + " = fcmp oeq " + llvm_type + " " + value + ", 0.0\n");
+        c.output_file.write(c.indent + is_one + " = fcmp oeq " + llvm_type + " " + value + ", 1.0\n");
+        c.output_file.write(c.indent + valid + " = or i1 " + is_zero + ", " + is_one + "\n");
+        return valid;
+    }
+
+    let valid -> String = "";
+    let lower -> String = next_reg(c);
+    let upper -> String = next_reg(c);
+    let lower_bound -> String = integer_lower_bound(target_type);
+    let upper_bound -> String = integer_upper_bound(target_type);
+    if (target_type == TYPE_CHAR) {
+        lower_bound = "0.0";
+        upper_bound = "1114112.0";
+    }
+    c.output_file.write(c.indent + lower + " = fcmp oge " + llvm_type + " " + value + ", " + lower_bound + "\n");
+    c.output_file.write(c.indent + upper + " = fcmp olt " + llvm_type + " " + value + ", " + upper_bound + "\n");
+    valid = append_cast_condition(c, valid, lower);
+    valid = append_cast_condition(c, valid, upper);
+
+    if (target_type == TYPE_CHAR) {
+        let before_surrogates -> String = next_reg(c);
+        let after_surrogates -> String = next_reg(c);
+        let outside_surrogates -> String = next_reg(c);
+        c.output_file.write(c.indent + before_surrogates + " = fcmp olt " + llvm_type + " " + value + ", 55296.0\n");
+        c.output_file.write(c.indent + after_surrogates + " = fcmp oge " + llvm_type + " " + value + ", 57344.0\n");
+        c.output_file.write(c.indent + outside_surrogates + " = or i1 " + before_surrogates + ", " + after_surrogates + "\n");
+        valid = append_cast_condition(c, valid, outside_surrogates);
+    }
+    return valid;
+}
+
+func standard_overflow_error(c -> Compiler, pos -> Position) -> CompileResult {
+    let i -> Int = 0;
+    while (i < c.error_types.length()) {
+        let info -> StructInfo = c.error_types[i];
+        if (info.compiler_link_name == "Error") {
+            let field -> FieldInfo = find_field(info, "Overflow");
+            if (field is !null) {
+                return emit_error_value(c, CompileResult(reg="" + field.offset, type=info.type_id, origin_type=info.type_id), pos);
+            }
+        }
+        i += 1;
+    }
+    throw_internal_compiler_error(pos, "The standard Error enum does not define Overflow.");
+    return CompileResult(reg="zeroinitializer", type=TYPE_ANY_ERROR);
+}
+
+func emit_fallible_cast(c -> Compiler, value -> CompileResult, valid -> String, target_type -> Int, pos -> Position) -> CompileResult {
+    let fail_label -> String = next_label(c);
+    let success_label -> String = next_label(c);
+    let end_label -> String = next_label(c);
+    let fallible_type -> Int = get_fallible_type_id(c, target_type);
+    let fallible_llvm -> String = get_llvm_type_str(c, fallible_type);
+    let target_llvm -> String = get_llvm_type_str(c, target_type);
+
+    c.output_file.write(c.indent + "br i1 " + valid + ", label %" + success_label + ", label %" + fail_label + "\n");
+
+    c.output_file.write("\n" + fail_label + ":\n");
+    let error_value -> CompileResult = standard_overflow_error(c, pos);
+    let fail_1 -> String = next_reg(c);
+    let fail_2 -> String = next_reg(c);
+    c.output_file.write(c.indent + fail_1 + " = insertvalue " + fallible_llvm + " undef, i1 true, 0\n");
+    c.output_file.write(c.indent + fail_2 + " = insertvalue " + fallible_llvm + " " + fail_1 + ", { i64, i32 } " + error_value.reg + ", 1\n");
+    c.output_file.write(c.indent + "br label %" + end_label + "\n");
+
+    c.output_file.write("\n" + success_label + ":\n");
+    let converted -> CompileResult = compile_type_cast(c, value, target_type, pos);
+    let success_1 -> String = next_reg(c);
+    let success_2 -> String = next_reg(c);
+    let success_3 -> String = next_reg(c);
+    c.output_file.write(c.indent + success_1 + " = insertvalue " + fallible_llvm + " undef, i1 false, 0\n");
+    c.output_file.write(c.indent + success_2 + " = insertvalue " + fallible_llvm + " " + success_1 + ", { i64, i32 } zeroinitializer, 1\n");
+    c.output_file.write(c.indent + success_3 + " = insertvalue " + fallible_llvm + " " + success_2 + ", " + target_llvm + " " + converted.reg + ", 2\n");
+    c.output_file.write(c.indent + "br label %" + end_label + "\n");
+
+    c.output_file.write("\n" + end_label + ":\n");
+    let result -> String = next_reg(c);
+    c.output_file.write(c.indent + result + " = phi " + fallible_llvm + " [ " + fail_2 + ", %" + fail_label + " ], [ " + success_3 + ", %" + success_label + " ]\n");
+    return CompileResult(reg=result, type=fallible_type, origin_type=0, owns_ref=false);
+}
+
+func unwrap_conversion_or_panic(c -> Compiler, value -> CompileResult, source_type -> Int, target_type -> Int, pos -> Position) -> CompileResult {
+    let fallible_llvm -> String = get_llvm_type_str(c, value.type);
+    let failed -> String = next_reg(c);
+    let fail_label -> String = next_label(c);
+    let success_label -> String = next_label(c);
+    c.output_file.write(c.indent + failed + " = extractvalue " + fallible_llvm + " " + value.reg + ", 0\n");
+    c.output_file.write(c.indent + "br i1 " + failed + ", label %" + fail_label + ", label %" + success_label + "\n");
+
+    c.output_file.write("\n" + fail_label + ":\n");
+    emit_runtime_error(c, pos, "conversion from " + get_type_name(c, source_type) + " to " + get_type_name(c, target_type) + " failed");
+
+    c.output_file.write("\n" + success_label + ":\n");
+    let result -> String = next_reg(c);
+    c.output_file.write(c.indent + result + " = extractvalue " + fallible_llvm + " " + value.reg + ", 2\n");
+    return CompileResult(reg=result, type=target_type, origin_type=0, owns_ref=value.owns_ref && needs_drop(c, target_type));
+}
+
+func compile_explicit_type_cast(c -> Compiler, value -> CompileResult, target_type -> Int, pos -> Position, preserve_failure -> Bool) -> CompileResult {
+    if (value.type == TYPE_POISON) { return value; }
+
+    if (value.type == TYPE_ANY_ERROR && is_integer_type(target_type)) {
+        let code -> String = next_reg(c);
+        c.output_file.write(c.indent + code + " = extractvalue { i64, i32 } " + value.reg + ", 1\n");
+        return compile_explicit_type_cast(c, CompileResult(reg=code, type=TYPE_INT), target_type, pos, preserve_failure);
+    }
+
+    if (!needs_explicit_cast(c, value.type, target_type)) {
+        return compile_type_cast(c, value, target_type, pos);
+    }
+
+    let check_type -> Int = value.type;
+    let source_info -> StructInfo = c.struct_id_map.get("" + check_type);
+    if (source_info is !null && source_info.is_enum) { check_type = TYPE_INT; }
+
+    let valid -> String = "";
+    if (is_integer_type(check_type)) {
+        valid = emit_integer_cast_check(c, value.reg, check_type, target_type);
+    } else if (check_type == TYPE_FLOAT || check_type == TYPE_FLOAT32) {
+        valid = emit_float_cast_check(c, value.reg, check_type, target_type);
+    } else {
+        return compile_type_cast(c, value, target_type, pos);
+    }
+
+    if (preserve_failure) {
+        return emit_fallible_cast(c, value, valid, target_type, pos);
+    }
+
+    let fail_label -> String = next_label(c);
+    let success_label -> String = next_label(c);
+    c.output_file.write(c.indent + "br i1 " + valid + ", label %" + success_label + ", label %" + fail_label + "\n");
+    c.output_file.write("\n" + fail_label + ":\n");
+    emit_runtime_error(c, pos, "conversion from " + get_type_name(c, value.type) + " to " + get_type_name(c, target_type) + " is out of range");
+    c.output_file.write("\n" + success_label + ":\n");
+    return compile_type_cast(c, value, target_type, pos);
+}
+
 func compile_type_cast(c -> Compiler, val_res -> CompileResult, target_type -> Int, pos -> Position) -> CompileResult {
     if (val_res.type == TYPE_POISON) { return val_res; }
     if (val_res.type == target_type) { return val_res; }
@@ -7866,6 +8375,11 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
         return;
     }
 
+    if (type_id == TYPE_ANY_ERROR) {
+        compile_print_error_internal(c, reg, pos);
+        return;
+    }
+
     if (is_primitive_type(type_id)) {
         if (type_id == TYPE_INT || type_id == TYPE_INT8 || type_id == TYPE_INT16 || type_id == TYPE_UINT16) {
             let temp_res -> CompileResult = CompileResult(reg=reg, type=type_id, origin_type=origin_id);
@@ -7961,6 +8475,43 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
             return;
         }
     }
+}
+
+func compile_print_error_internal(c -> Compiler, error_reg -> String, pos -> Position) -> Void {
+    let domain -> String = next_reg(c);
+    let code -> String = next_reg(c);
+    let end_label -> String = next_label(c);
+    c.output_file.write(c.indent + domain + " = extractvalue { i64, i32 } " + error_reg + ", 0\n");
+    c.output_file.write(c.indent + code + " = extractvalue { i64, i32 } " + error_reg + ", 1\n");
+
+    let i -> Int = 0;
+    while (i < c.error_types.length()) {
+        let info -> StructInfo = c.error_types[i];
+        let match_label -> String = next_label(c);
+        let next_type_label -> String = next_label(c);
+        let matches -> String = next_reg(c);
+        c.output_file.write(c.indent + matches + " = icmp eq i64 " + domain + ", " + type_fingerprint(c, info.type_id) + "\n");
+        c.output_file.write(c.indent + "br i1 " + matches + ", label %" + match_label + ", label %" + next_type_label + "\n");
+
+        c.output_file.write("\n" + match_label + ":\n");
+        compile_print_enum_internal(c, code, info, pos);
+        c.output_file.write(c.indent + "br label %" + end_label + "\n");
+
+        c.output_file.write("\n" + next_type_label + ":\n");
+        i += 1;
+    }
+
+    let hook_raw_str -> String = get_mangled_symbol(c, "print_bytes", pos);
+    let hook_int -> String = get_mangled_symbol(c, "print_int", pos);
+    let prefix -> String = "Error(code=";
+    let prefix_id -> Int = register_string_constant(c, prefix);
+    let prefix_ptr -> String = get_string_ptr(prefix_id, prefix);
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* " + prefix_ptr + ", i32 " + prefix.length() + ")\n");
+    c.output_file.write(c.indent + "call void @" + hook_int + "(i32 " + code + ")\n");
+    c.output_file.write(c.indent + "call void @" + hook_raw_str + "(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str_close_paren, i32 0, i32 0), i32 1)\n");
+    c.output_file.write(c.indent + "br label %" + end_label + "\n");
+
+    c.output_file.write("\n" + end_label + ":\n");
 }
 
 func compile_print_enum_internal(c -> Compiler, enum_reg -> String, s_info -> StructInfo, pos -> Position) -> Void {

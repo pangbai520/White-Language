@@ -68,8 +68,13 @@ func format_uint64(value -> UInt64) -> String {
 @CompilerLink("format_int128")
 func format_int128(value -> Int128) -> String {
     let negative -> Bool = value < Int128(0);
-    let magnitude -> UInt128 = UInt128(value);
-    if negative { magnitude = UInt128(0) - magnitude; }
+    let magnitude -> UInt128 = UInt128(0);
+    if negative {
+        let adjusted -> Int128 = Int128(0) - (value + Int128(1));
+        magnitude = UInt128(adjusted) + UInt128(1);
+    } else {
+        magnitude = UInt128(value);
+    }
     return format_uint128_magnitude(magnitude, negative);
 }
 
@@ -91,7 +96,8 @@ func format_uint128_magnitude(value -> UInt128, negative -> Bool) -> String {
 
     let limb_idx -> Int = 3;
     while (limb_idx >= 0) {
-        let carry -> UInt64 = UInt64(UInt32(value >> UInt128(limb_idx * 32)));
+        let limb -> UInt128 = (value >> UInt128(limb_idx * 32)) & UInt128(4294967295UL);
+        let carry -> UInt64 = UInt64(UInt32(limb));
         let chunk_idx -> Int = 0;
         while (chunk_idx < 5) {
             let current -> UInt64 = UInt64(chunks[chunk_idx]) * 4294967296UL + carry;

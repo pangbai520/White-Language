@@ -112,6 +112,7 @@ const TOK_QUESTION      -> Int = 92; // ?
 const TOK_THROW         -> Int = 93; // throw
 const TOK_IN            -> Int = 94; // in
 const TOK_ERROR         -> Int = 95; // error
+const TOK_TYPE          -> Int = 96; // type
 
 
 func get_token_name(type -> Int) -> String {
@@ -221,6 +222,7 @@ func get_token_name(type -> Int) -> String {
     if (type == TOK_THROW) { return "throw"; }
     if (type == TOK_IN) { return "in"; }
     if (type == TOK_ERROR) { return "error"; }
+    if (type == TOK_TYPE) { return "type"; }
 
     return "EOF";
 }

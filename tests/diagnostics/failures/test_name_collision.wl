@@ -1,5 +1,5 @@
 // Test: NAME_COLLISION_DETECTION
-// File: tests/diagnostics/failure/test_name_collision.wl
+// File: tests/diagnostics/failures/test_name_collision.wl
 // Focus: Enforcement of ImportError when wildcard importing colliding symbols from different modules.
 // Expected Error: "ImportError: Name collision for function 'collision_target'. Please use explicit alias."
 

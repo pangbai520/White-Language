@@ -2,7 +2,15 @@
 // File: tests/language/types/test_primitives.wl
 // Focus: Integer bit-width resolution, explicit cast semantics (trunc/ext), and pointer-integer roundtripping.
 import "builtin"
+import Error from "errors"
 
+func rejects_lossy_narrowing(value -> Int) -> Bool {
+    let narrowed -> Byte = Byte(value)?;
+    catch(err) {
+        return err == Error.Overflow;
+    }
+    return false;
+}
 
 func main() -> Int {
     // ensure compiler successfully resolves various width identifiers
@@ -21,10 +29,8 @@ func main() -> Int {
     let f_val2 -> Float32 = Float32(i_val2);
     let cast_b_ok -> Bool = (f_val2 == -42.0f);
 
-    // truncate 300 (0x12C) to UInt8 (0x2C -> 44)
-    let big_int -> Int = 300; 
-    let small_int -> UInt8 = UInt8(big_int); 
-    let trunc_ok -> Bool = (small_int == 44);
+    // narrowing conversions reject values that do not fit
+    let narrowing_ok -> Bool = rejects_lossy_narrowing(300);
 
     // Int8 -> Long
     let neg_i8 -> Int8 = -5;
@@ -57,11 +63,10 @@ func main() -> Int {
                             (auto_u64 == 18446744073709551615UL) && 
                             (auto_u32 == 4294967295U);
 
-    if (decl_ok && cast_a_ok && cast_b_ok && trunc_ok && sext_ok && zext_ok && bool_ok && ptr_ok && suffix_ok) {
-        builtin.print("PASS: Modern type declarations and zero-cost conversion semantics");
+    if (decl_ok && cast_a_ok && cast_b_ok && narrowing_ok && sext_ok && zext_ok && bool_ok && ptr_ok && suffix_ok) {
+        builtin.print("PASS: primitive declarations and checked conversion semantics");
     } else {
-        // failure indicates a regression in LLVM IR cast instructions (sext/zext/trunc)
-        builtin.print("FAIL: Type declaration mismatch or cast semantics corruption");
+        builtin.print("FAIL: primitive declaration or conversion semantics");
         return 1;
     }
 

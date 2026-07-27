@@ -208,7 +208,8 @@ struct Compiler(
     current_catch_label -> String,
     current_catch_err_ptr -> String,
     current_catch_scope -> Struct,
-    extra_libs -> Vector(String)
+    extra_libs -> Vector(String),
+    error_types -> Vector(Struct)
 )
 
 struct ParsedModule(
@@ -297,7 +298,8 @@ func new_compiler(out_path -> String, is_shared -> Bool, emit_source_context -> 
         current_catch_label = "",
         current_catch_err_ptr = "",
         current_catch_scope = null,
-        extra_libs = []
+        extra_libs = [],
+        error_types = []
     );
 
     comp.type_drop_list.append(TypeListNode(type=TYPE_GENERIC_FUNCTION));
@@ -1194,6 +1196,91 @@ func get_slice_type_id(c -> Compiler, base_id -> Int) -> Int {
     return new_id;
 }
 
+func get_builtin_cast_target(name -> String) -> Int {
+    if (name == "Int" || name == "Int32") { return TYPE_INT; }
+    if (name == "Long" || name == "Int64") { return TYPE_LONG; }
+    if (name == "Float" || name == "Float64") { return TYPE_FLOAT; }
+    if (name == "Byte" || name == "UInt8") { return TYPE_BYTE; }
+    if (name == "Int8") { return TYPE_INT8; }
+    if (name == "Int16") { return TYPE_INT16; }
+    if (name == "Int128") { return TYPE_INT128; }
+    if (name == "UInt16") { return TYPE_UINT16; }
+    if (name == "UInt32") { return TYPE_UINT32; }
+    if (name == "UInt64") { return TYPE_UINT64; }
+    if (name == "UInt128") { return TYPE_UINT128; }
+    if (name == "Float32") { return TYPE_FLOAT32; }
+    if (name == "IntSize") { return TYPE_INTSIZE; }
+    if (name == "UIntSize") { return TYPE_UINTSIZE; }
+    if (name == "Bool") { return TYPE_BOOL; }
+    if (name == "Char") { return TYPE_CHAR; }
+    if (name == "AnyPtr") { return TYPE_ANYPTR; }
+    if (name == "String") { return TYPE_STRING; }
+    return 0;
+}
+
+func is_conversion_target(type_id -> Int) -> Bool {
+    return is_numeric_type(type_id) || type_id == TYPE_BOOL ||
+           type_id == TYPE_CHAR || type_id == TYPE_STRING;
+}
+
+func conversion_method_name(target_type -> Int) -> String {
+    return "$type$" + target_type;
+}
+
+func method_base_name(c -> Compiler, node -> MethodDefNode) -> String {
+    if (node.name_tok.value != "$type") { return node.name_tok.value; }
+
+    let target_type -> Int = resolve_type(c, node.return_type);
+    if (is_fallible_type(c, target_type)) {
+        target_type = get_inner_fallible_type(c, target_type);
+    }
+    return conversion_method_name(target_type);
+}
+
+func find_class_conversion(info -> StructInfo, target_type -> Int) -> FuncInfo {
+    if (info is null || !info.is_class || info.vtable is null) { return null; }
+
+    let wanted -> String = conversion_method_name(target_type);
+    let i -> Int = 0;
+    while (i < info.vtable.length()) {
+        let func_info -> FuncInfo = info.vtable[i];
+        if (func_info.base_name == wanted) { return func_info; }
+        i += 1;
+    }
+    return null;
+}
+
+func needs_explicit_cast(c -> Compiler, source_type -> Int, target_type -> Int) -> Bool {
+    if (source_type == target_type) { return false; }
+    if (source_type == TYPE_ANY_ERROR) { source_type = TYPE_INT; }
+    let source_info -> StructInfo = c.struct_id_map.get("" + source_type);
+    if (source_info is !null && source_info.is_enum) { source_type = TYPE_INT; }
+    if (target_type == TYPE_BOOL) {
+        return source_type != TYPE_BOOL;
+    }
+    if (target_type == TYPE_CHAR) {
+        return source_type != TYPE_CHAR && source_type != TYPE_BOOL;
+    }
+    if (source_type == TYPE_BOOL) { return false; }
+
+    let source_float -> Bool = source_type == TYPE_FLOAT || source_type == TYPE_FLOAT32;
+    if (source_float && is_integer_type(target_type)) { return true; }
+    if (!is_integer_type(source_type) || !is_integer_type(target_type)) { return false; }
+
+    let source_bits -> Int = get_type_bitwidth(source_type);
+    let target_bits -> Int = get_type_bitwidth(target_type);
+    let source_unsigned -> Bool = is_unsigned_integer(source_type);
+    let target_unsigned -> Bool = is_unsigned_integer(target_type);
+
+    if (source_unsigned == target_unsigned) {
+        return source_bits > target_bits;
+    }
+    if (source_unsigned) {
+        return source_bits >= target_bits;
+    }
+    return true;
+}
+
 func get_expr_type(c -> Compiler, node -> Struct) -> Int {
     if (node is null) { return 0; }
     let base -> BaseNode = node;
@@ -1374,6 +1461,19 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
         if (is_fallible_type(c, base_type)) {
             return get_inner_fallible_type(c, base_type);
         }
+        let expr_base -> BaseNode = t_node.expr;
+        if (expr_base.type == NODE_CALL) {
+            let call -> CallNode = t_node.expr;
+            let callee_base -> BaseNode = call.callee;
+            if (callee_base.type == NODE_VAR_ACCESS) {
+                let callee -> VarAccessNode = call.callee;
+                let target_type -> Int = get_builtin_cast_target(callee.name_tok.value);
+                if (target_type != 0) {
+                    throw_invalid_syntax(t_node.pos, "conversion to " + get_type_name(c, target_type) + " cannot fail; remove '?'");
+                    return 0;
+                }
+            }
+        }
         throw_invalid_syntax(t_node.pos, "Cannot use '?' on a non-fallible type.");
         return 0;
     }
@@ -1385,23 +1485,27 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
             let v -> VarAccessNode = call_node.callee;
             let callee_name -> String = v.name_tok.value;
 
-            if (callee_name == "Int" || callee_name == "Int32") { return TYPE_INT; }
-            if (callee_name == "Long" || callee_name == "Int64") { return TYPE_LONG; }
-            if (callee_name == "Float" || callee_name == "Float64") { return TYPE_FLOAT; }
-            if (callee_name == "Byte" || callee_name == "UInt8") { return TYPE_BYTE; }
-            if (callee_name == "Int8") { return TYPE_INT8; }
-            if (callee_name == "Int16") { return TYPE_INT16; }
-            if (callee_name == "Int128") { return TYPE_INT128; }
-            if (callee_name == "UInt16") { return TYPE_UINT16; }
-            if (callee_name == "UInt32") { return TYPE_UINT32; }
-            if (callee_name == "UInt64") { return TYPE_UINT64; }
-            if (callee_name == "UInt128") { return TYPE_UINT128; }
-            if (callee_name == "Float32") { return TYPE_FLOAT32; }
-            if (callee_name == "IntSize") { return TYPE_INTSIZE; }
-            if (callee_name == "UIntSize") { return TYPE_UINTSIZE; }
-            if (callee_name == "Bool") { return TYPE_BOOL; }
-            if (callee_name == "Char") { return TYPE_CHAR; }
-            if (callee_name == "AnyPtr") { return TYPE_ANYPTR; }
+            let cast_target -> Int = get_builtin_cast_target(callee_name);
+            if (cast_target != 0) {
+                let args -> Vector(Struct) = call_node.args;
+                if (args is !null && args.length() == 1) {
+                    let arg -> ArgNode = args[0];
+                    let source_type -> Int = get_expr_type(c, arg.val);
+                    let source_info -> StructInfo = c.struct_id_map.get("" + source_type);
+                    let conversion -> FuncInfo = find_class_conversion(source_info, cast_target);
+                    if (conversion is !null) {
+                        if (call_node.preserve_fallible) { return conversion.ret_type; }
+                        if (is_fallible_type(c, conversion.ret_type)) {
+                            return get_inner_fallible_type(c, conversion.ret_type);
+                        }
+                        return conversion.ret_type;
+                    }
+                    if (call_node.preserve_fallible && needs_explicit_cast(c, source_type, cast_target)) {
+                        return get_fallible_type_id(c, cast_target);
+                    }
+                }
+                return cast_target;
+            }
 
             let f_info -> FuncInfo = c.func_table.get(callee_name);
             if (f_info is null && c.current_package_prefix != "") { f_info = c.func_table.get(c.current_package_prefix + callee_name); }

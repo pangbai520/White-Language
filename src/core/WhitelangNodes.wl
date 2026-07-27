@@ -179,7 +179,8 @@ struct CallNode(
     type   -> Int,    // NODE_CALL
     callee -> Struct,
     args   -> Vector(Struct),
-    pos    -> Position
+    pos    -> Position,
+    preserve_fallible -> Bool
 )
 
 struct ArgNode(

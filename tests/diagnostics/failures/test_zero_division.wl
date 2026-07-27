@@ -1,7 +1,7 @@
 // Test: RUNTIME_ZERO_DIVISION
-// File: tests/diagnostics/failure/test_zero_division.wl
+// File: tests/diagnostics/failures/test_zero_division.wl
 // Focus: Constant folding or runtime protection against division by zero.
-// Expected Error: " Runtime Error: Division by zero "
+// Expected Error: "RuntimeError: Division by zero"
 
 import "builtin"
 

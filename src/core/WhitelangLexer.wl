@@ -388,6 +388,7 @@ func get_identifier(l -> Lexer) -> Token {
     if (value == "super") { return WhitelangTokens.Token(type=TOK_SUPER, value=value, line=start_line, col=start_col); }
     if (value == "enum") { return WhitelangTokens.Token(type=TOK_ENUM, value=value, line=start_line, col=start_col); }
     if (value == "error") { return WhitelangTokens.Token(type=TOK_ERROR, value=value, line=start_line, col=start_col); }
+    if (value == "type") { return WhitelangTokens.Token(type=TOK_TYPE, value=value, line=start_line, col=start_col); }
     if (value == "interface") { return WhitelangTokens.Token(type=TOK_INTERFACE, value=value, line=start_line, col=start_col); }
     if (value == "with") { return WhitelangTokens.Token(type=TOK_WITH, value=value, line=start_line, col=start_col); }
     if (value == "catch") { return WhitelangTokens.Token(type=TOK_CATCH, value=value, line=start_line, col=start_col); }

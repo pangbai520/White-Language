@@ -35,17 +35,17 @@ func main() -> Int {
         return 1;
     }
 
-    let name -> String = root.get("name")?.as_string()?;
+    let name -> String = String(root.get("name")?)?;
     catch(err) {
         builtin.print("FAIL: JSON string access");
         return 1;
     }
-    let year -> Long = root.get("year")?.as_long()?;
+    let year -> Long = Long(root.get("year")?)?;
     catch(err) {
         builtin.print("FAIL: JSON integer access");
         return 1;
     }
-    let first -> Bool = root.get("values")?.at(0)?.as_bool()?;
+    let first -> Bool = Bool(root.get("values")?.at(0)?)?;
     catch(err) {
         builtin.print("FAIL: JSON array access");
         return 1;

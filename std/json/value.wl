@@ -159,6 +159,22 @@ class Value {
         return self.__text;
     }
 
+    type Bool? {
+        return self.as_bool()?;
+    }
+
+    type Float? {
+        return self.as_float()?;
+    }
+
+    type Long? {
+        return self.as_long()?;
+    }
+
+    type String? {
+        return self.as_string()?;
+    }
+
     method as_object() -> Object? {
         if (self.__kind != Kind.Object) { throw JsonError.TypeMismatch; }
         return self.__object;

@@ -1,6 +1,7 @@
 // Test: DUPLICATE_FUNCTION
 // File: tests/diagnostics/failures/test_duplicate_function.wl
-// Focus: Duplicate declarations must produce a diagnostic instead of crashing
+// Focus: Duplicate function declarations must produce a name diagnostic.
+// Expected Error: "NameError: Function 'duplicate' is already defined."
 
 func duplicate() -> Int {
     return 1;
