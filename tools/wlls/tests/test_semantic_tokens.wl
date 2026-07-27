@@ -1,5 +1,5 @@
 // Test: SEMANTIC_TOKENS
-// File: tools/wl-analyzer/tests/test_semantic_tokens.wl
+// File: tools/wlls/tests/test_semantic_tokens.wl
 // Focus: Lexer-backed semantic token types, modifiers, comments, and UTF-16 ranges.
 
 import "builtin"

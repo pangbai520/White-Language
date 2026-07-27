@@ -1,5 +1,5 @@
 // Test: FRONTEND_DOCUMENT
-// File: tools/wl-analyzer/tests/test_document.wl
+// File: tools/wlls/tests/test_document.wl
 // Focus: compiler-owned parsing, source spans, and document symbol indexing.
 import "builtin"
 import "../internal/frontend/_pkg.wl" as source

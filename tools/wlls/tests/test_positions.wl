@@ -1,5 +1,5 @@
 // Test: SOURCE_POSITIONS
-// File: tools/wl-analyzer/tests/test_positions.wl
+// File: tools/wlls/tests/test_positions.wl
 // Focus: UTF-8 byte, Unicode scalar, and UTF-16 source columns.
 
 import "builtin"

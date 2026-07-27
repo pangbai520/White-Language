@@ -1,5 +1,5 @@
 // Test: FRONTEND_DIAGNOSTICS
-// File: tools/wl-analyzer/tests/test_diagnostics.wl
+// File: tools/wlls/tests/test_diagnostics.wl
 // Focus: Structured errors and parser recovery for in-memory source.
 
 import "builtin"

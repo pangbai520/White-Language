@@ -1,4 +1,4 @@
-// analyzer request loop
+// language server request loop
 import "../protocol/_pkg.wl" as protocol
 import "../workspace/_pkg.wl" as workspace
 import "../frontend/_pkg.wl" as source
@@ -33,7 +33,7 @@ class Server {
         let version -> Int = request.int("protocol", 0);
         let method_name -> String = request.string("method");
         if (version != 1) {
-            return self.error_response(id, "unsupportedProtocol", "Expected analyzer protocol version 1.");
+            return self.error_response(id, "unsupportedProtocol", "Expected language server protocol version 1.");
         }
         if (method_name is null) {
             return self.error_response(id, "invalidRequest", "Request method is missing.");
@@ -43,7 +43,7 @@ class Server {
             self.initialized = true;
             return self.response(
                 id,
-                "{\"name\":\"wl-analyzer\",\"protocol\":1,\"capabilities\":" +
+                "{\"name\":\"wlls\",\"protocol\":1,\"capabilities\":" +
                 "{\"documentSync\":true,\"diagnostics\":true," +
                 "\"documentSymbols\":true,\"definition\":true," +
                 "\"semanticTokens\":{\"full\":true,\"delta\":false," +
@@ -56,7 +56,7 @@ class Server {
             );
         }
         if (!self.initialized) {
-            return self.error_response(id, "notInitialized", "Initialize the analyzer before sending requests.");
+            return self.error_response(id, "notInitialized", "Initialize the language server before sending requests.");
         }
         if (method_name == "shutdown") {
             self.shutdown_requested = true;
@@ -139,7 +139,7 @@ class Server {
             }
             return self.response(id, encoded);
         }
-        return self.error_response(id, "methodNotFound", "Unknown analyzer method '" + method_name + "'.");
+        return self.error_response(id, "methodNotFound", "Unknown language server method '" + method_name + "'.");
     }
 }
 

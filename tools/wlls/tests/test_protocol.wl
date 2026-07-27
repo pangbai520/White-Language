@@ -1,6 +1,6 @@
-// Test: ANALYZER_PROTOCOL
-// File: tools/wl-analyzer/tests/test_protocol.wl
-// Focus: analyzer handshake, document synchronization, and symbol requests.
+// Test: WLLS_PROTOCOL
+// File: tools/wlls/tests/test_protocol.wl
+// Focus: wlls handshake, document synchronization, and symbol requests.
 import "builtin"
 import "../internal/server/_pkg.wl" as server
 
@@ -11,7 +11,7 @@ func main() -> Int {
     if (response !=
         "{\"protocol\":1,\"id\":0,\"error\":{\"code\":\"invalidRequest\"," +
         "\"message\":\"Request body is not valid JSON.\"}}") {
-        builtin.print("FAIL: analyzer malformed JSON");
+        builtin.print("FAIL: wlls malformed JSON");
         return 1;
     }
 
@@ -19,7 +19,7 @@ func main() -> Int {
         "{\"protocol\":1,\"id\":1,\"method\":\"initialize\"}"
     );
     if (!response.starts_with("{\"protocol\":1,\"id\":1,\"result\":")) {
-        builtin.print("FAIL: analyzer initialize");
+        builtin.print("FAIL: wlls initialize");
         return 1;
     }
 
@@ -29,7 +29,7 @@ func main() -> Int {
         "\"text\":\"func alpha() -> Int { return 1; }\"}"
     );
     if (response != "{\"protocol\":1,\"id\":2,\"result\":null}") {
-        builtin.print("FAIL: analyzer document open");
+        builtin.print("FAIL: wlls document open");
         return 1;
     }
 
@@ -42,7 +42,7 @@ func main() -> Int {
         "\"range\":{\"start\":{\"line\":0,\"character\":5}," +
         "\"end\":{\"line\":0,\"character\":10}},\"children\":[]}]}";
     if (response != expected) {
-        builtin.print("FAIL: analyzer document symbols");
+        builtin.print("FAIL: wlls document symbols");
         return 1;
     }
 
@@ -53,7 +53,7 @@ func main() -> Int {
     if (!response.starts_with(
         "{\"protocol\":1,\"id\":4,\"error\":{\"code\":\"staleDocument\""
     )) {
-        builtin.print("FAIL: analyzer stale document guard");
+        builtin.print("FAIL: wlls stale document guard");
         return 1;
     }
 
@@ -68,7 +68,7 @@ func main() -> Int {
     if (!response.starts_with(
         "{\"protocol\":1,\"id\":6,\"result\":[{\"severity\":\"error\""
     )) {
-        builtin.print("FAIL: analyzer diagnostics");
+        builtin.print("FAIL: wlls diagnostics");
         return 1;
     }
 
@@ -82,7 +82,7 @@ func main() -> Int {
         "\"path\":\"memory.wl\"}"
     );
     if (response != "{\"protocol\":1,\"id\":8,\"result\":[]}") {
-        builtin.print("FAIL: analyzer diagnostic recovery");
+        builtin.print("FAIL: wlls diagnostic recovery");
         return 1;
     }
 
@@ -99,7 +99,7 @@ func main() -> Int {
         "{\"protocol\":1,\"id\":10,\"result\":{\"path\":\"memory.wl\"," +
         "\"range\":{\"start\":{\"line\":0,\"character\":6}," +
         "\"end\":{\"line\":0,\"character\":10}}}}") {
-        builtin.print("FAIL: analyzer definition");
+        builtin.print("FAIL: wlls definition");
         return 1;
     }
 
@@ -122,7 +122,7 @@ func main() -> Int {
         "{\"protocol\":1,\"id\":13,\"result\":{\"path\":\"project/math.wl\"," +
         "\"range\":{\"start\":{\"line\":0,\"character\":5}," +
         "\"end\":{\"line\":0,\"character\":8}}}}") {
-        builtin.print("FAIL: analyzer cross-file definition");
+        builtin.print("FAIL: wlls cross-file definition");
         return 1;
     }
 
@@ -133,7 +133,7 @@ func main() -> Int {
     if (!response.starts_with(
         "{\"protocol\":1,\"id\":14,\"result\":["
     )) {
-        builtin.print("FAIL: analyzer semantic tokens");
+        builtin.print("FAIL: wlls semantic tokens");
         return 1;
     }
 
@@ -142,10 +142,10 @@ func main() -> Int {
     );
     if (!service.shutdown_requested ||
         response != "{\"protocol\":1,\"id\":15,\"result\":null}") {
-        builtin.print("FAIL: analyzer shutdown");
+        builtin.print("FAIL: wlls shutdown");
         return 1;
     }
 
-    builtin.print("PASS: analyzer protocol");
+    builtin.print("PASS: wlls protocol");
     return 0;
 }

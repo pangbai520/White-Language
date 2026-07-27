@@ -12,6 +12,7 @@ class SymbolDefinition {
     let type_name -> String = "";
     let import_path -> String = "";
     let import_name -> String = "";
+    let owner_type -> String = "";
     let top_level -> Bool = false;
 
     init(name -> String, kind -> Int, range -> WhitelangExceptions.SourceRange) {
@@ -21,6 +22,7 @@ class SymbolDefinition {
         self.type_name = "";
         self.import_path = "";
         self.import_name = "";
+        self.owner_type = "";
         self.top_level = false;
     }
 }
@@ -47,6 +49,7 @@ class SemanticDocument {
     let syntax -> FrontendDocument = null;
     let definitions -> Vector(Struct) = null;
     let references -> Vector(Struct) = null;
+    let members -> Dict = null;
 
     init(
         syntax -> FrontendDocument,
@@ -56,7 +59,60 @@ class SemanticDocument {
         self.syntax = syntax;
         self.definitions = definitions;
         self.references = references;
+        self.members = Dict(32);
     }
+}
+
+func __is_type_symbol(kind -> Int) -> Bool {
+    return kind == SYMBOL_STRUCT ||
+           kind == SYMBOL_CLASS ||
+           kind == SYMBOL_INTERFACE ||
+           kind == SYMBOL_ENUM ||
+           kind == SYMBOL_ERROR;
+}
+
+func __index_member_symbols(document -> SemanticDocument) -> Void {
+    let symbols -> Vector(Struct) = document.syntax.symbols;
+    let i -> Int = 0;
+    while (i < symbols.length()) {
+        let owner -> DocumentSymbol = symbols[i];
+        if (__is_type_symbol(owner.kind)) {
+            let j -> Int = 0;
+            while (j < owner.children.length()) {
+                let member -> DocumentSymbol = owner.children[j];
+                let definition -> SymbolDefinition = SymbolDefinition(
+                    member.name,
+                    member.kind,
+                    member.span
+                );
+                definition.owner_type = owner.name;
+                document.members.put(
+                    owner.name + "." + member.name,
+                    definition
+                );
+                j += 1;
+            }
+        }
+        i += 1;
+    }
+}
+
+func __register_member(
+    document -> SemanticDocument,
+    owner -> String,
+    definition -> SymbolDefinition
+) -> Void {
+    definition.owner_type = owner;
+    document.members.put(owner + "." + definition.name, definition);
+}
+
+func __find_member(
+    document -> SemanticDocument,
+    owner -> String,
+    name -> String
+) -> SymbolDefinition {
+    if (owner is null || owner.length() == 0) { return null; }
+    return document.members[owner + "." + name];
 }
 
 class __Scope {
@@ -332,7 +388,9 @@ func __walk_node(document -> SemanticDocument, scope -> __Scope, node -> Struct)
         let call -> CallNode = node;
         __walk_node(document, scope, call.callee);
         let i -> Int = 0;
-        while (i < call.args.length()) {
+        let count -> Int = 0;
+        if (call.args is !null) { count = call.args.length(); }
+        while (i < count) {
             let arg -> ArgNode = call.args[i];
             __walk_node(document, scope, arg.val);
             i += 1;
@@ -345,6 +403,13 @@ func __walk_node(document -> SemanticDocument, scope -> __Scope, node -> Struct)
         __walk_node(document, scope, access.obj);
         let field_reference -> SymbolReference =
             __reference(document, scope, __field_token(access));
+        if (field_reference.definition is null) {
+            field_reference.definition = __find_member(
+                document,
+                __expression_type(scope, access.obj),
+                access.field_name
+            );
+        }
         let object_base -> BaseNode = access.obj;
         if (object_base.type == NODE_VAR_ACCESS) {
             let object -> VarAccessNode = access.obj;
@@ -361,6 +426,13 @@ func __walk_node(document -> SemanticDocument, scope -> __Scope, node -> Struct)
         );
         let field_reference -> SymbolReference =
             __reference(document, scope, field_token);
+        if (field_reference.definition is null) {
+            field_reference.definition = __find_member(
+                document,
+                __expression_type(scope, assignment.obj),
+                assignment.field_name
+            );
+        }
         let object_base -> BaseNode = assignment.obj;
         if (object_base.type == NODE_VAR_ACCESS) {
             let object -> VarAccessNode = assignment.obj;
@@ -611,6 +683,11 @@ func __walk_top_level(document -> SemanticDocument, scope -> __Scope) -> Void {
                 let definition -> SymbolDefinition =
                     __definition(document, class_scope, field.name_tok, SYMBOL_FIELD);
                 definition.type_name = type_text(field.type_node);
+                __register_member(
+                    document,
+                    class_node.name_tok.value,
+                    definition
+                );
                 if (definition.type_name == "Auto") {
                     definition.type_name = __expression_type(class_scope, field.value);
                 }
@@ -648,6 +725,11 @@ func __walk_top_level(document -> SemanticDocument, scope -> __Scope) -> Void {
                 let definition -> SymbolDefinition =
                     __definition(document, class_scope, method_token, method_kind);
                 definition.type_name = type_text(method_node.return_type);
+                __register_member(
+                    document,
+                    class_node.name_tok.value,
+                    definition
+                );
                 j += 1;
             }
             j = 0;
@@ -689,6 +771,7 @@ func analyze_document(syntax -> FrontendDocument) -> SemanticDocument {
     let document -> SemanticDocument = SemanticDocument(syntax, [], []);
     if (syntax is null || syntax.ast is null) { return document; }
 
+    __index_member_symbols(document);
     let scope -> __Scope = __Scope(null);
     __declare_top_level(document, scope);
     __walk_top_level(document, scope);

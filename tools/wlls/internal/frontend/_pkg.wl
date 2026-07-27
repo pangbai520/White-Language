@@ -1,4 +1,4 @@
-// tools/wl-analyzer/internal/frontend/_pkg.wl
+// tools/wlls/internal/frontend/_pkg.wl
 import * from "WhitelangFrontend.wl"
 import * from "WhitelangSourceMap.wl"
 import * from "WhitelangSemantic.wl"

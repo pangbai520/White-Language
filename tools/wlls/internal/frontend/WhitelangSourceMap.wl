@@ -1,4 +1,4 @@
-// tools/wl-analyzer/internal/frontend/WhitelangSourceMap.wl
+// tools/wlls/internal/frontend/WhitelangSourceMap.wl
 import "../../../../src/core/WhitelangExceptions.wl"
 import "../../../../src/core/WhitelangLexer.wl"
 

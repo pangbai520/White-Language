@@ -1,12 +1,12 @@
-// tools/wl-analyzer/analyzer.wl
+// tools/wlls/wlls.wl
 import "builtin"
 import "internal/server/_pkg.wl" as server
 
 extern func get_arg(ptr argv -> String, idx -> Int) -> String from "C";
 
 func print_usage() -> Void {
-    builtin.print("White Language Analyzer");
-    builtin.print("Usage: wl-analyzer --stdio");
+    builtin.print("White Language Language Server");
+    builtin.print("Usage: wlls --stdio");
 }
 
 func main(argc -> Int, ptr argv -> String) -> Int {

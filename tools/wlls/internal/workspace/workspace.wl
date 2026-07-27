@@ -1,4 +1,4 @@
-// in-memory documents owned by one analyzer session
+// in-memory documents owned by one language server session
 import Dict from "dict"
 import "../frontend/_pkg.wl" as source
 

@@ -1,4 +1,4 @@
-// tools/wl-analyzer/internal/analysis/_pkg.wl
+// tools/wlls/internal/analysis/_pkg.wl
 import * from "symbols.wl"
 import * from "diagnostics.wl"
 import * from "definitions.wl"

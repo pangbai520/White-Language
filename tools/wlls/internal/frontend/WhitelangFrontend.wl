@@ -1,4 +1,4 @@
-// tools/wl-analyzer/internal/frontend/WhitelangFrontend.wl
+// tools/wlls/internal/frontend/WhitelangFrontend.wl
 import * from "../../../../src/core/WhitelangNodes.wl"
 import Token from "../../../../src/core/WhitelangTokens.wl"
 import Lexer, new_lexer, get_next_token from "../../../../src/core/WhitelangLexer.wl"

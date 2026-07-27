@@ -1,5 +1,5 @@
 // Test: SEMANTIC_TOKEN_KINDS
-// File: tools/wl-analyzer/tests/test_token_kinds.wl
+// File: tools/wlls/tests/test_token_kinds.wl
 // Focus: Semantic classifications for White Language declarations and members.
 
 import "builtin"

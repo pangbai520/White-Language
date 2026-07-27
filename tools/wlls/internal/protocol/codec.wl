@@ -1,4 +1,4 @@
-// JSON request adapter for the analyzer protocol
+// JSON request adapter for the language server protocol
 import "json"
 
 class Request {
