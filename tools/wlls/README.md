@@ -29,6 +29,8 @@ Editors normally start this process themselves. Messages use protocol version
 `initialize`, then open documents before requesting diagnostics, symbols,
 definitions, or semantic tokens.
 
+See [Writing an editor client](docs/protocol.md) for the request format and plugin lifecycle.
+
 Run the following command to see the available command-line options:
 
 ```sh

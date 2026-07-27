@@ -188,5 +188,4 @@ Queue writes to stdin. Two messages written at the same time can interleave and 
 
 If the process exits, reject all pending requests, report stderr, and start a fresh process. Documents held by the old process are gone and must be opened again.
 
-The plugin should not parse White Language to compensate for a missing server feature. Syntax and semantic decisions belong in `wlls`, which shares the compiler frontend. The editor side should stay responsible for process management, document synchronization, and translating responses into its own
-UI types.
+The plugin should not parse White Language to compensate for a missing server feature. Syntax and semantic decisions belong in `wlls`, which shares the compiler frontend. The editor side should stay responsible for process management, document synchronization, and translating responses into its own UI types.

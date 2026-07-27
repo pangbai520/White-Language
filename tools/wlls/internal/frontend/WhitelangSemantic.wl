@@ -197,7 +197,11 @@ func type_text(node -> Struct) -> String {
     return "";
 }
 
-func __expression_type(scope -> __Scope, node -> Struct) -> String {
+func __expression_type(
+    document -> SemanticDocument,
+    scope -> __Scope,
+    node -> Struct
+) -> String {
     if (node is null) { return ""; }
     let base -> BaseNode = node;
     if (base.type == NODE_INT) {
@@ -219,6 +223,15 @@ func __expression_type(scope -> __Scope, node -> Struct) -> String {
         if (definition is !null) { return definition.type_name; }
         return access.name_tok.value;
     }
+    if (base.type == NODE_FIELD_ACCESS) {
+        let access -> FieldAccessNode = node;
+        let owner_type -> String =
+            __expression_type(document, scope, access.obj);
+        let member -> SymbolDefinition =
+            __find_member(document, owner_type, access.field_name);
+        if (member is !null) { return member.type_name; }
+        return "";
+    }
     if (base.type == NODE_BINOP) {
         let binary -> BinOpNode = node;
         let op -> Int = binary.op_tok.type;
@@ -233,8 +246,10 @@ func __expression_type(scope -> __Scope, node -> Struct) -> String {
             op == WhitelangTokens.TOK_IS) {
             return "Bool";
         }
-        let left -> String = __expression_type(scope, binary.left);
-        let right -> String = __expression_type(scope, binary.right);
+        let left -> String =
+            __expression_type(document, scope, binary.left);
+        let right -> String =
+            __expression_type(document, scope, binary.right);
         if (left == "String" || right == "String") { return "String"; }
         if (left == "Float" || right == "Float") { return "Float"; }
         if (left == "Long" || right == "Long") { return "Long"; }
@@ -243,15 +258,16 @@ func __expression_type(scope -> __Scope, node -> Struct) -> String {
     if (base.type == NODE_UNARYOP) {
         let unary -> UnaryOpNode = node;
         if (unary.op_tok.type == WhitelangTokens.TOK_NOT) { return "Bool"; }
-        return __expression_type(scope, unary.node);
+        return __expression_type(document, scope, unary.node);
     }
     if (base.type == NODE_CALL) {
         let call -> CallNode = node;
-        return __expression_type(scope, call.callee);
+        return __expression_type(document, scope, call.callee);
     }
     if (base.type == NODE_TRY_UNWRAP) {
         let unwrap -> TryUnwrapNode = node;
-        let wrapped -> String = __expression_type(scope, unwrap.expr);
+        let wrapped -> String =
+            __expression_type(document, scope, unwrap.expr);
         if (wrapped.ends_with("?")) {
             return wrapped.slice(0, wrapped.length() - 1);
         }
@@ -349,7 +365,8 @@ func __walk_node(document -> SemanticDocument, scope -> __Scope, node -> Struct)
             __definition(document, scope, declaration.name_tok, kind);
         definition.type_name = type_text(declaration.type_node);
         if (definition.type_name == "Auto") {
-            definition.type_name = __expression_type(scope, declaration.value);
+            definition.type_name =
+                __expression_type(document, scope, declaration.value);
         }
     } else if (base.type == NODE_VAR_ACCESS) {
         let access -> VarAccessNode = node;
@@ -406,7 +423,7 @@ func __walk_node(document -> SemanticDocument, scope -> __Scope, node -> Struct)
         if (field_reference.definition is null) {
             field_reference.definition = __find_member(
                 document,
-                __expression_type(scope, access.obj),
+                __expression_type(document, scope, access.obj),
                 access.field_name
             );
         }
@@ -429,7 +446,7 @@ func __walk_node(document -> SemanticDocument, scope -> __Scope, node -> Struct)
         if (field_reference.definition is null) {
             field_reference.definition = __find_member(
                 document,
-                __expression_type(scope, assignment.obj),
+                __expression_type(document, scope, assignment.obj),
                 assignment.field_name
             );
         }
@@ -562,7 +579,8 @@ func __declare_top_level(document -> SemanticDocument, scope -> __Scope) -> Void
             definition.top_level = true;
             definition.type_name = type_text(declaration.type_node);
             if (definition.type_name == "Auto") {
-                definition.type_name = __expression_type(scope, declaration.value);
+                definition.type_name =
+                    __expression_type(document, scope, declaration.value);
             }
         } else if (base.type == NODE_STRUCT_DEF) {
             let struct_node -> StructDefNode = node;
@@ -653,13 +671,27 @@ func __walk_top_level(document -> SemanticDocument, scope -> __Scope) -> Void {
             __walk_node(document, scope, declaration.value);
         } else if (base.type == NODE_STRUCT_DEF) {
             let struct_node -> StructDefNode = node;
+            let struct_scope -> __Scope = __Scope(scope);
             let j -> Int = 0;
             while (j < struct_node.fields.length()) {
                 let field -> ParamNode = struct_node.fields[j];
                 __walk_type(document, scope, field.type_tok);
+                let definition -> SymbolDefinition =
+                    __definition(
+                        document,
+                        struct_scope,
+                        field.name_tok,
+                        SYMBOL_FIELD
+                    );
+                definition.type_name = type_text(field.type_tok);
+                __register_member(
+                    document,
+                    struct_node.name_tok.value,
+                    definition
+                );
                 j += 1;
             }
-            __walk_node(document, scope, struct_node.body);
+            __walk_node(document, struct_scope, struct_node.body);
         } else if (base.type == NODE_CLASS_DEF) {
             let class_node -> ClassDefNode = node;
             if (class_node.parent_tok is !null) {
@@ -689,7 +721,8 @@ func __walk_top_level(document -> SemanticDocument, scope -> __Scope) -> Void {
                     definition
                 );
                 if (definition.type_name == "Auto") {
-                    definition.type_name = __expression_type(class_scope, field.value);
+                    definition.type_name =
+                        __expression_type(document, class_scope, field.value);
                 }
                 j += 1;
             }
@@ -754,10 +787,24 @@ func __walk_top_level(document -> SemanticDocument, scope -> __Scope) -> Void {
             }
         } else if (base.type == NODE_INTERFACE_DEF) {
             let interface_node -> InterfaceDefNode = node;
+            let interface_scope -> __Scope = __Scope(scope);
             let j -> Int = 0;
             while (j < interface_node.methods.length()) {
                 let method_node -> MethodDefNode = interface_node.methods[j];
-                let method_scope -> __Scope = __Scope(scope);
+                let definition -> SymbolDefinition =
+                    __definition(
+                        document,
+                        interface_scope,
+                        method_node.name_tok,
+                        SYMBOL_METHOD
+                    );
+                definition.type_name = type_text(method_node.return_type);
+                __register_member(
+                    document,
+                    interface_node.name_tok.value,
+                    definition
+                );
+                let method_scope -> __Scope = __Scope(interface_scope);
                 __declare_params(document, method_scope, method_node.params);
                 __walk_type(document, method_scope, method_node.return_type);
                 j += 1;

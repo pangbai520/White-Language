@@ -40,6 +40,16 @@ func main() -> Int {
         "    let third -> String = local.checked()?;\n" +
         "    catch(err) { return \"\"; }\n" +
         "    return first + second + third;\n" +
+        "}\n" +
+        "\n" +
+        "class Output {\n" +
+        "    method write() -> Void { return; }\n" +
+        "}\n" +
+        "class Compiler {\n" +
+        "    let output_file -> Output = null;\n" +
+        "}\n" +
+        "func emit(c -> Compiler) -> Void {\n" +
+        "    c.output_file.write();\n" +
         "}\n";
 
     let workspace -> source.FrontendWorkspace = source.FrontendWorkspace();
@@ -67,6 +77,16 @@ func main() -> Int {
         local_call.token_type != "method" ||
         fallible_call.token_type != "method") {
         builtin.print("FAIL: member calls were not classified as methods");
+        return 1;
+    }
+
+    let chained_field -> analysis.SemanticToken = token_at(tokens, 25, 6);
+    let chained_call -> analysis.SemanticToken = token_at(tokens, 25, 18);
+    if (chained_field is null ||
+        chained_call is null ||
+        chained_field.token_type != "property" ||
+        chained_call.token_type != "method") {
+        builtin.print("FAIL: chained member call");
         return 1;
     }
 
