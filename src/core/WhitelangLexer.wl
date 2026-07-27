@@ -10,13 +10,26 @@ struct Lexer(
     pos  -> Position, 
     current_char -> Char,
     current_width -> Int,
-    current_valid -> Bool
+    current_valid -> Bool,
+    collect_trivia -> Bool,
+    trivia -> Vector(Struct)
 )
 
 struct Utf8Unit(
     value -> Char,
     width -> Int,
     valid -> Bool
+)
+
+const TRIVIA_LINE_COMMENT -> Int = 1;
+const TRIVIA_BLOCK_COMMENT -> Int = 2;
+
+struct LexerTrivia(
+    kind -> Int,
+    start_line -> Int,
+    start_col -> Int,
+    end_line -> Int,
+    end_col -> Int
 )
 
 func is_space(c -> Char) -> Bool {
@@ -194,7 +207,7 @@ func validate_number(l -> Lexer, line -> Int, col -> Int, value -> String, is_fl
     return true;
 }
 
-func new_lexer(fn -> String, text -> String) -> Lexer {
+func __new_lexer(fn -> String, text -> String, collect_trivia -> Bool) -> Lexer {
     let pos -> Position = Position(idx=0, ln=0, col=0, text=text, fn=fn);
     let unit -> Utf8Unit = decode_utf8_unit(text, 0);
     let l -> Lexer = Lexer(
@@ -202,9 +215,19 @@ func new_lexer(fn -> String, text -> String) -> Lexer {
         pos=pos,
         current_char=unit.value,
         current_width=unit.width,
-        current_valid=unit.valid
+        current_valid=unit.valid,
+        collect_trivia=collect_trivia,
+        trivia=[]
     );
     return l;
+}
+
+func new_lexer(fn -> String, text -> String) -> Lexer {
+    return __new_lexer(fn, text, false);
+}
+
+func new_lexer_trivia(fn -> String, text -> String) -> Lexer {
+    return __new_lexer(fn, text, true);
 }
 
 func lexer_advance(l -> Lexer) -> Void {
@@ -413,6 +436,15 @@ func handle_slash(l -> Lexer) -> Token {
     // //
     if (l.current_char == '/') {
         while (l.current_char != '\0' && l.current_char != '\n') { lexer_advance(l); }
+        if (l.collect_trivia) {
+            l.trivia.append(LexerTrivia(
+                kind=TRIVIA_LINE_COMMENT,
+                start_line=line,
+                start_col=col,
+                end_line=l.pos.ln,
+                end_col=l.pos.col
+            ));
+        }
         return null;
     }
 
@@ -430,6 +462,15 @@ func handle_slash(l -> Lexer) -> Token {
             } else { lexer_advance(l); }
         }
         if (comment_closed == 0) { throw_illegal_char(l.pos, "Unterminated block comment."); }
+        if (l.collect_trivia) {
+            l.trivia.append(LexerTrivia(
+                kind=TRIVIA_BLOCK_COMMENT,
+                start_line=line,
+                start_col=col,
+                end_line=l.pos.ln,
+                end_col=l.pos.col
+            ));
+        }
         return null;
     }
 

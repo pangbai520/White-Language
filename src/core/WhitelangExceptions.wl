@@ -13,6 +13,11 @@ let REPORTED_ERRORS -> Dict = null;
 let STRUCTURED_ERRORS -> Vector(Struct) = null;
 let COLLECT_ERRORS_ONLY -> Bool = false;
 
+const DIAGNOSTIC_ERROR -> Int = 1;
+const DIAGNOSTIC_WARNING -> Int = 2;
+const DIAGNOSTIC_INFO -> Int = 3;
+const DIAGNOSTIC_HINT -> Int = 4;
+
 struct Position(
     idx  -> Int,
     ln   -> Int,
@@ -21,11 +26,222 @@ struct Position(
     fn   -> String
 )
 
+struct SourcePosition(
+    byte_offset   -> Int,
+    line          -> Int,
+    byte_column   -> Int,
+    unicode_column -> Int,
+    utf16_column  -> Int
+)
+
+struct SourceRange(
+    file  -> String,
+    start -> SourcePosition,
+    end   -> SourcePosition
+)
+
+struct DiagnosticNote(
+    message -> String,
+    range   -> SourceRange
+)
+
 struct CompilerDiagnostic(
+    code     -> String,
+    severity -> Int,
     category -> String,
     message  -> String,
-    pos      -> Position
+    pos      -> Position,
+    range    -> SourceRange,
+    notes    -> Vector(Struct)
 )
+
+struct __SourceUnit(
+    scalar -> Int,
+    width  -> Int,
+    valid  -> Bool
+)
+
+func __source_unit(text -> String, offset -> Int) -> __SourceUnit {
+    if (text is null || offset < 0 || offset >= text.length()) {
+        return __SourceUnit(scalar=0, width=0, valid=true);
+    }
+
+    let first -> Int = Int(text[offset]);
+    if (first <= 127) {
+        return __SourceUnit(scalar=first, width=1, valid=true);
+    }
+
+    if (first >= 194 && first <= 223 && offset + 1 < text.length()) {
+        let second -> Int = Int(text[offset + 1]);
+        if (second >= 128 && second <= 191) {
+            return __SourceUnit(
+                scalar=((first & 31) << 6) | (second & 63),
+                width=2,
+                valid=true
+            );
+        }
+    }
+
+    if (first >= 224 && first <= 239 && offset + 2 < text.length()) {
+        let second -> Int = Int(text[offset + 1]);
+        let third -> Int = Int(text[offset + 2]);
+        let second_valid -> Bool = second >= 128 && second <= 191;
+        if (first == 224) { second_valid = second >= 160 && second <= 191; }
+        if (first == 237) { second_valid = second >= 128 && second <= 159; }
+        if (second_valid && third >= 128 && third <= 191) {
+            return __SourceUnit(
+                scalar=((first & 15) << 12) |
+                       ((second & 63) << 6) |
+                       (third & 63),
+                width=3,
+                valid=true
+            );
+        }
+    }
+
+    if (first >= 240 && first <= 244 && offset + 3 < text.length()) {
+        let second -> Int = Int(text[offset + 1]);
+        let third -> Int = Int(text[offset + 2]);
+        let fourth -> Int = Int(text[offset + 3]);
+        let second_valid -> Bool = second >= 128 && second <= 191;
+        if (first == 240) { second_valid = second >= 144 && second <= 191; }
+        if (first == 244) { second_valid = second >= 128 && second <= 143; }
+        if (second_valid &&
+            third >= 128 && third <= 191 &&
+            fourth >= 128 && fourth <= 191) {
+            return __SourceUnit(
+                scalar=((first & 7) << 18) |
+                       ((second & 63) << 12) |
+                       ((third & 63) << 6) |
+                       (fourth & 63),
+                width=4,
+                valid=true
+            );
+        }
+    }
+
+    return __SourceUnit(scalar=65533, width=1, valid=false);
+}
+
+func source_position(text -> String, line -> Int, byte_column -> Int) -> SourcePosition {
+    let target_line -> Int = line;
+    if (target_line < 0) { target_line = 0; }
+    if (text is null) {
+        return SourcePosition(
+            byte_offset=0,
+            line=target_line,
+            byte_column=0,
+            unicode_column=0,
+            utf16_column=0
+        );
+    }
+
+    let line_start -> Int = 0;
+    let current_line -> Int = 0;
+    while (line_start < text.length() && current_line < target_line) {
+        if (text[line_start] == '\n') { current_line += 1; }
+        line_start += 1;
+    }
+
+    let line_end -> Int = line_start;
+    while (line_end < text.length() &&
+           text[line_end] != '\n' &&
+           text[line_end] != '\r') {
+        line_end += 1;
+    }
+
+    let column -> Int = byte_column;
+    if (column < 0) { column = 0; }
+    let line_bytes -> Int = line_end - line_start;
+    if (column > line_bytes) { column = line_bytes; }
+
+    let target -> Int = line_start + column;
+    let offset -> Int = line_start;
+    let unicode_column -> Int = 0;
+    let utf16_column -> Int = 0;
+    while (offset < target) {
+        let unit -> __SourceUnit = __source_unit(text, offset);
+        let width -> Int = unit.width;
+        if (width <= 0 || offset + width > target) { break; }
+        offset += width;
+        unicode_column += 1;
+        if (unit.scalar > 65535) {
+            utf16_column += 2;
+        } else {
+            utf16_column += 1;
+        }
+    }
+
+    return SourcePosition(
+        byte_offset=line_start + column,
+        line=current_line,
+        byte_column=column,
+        unicode_column=unicode_column,
+        utf16_column=utf16_column
+    );
+}
+
+func source_range(
+    file -> String,
+    text -> String,
+    line -> Int,
+    byte_column -> Int,
+    byte_width -> Int
+) -> SourceRange {
+    let width -> Int = byte_width;
+    if (width < 0) { width = 0; }
+    return SourceRange(
+        file=file,
+        start=source_position(text, line, byte_column),
+        end=source_position(text, line, byte_column + width)
+    );
+}
+
+func __diagnostic_width(pos -> Position) -> Int {
+    let offset -> Int = source_position(pos.text, pos.ln, pos.col).byte_offset;
+    if (offset < 0 || offset >= pos.text.length()) { return 1; }
+
+    let first -> Int = Int(pos.text[offset]);
+    let identifier -> Bool =
+        (first >= Int('a') && first <= Int('z')) ||
+        (first >= Int('A') && first <= Int('Z')) ||
+        (first >= Int('0') && first <= Int('9')) ||
+        first == Int('_');
+    if (!identifier) {
+        let unit -> __SourceUnit = __source_unit(pos.text, offset);
+        if (unit.width > 0) { return unit.width; }
+        return 1;
+    }
+
+    let end -> Int = offset;
+    while (end < pos.text.length()) {
+        let current -> Int = Int(pos.text[end]);
+        let valid -> Bool =
+            (current >= Int('a') && current <= Int('z')) ||
+            (current >= Int('A') && current <= Int('Z')) ||
+            (current >= Int('0') && current <= Int('9')) ||
+            current == Int('_');
+        if (!valid) { break; }
+        end += 1;
+    }
+    return end - offset;
+}
+
+func diagnostic_code(category -> String) -> String {
+    if (category == "IllegalCharacter") { return "E0001"; }
+    if (category == "InvalidSyntax") { return "E1001"; }
+    if (category == "NameError") { return "E2001"; }
+    if (category == "TypeError") { return "E3001"; }
+    if (category == "MissingInitializer") { return "E3002"; }
+    if (category == "NullDereferenceError") { return "E4001"; }
+    if (category == "IndexError") { return "E4002"; }
+    if (category == "ImportError") { return "E5001"; }
+    if (category == "InternalCompilerError") { return "E6001"; }
+    if (category == "ZeroDivisionError") { return "E7001"; }
+    if (category == "OverflowError") { return "E7002"; }
+    if (category == "ExternError") { return "E8001"; }
+    return "E0000";
+}
 
 func reset_errors() -> Void {
     GLOBAL_ERROR_COUNT = 0;
@@ -74,7 +290,17 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
 
     GLOBAL_ERROR_COUNT = GLOBAL_ERROR_COUNT + 1;
     if (STRUCTURED_ERRORS is null) { STRUCTURED_ERRORS = []; }
-    STRUCTURED_ERRORS.append(CompilerDiagnostic(category=name, message=details, pos=pos));
+    let range -> SourceRange =
+        source_range(pos.fn, pos.text, pos.ln, pos.col, __diagnostic_width(pos));
+    STRUCTURED_ERRORS.append(CompilerDiagnostic(
+        code=diagnostic_code(name),
+        severity=DIAGNOSTIC_ERROR,
+        category=name,
+        message=details,
+        pos=pos,
+        range=range,
+        notes=[]
+    ));
 
     let ln -> Int = pos.ln + 1;
     let col -> Int = pos.col + 1;
@@ -119,36 +345,23 @@ func report_error(pos -> Position, name -> String, details -> String) -> Void {
         
         err_msg += " " + ln_str + " | " + line_text + "\n";
 
-        let err_len -> Int = 1;
+        let err_len -> Int =
+            range.end.unicode_column - range.start.unicode_column;
+        if (err_len < 1) { err_len = 1; }
         let line_len -> Int = line_text.length();
-        if (pos.col < line_len) {
-            let ch -> Char = line_text[pos.col];
-            if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '_' || (ch >= '0' && ch <= '9')) {
-                let cur -> Int = pos.col + 1;
-                while (cur < line_len) {
-                    let c2 -> Char = line_text[cur]; 
-                    if ((c2 >= 'A' && c2 <= 'Z') || (c2 >= 'a' && c2 <= 'z') || c2 == '_' || (c2 >= '0' && c2 <= '9')) {
-                        cur += 1;
-                    } else {
-                        break;
-                    }
-                }
-                err_len = cur - pos.col;
-            }
-        }
 
         let caret_line -> String = empty_prefix + "| ";
         let j -> Int = 0;
         while (j < pos.col) {
-            let ch -> Char = ' ';
-            if (j < line_len) { ch = line_text[j]; }
-
-            if (ch == '\t') { 
-                caret_line = caret_line + line_text.slice(j, j + 1);
+            let unit -> __SourceUnit = __source_unit(line_text, j);
+            let width -> Int = unit.width;
+            if (width <= 0) { break; }
+            if (Int(line_text[j]) == Int('\t')) {
+                caret_line += "\t";
             } else {
-                caret_line = caret_line + " ";
+                caret_line += " ";
             }
-            j += 1;
+            j += width;
         }
         
         let k -> Int = 0;
