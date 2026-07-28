@@ -6,9 +6,9 @@ import * from "../../../../src/core/WhitelangNodes.wl"
 import "../../../../src/core/WhitelangTokens.wl"
 
 class WorkspaceSource {
-    let path -> String = "";
-    let version -> Int = 0;
-    let result -> FrontendResult = null;
+    let path -> String;
+    let version -> Int;
+    let result -> FrontendResult;
 
     init(path -> String, version -> Int, result -> FrontendResult) {
         self.path = path;

@@ -5,12 +5,14 @@ import "../frontend/_pkg.wl" as source
 import "../analysis/_pkg.wl" as analysis
 
 class Server {
-    let workspace -> workspace.Workspace = null;
-    let initialized -> Bool = false;
-    let shutdown_requested -> Bool = false;
+    let workspace -> workspace.Workspace;
+    let initialized -> Bool;
+    let shutdown_requested -> Bool;
 
     init() {
         self.workspace = workspace.Workspace();
+        self.initialized = false;
+        self.shutdown_requested = false;
     }
 
     method response(id -> Int, result -> String) -> String {

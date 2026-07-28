@@ -2,7 +2,7 @@
 import "json"
 
 class Request {
-    let root -> json.Value = null;
+    let root -> json.Value;
 
     init(root -> json.Value) {
         self.root = root;

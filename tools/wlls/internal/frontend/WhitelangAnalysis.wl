@@ -3,10 +3,10 @@ import * from "WhitelangSemantic.wl"
 import "../../../../src/core/WhitelangExceptions.wl"
 
 class FrontendResult {
-    let syntax -> FrontendDocument = null;
-    let semantics -> SemanticDocument = null;
-    let diagnostics -> Vector(Struct) = null;
-    let valid -> Bool = false;
+    let syntax -> FrontendDocument;
+    let semantics -> SemanticDocument;
+    let diagnostics -> Vector(Struct);
+    let valid -> Bool;
 
     init(
         syntax -> FrontendDocument,

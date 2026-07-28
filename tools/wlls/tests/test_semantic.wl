@@ -72,6 +72,54 @@ func main() -> Int {
         return 1;
     }
 
+    let empty_semantics -> source.SemanticDocument =
+        source.analyze_document(
+            source.parse_document(
+                "intrinsic.wl",
+                "@CompilerIntrinsic\nstruct Variant(\n)\n"
+            )
+        );
+    let variant -> source.SymbolDefinition = null;
+    if (empty_semantics is !null &&
+        empty_semantics.definitions.length() > 0) {
+        variant = empty_semantics.definitions[0];
+    }
+    if (empty_semantics is null ||
+        empty_semantics.definitions.length() != 1 ||
+        variant is null ||
+        variant.name != "Variant") {
+        builtin.print("FAIL: empty intrinsic struct");
+        return 1;
+    }
+
+    let field_init_text -> String =
+        "class User {\n" +
+        "    let name -> String;\n" +
+        "    let age -> Int;\n" +
+        "\n" +
+        "    init(name -> String, age -> Int) {\n" +
+        "        self.name = name;\n" +
+        "        self.age = age;\n" +
+        "    }\n" +
+        "}\n";
+    let field_init_semantics -> source.SemanticDocument =
+        source.analyze_document(
+            source.parse_document("user.wl", field_init_text)
+        );
+    let name_field -> source.SymbolDefinition =
+        source.definition_at(field_init_semantics, 5, 13);
+    let age_field -> source.SymbolDefinition =
+        source.definition_at(field_init_semantics, 6, 13);
+    if (name_field is null ||
+        age_field is null ||
+        name_field.kind != source.SYMBOL_FIELD ||
+        age_field.kind != source.SYMBOL_FIELD ||
+        name_field.range.start.line != 1 ||
+        age_field.range.start.line != 2) {
+        builtin.print("FAIL: constructor field initialization");
+        return 1;
+    }
+
     builtin.print("PASS: semantic definitions");
     return 0;
 }

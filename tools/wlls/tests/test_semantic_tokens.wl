@@ -124,6 +124,20 @@ func main() -> Int {
         return 1;
     }
 
+    let contextual_path -> String = "contextual.wl";
+    let contextual -> source.FrontendResult = workspace.update(
+        contextual_path,
+        1,
+        "func use(type -> Int) -> Int { return type; }\n"
+    );
+    let contextual_tokens -> Vector(Struct) =
+        analysis.semantic_tokens(contextual, workspace, contextual_path);
+    if (!has_token(contextual_tokens, 0, 9, "parameter") ||
+        !has_token(contextual_tokens, 0, 38, "parameter")) {
+        builtin.print("FAIL: contextual type token");
+        return 1;
+    }
+
     builtin.print("PASS: semantic tokens");
     return 0;
 }

@@ -3,10 +3,10 @@ import Dict from "dict"
 import "../frontend/_pkg.wl" as source
 
 class Document {
-    let path -> String = "";
-    let version -> Int = 0;
-    let text -> String = "";
-    let result -> source.FrontendResult = null;
+    let path -> String;
+    let version -> Int;
+    let text -> String;
+    let result -> source.FrontendResult;
 
     init(
         path -> String,
@@ -22,8 +22,8 @@ class Document {
 }
 
 class Workspace {
-    let documents -> Dict = null;
-    let frontend -> source.FrontendWorkspace = null;
+    let documents -> Dict;
+    let frontend -> source.FrontendWorkspace;
 
     init() {
         self.documents = Dict(16);

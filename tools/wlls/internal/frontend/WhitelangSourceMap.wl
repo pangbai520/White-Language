@@ -3,8 +3,8 @@ import "../../../../src/core/WhitelangExceptions.wl"
 import "../../../../src/core/WhitelangLexer.wl"
 
 class SourceMap {
-    let text -> String = "";
-    let line_starts -> Vector(Int) = null;
+    let text -> String;
+    let line_starts -> Vector(Int);
 
     init(text -> String) {
         // index line starts once; UTF-16 columns are decoded only inside the requested line

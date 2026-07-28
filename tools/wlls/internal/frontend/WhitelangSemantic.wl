@@ -6,14 +6,14 @@ import Token from "../../../../src/core/WhitelangTokens.wl"
 import "../../../../src/core/WhitelangExceptions.wl"
 
 class SymbolDefinition {
-    let name -> String = "";
-    let kind -> Int = 0;
-    let range -> WhitelangExceptions.SourceRange = null;
-    let type_name -> String = "";
-    let import_path -> String = "";
-    let import_name -> String = "";
-    let owner_type -> String = "";
-    let top_level -> Bool = false;
+    let name -> String;
+    let kind -> Int;
+    let range -> WhitelangExceptions.SourceRange;
+    let type_name -> String;
+    let import_path -> String;
+    let import_name -> String;
+    let owner_type -> String;
+    let top_level -> Bool;
 
     init(name -> String, kind -> Int, range -> WhitelangExceptions.SourceRange) {
         self.name = name;
@@ -28,12 +28,12 @@ class SymbolDefinition {
 }
 
 class SymbolReference {
-    let name -> String = "";
-    let range -> WhitelangExceptions.SourceRange = null;
-    let definition -> SymbolDefinition = null;
-    let qualifier -> String = "";
-    let owner_type -> String = "";
-    let receiver -> SymbolReference = null;
+    let name -> String;
+    let range -> WhitelangExceptions.SourceRange;
+    let definition -> SymbolDefinition;
+    let qualifier -> String;
+    let owner_type -> String;
+    let receiver -> SymbolReference;
 
     init(
         name -> String,
@@ -50,10 +50,10 @@ class SymbolReference {
 }
 
 class SemanticDocument {
-    let syntax -> FrontendDocument = null;
-    let definitions -> Vector(Struct) = null;
-    let references -> Vector(Struct) = null;
-    let members -> Dict = null;
+    let syntax -> FrontendDocument;
+    let definitions -> Vector(Struct);
+    let references -> Vector(Struct);
+    let members -> Dict;
 
     init(
         syntax -> FrontendDocument,
@@ -120,8 +120,8 @@ func __find_member(
 }
 
 class __Scope {
-    let parent -> __Scope = null;
-    let symbols -> Dict = null;
+    let parent -> __Scope;
+    let symbols -> Dict;
 
     init(parent -> __Scope) {
         self.parent = parent;
@@ -304,6 +304,26 @@ func __field_token(access -> FieldAccessNode) -> Token {
     );
 }
 
+func __field_assign_token(document -> SemanticDocument, assignment -> FieldAssignNode) -> Token {
+    let line_start -> Int =
+        document.syntax.source_map.line_start(assignment.pos.ln);
+    let cursor -> Int = line_start + assignment.pos.col - 1;
+    while (cursor >= line_start &&
+           (document.syntax.source[cursor] == ' ' ||
+            document.syntax.source[cursor] == '\t')) {
+        cursor -= 1;
+    }
+    let column -> Int =
+        cursor - line_start - assignment.field_name.length() + 1;
+    if (column < 0) { column = assignment.pos.col; }
+    return Token(
+        type=WhitelangTokens.TOK_IDENTIFIER,
+        value=assignment.field_name,
+        line=assignment.pos.ln,
+        col=column
+    );
+}
+
 func __walk_type(document -> SemanticDocument, scope -> __Scope, node -> Struct) -> Void {
     if (node is null) { return; }
     let base -> BaseNode = node;
@@ -331,7 +351,11 @@ func __walk_type(document -> SemanticDocument, scope -> __Scope, node -> Struct)
     } else if (base.type == NODE_FUNCTION_TYPE) {
         let function_type -> FunctionTypeNode = node;
         let i -> Int = 0;
-        while (i < function_type.arg_types.length()) {
+        let count -> Int = 0;
+        if (function_type.arg_types is !null) {
+            count = function_type.arg_types.length();
+        }
+        while (i < count) {
             __walk_type(document, scope, function_type.arg_types[i]);
             i += 1;
         }
@@ -339,7 +363,11 @@ func __walk_type(document -> SemanticDocument, scope -> __Scope, node -> Struct)
     } else if (base.type == NODE_METHOD_TYPE) {
         let method_type -> MethodTypeNode = node;
         let i -> Int = 0;
-        while (i < method_type.arg_types.length()) {
+        let count -> Int = 0;
+        if (method_type.arg_types is !null) {
+            count = method_type.arg_types.length();
+        }
+        while (i < count) {
             __walk_type(document, scope, method_type.arg_types[i]);
             i += 1;
         }
@@ -355,7 +383,9 @@ func __walk_node(document -> SemanticDocument, scope -> __Scope, node -> Struct)
         let block -> BlockNode = node;
         let block_scope -> __Scope = __Scope(scope);
         let i -> Int = 0;
-        while (i < block.stmts.length()) {
+        let count -> Int = 0;
+        if (block.stmts is !null) { count = block.stmts.length(); }
+        while (i < count) {
             __walk_node(document, block_scope, block.stmts[i]);
             i += 1;
         }
@@ -452,23 +482,14 @@ func __walk_node(document -> SemanticDocument, scope -> __Scope, node -> Struct)
         if ((object_base.type == NODE_VAR_ACCESS ||
              object_base.type == NODE_FIELD_ACCESS) &&
             document.references.length() > reference_start) {
-            receiver =
-                document.references[document.references.length() - 1];
+            receiver = document.references[document.references.length() - 1];
         }
-        let owner_type -> String =
-            __expression_type(document, scope, assignment.obj);
-        let field_token -> Token = Token(
-            type=WhitelangTokens.TOK_IDENTIFIER,
-            value=assignment.field_name,
-            line=assignment.pos.ln,
-            col=assignment.pos.col
-        );
-        let field_reference -> SymbolReference =
-            __reference(document, scope, field_token);
+        let owner_type -> String = __expression_type(document, scope, assignment.obj);
+        let field_token -> Token = __field_assign_token(document, assignment);
+        let field_reference -> SymbolReference = __reference(document, scope, field_token);
         field_reference.owner_type = owner_type;
         field_reference.receiver = receiver;
-        field_reference.definition =
-            __find_member(document, owner_type, assignment.field_name);
+        field_reference.definition = __find_member(document, owner_type, assignment.field_name);
         if (object_base.type == NODE_VAR_ACCESS) {
             let object -> VarAccessNode = assignment.obj;
             field_reference.qualifier = object.name_tok.value;
@@ -487,7 +508,9 @@ func __walk_node(document -> SemanticDocument, scope -> __Scope, node -> Struct)
     } else if (base.type == NODE_VECTOR_LIT) {
         let vector -> VectorLitNode = node;
         let i -> Int = 0;
-        while (i < vector.elements.length()) {
+        let count -> Int = 0;
+        if (vector.elements is !null) { count = vector.elements.length(); }
+        while (i < count) {
             __walk_node(document, scope, vector.elements[i]);
             i += 1;
         }
@@ -508,7 +531,9 @@ func __walk_node(document -> SemanticDocument, scope -> __Scope, node -> Struct)
     } else if (base.type == NODE_MAP_LIT) {
         let map -> MapLitNode = node;
         let i -> Int = 0;
-        while (i < map.pairs.length()) {
+        let count -> Int = 0;
+        if (map.pairs is !null) { count = map.pairs.length(); }
+        while (i < count) {
             let pair -> MapPairNode = map.pairs[i];
             __walk_node(document, scope, pair.key);
             __walk_node(document, scope, pair.value);
@@ -562,7 +587,9 @@ func __walk_function(
 func __declare_top_level(document -> SemanticDocument, scope -> __Scope) -> Void {
     let block -> BlockNode = document.syntax.ast;
     let i -> Int = 0;
-    while (i < block.stmts.length()) {
+    let count -> Int = 0;
+    if (block.stmts is !null) { count = block.stmts.length(); }
+    while (i < count) {
         let node -> Struct = block.stmts[i];
         let base -> BaseNode = node;
         if (base.type == NODE_FUNC_DEF) {
@@ -580,7 +607,11 @@ func __declare_top_level(document -> SemanticDocument, scope -> __Scope) -> Void
         } else if (base.type == NODE_EXTERN_BLOCK) {
             let extern_block -> ExternBlockNode = node;
             let j -> Int = 0;
-            while (j < extern_block.funcs.length()) {
+            let count -> Int = 0;
+            if (extern_block.funcs is !null) {
+                count = extern_block.funcs.length();
+            }
+            while (j < count) {
                 let extern_node -> ExternFuncNode = extern_block.funcs[j];
                 let definition -> SymbolDefinition =
                     __definition(document, scope, extern_node.name_tok, SYMBOL_FUNCTION);
@@ -656,7 +687,11 @@ func __declare_top_level(document -> SemanticDocument, scope -> __Scope) -> Void
 func __walk_top_level(document -> SemanticDocument, scope -> __Scope) -> Void {
     let block -> BlockNode = document.syntax.ast;
     let i -> Int = 0;
-    while (i < block.stmts.length()) {
+    let statement_count -> Int = 0;
+    if (block.stmts is !null) {
+        statement_count = block.stmts.length();
+    }
+    while (i < statement_count) {
         let node -> Struct = block.stmts[i];
         let base -> BaseNode = node;
         if (base.type == NODE_FUNC_DEF) {
@@ -676,7 +711,11 @@ func __walk_top_level(document -> SemanticDocument, scope -> __Scope) -> Void {
         } else if (base.type == NODE_EXTERN_BLOCK) {
             let extern_block -> ExternBlockNode = node;
             let j -> Int = 0;
-            while (j < extern_block.funcs.length()) {
+            let count -> Int = 0;
+            if (extern_block.funcs is !null) {
+                count = extern_block.funcs.length();
+            }
+            while (j < count) {
                 let extern_node -> ExternFuncNode = extern_block.funcs[j];
                 let function_scope -> __Scope = __Scope(scope);
                 __declare_params(document, function_scope, extern_node.params);
@@ -691,7 +730,11 @@ func __walk_top_level(document -> SemanticDocument, scope -> __Scope) -> Void {
             let struct_node -> StructDefNode = node;
             let struct_scope -> __Scope = __Scope(scope);
             let j -> Int = 0;
-            while (j < struct_node.fields.length()) {
+            let count -> Int = 0;
+            if (struct_node.fields is !null) {
+                count = struct_node.fields.length();
+            }
+            while (j < count) {
                 let field -> ParamNode = struct_node.fields[j];
                 __walk_type(document, scope, field.type_tok);
                 let definition -> SymbolDefinition =
@@ -730,7 +773,11 @@ func __walk_top_level(document -> SemanticDocument, scope -> __Scope) -> Void {
             self_definition.type_name = class_node.name_tok.value;
             class_scope.define(self_definition);
             let j -> Int = 0;
-            while (j < class_node.fields.length()) {
+            let field_count -> Int = 0;
+            if (class_node.fields is !null) {
+                field_count = class_node.fields.length();
+            }
+            while (j < field_count) {
                 let field -> VarDeclareNode = class_node.fields[j];
                 __walk_type(document, class_scope, field.type_node);
                 __walk_node(document, class_scope, field.value);
@@ -749,8 +796,16 @@ func __walk_top_level(document -> SemanticDocument, scope -> __Scope) -> Void {
                 j += 1;
             }
             j = 0;
-            while (j < class_node.methods.length()) {
+            let method_count -> Int = 0;
+            if (class_node.methods is !null) {
+                method_count = class_node.methods.length();
+            }
+            while (j < method_count) {
                 let method_node -> MethodDefNode = class_node.methods[j];
+                if (method_node.name_tok.value == "$field_init") {
+                    j += 1;
+                    continue;
+                }
                 let method_kind -> Int = SYMBOL_METHOD;
                 let method_name -> String = method_node.name_tok.value;
                 let method_token -> Token = method_node.name_tok;
@@ -788,21 +843,27 @@ func __walk_top_level(document -> SemanticDocument, scope -> __Scope) -> Void {
                 j += 1;
             }
             j = 0;
-            while (j < class_node.methods.length()) {
+            while (j < method_count) {
                 let method_node -> MethodDefNode = class_node.methods[j];
-                __walk_function(
-                    document,
-                    class_scope,
-                    method_node.params,
-                    method_node.return_type,
-                    method_node.body
-                );
+                if (method_node.name_tok.value != "$field_init") {
+                    __walk_function(
+                        document,
+                        class_scope,
+                        method_node.params,
+                        method_node.return_type,
+                        method_node.body
+                    );
+                }
                 j += 1;
             }
         } else if (base.type == NODE_ENUM_DEF) {
             let enum_node -> EnumDefNode = node;
             let j -> Int = 0;
-            while (j < enum_node.fields.length()) {
+            let count -> Int = 0;
+            if (enum_node.fields is !null) {
+                count = enum_node.fields.length();
+            }
+            while (j < count) {
                 let field -> EnumFieldNode = enum_node.fields[j];
                 __walk_node(document, scope, field.value);
                 j += 1;
@@ -811,7 +872,11 @@ func __walk_top_level(document -> SemanticDocument, scope -> __Scope) -> Void {
             let interface_node -> InterfaceDefNode = node;
             let interface_scope -> __Scope = __Scope(scope);
             let j -> Int = 0;
-            while (j < interface_node.methods.length()) {
+            let count -> Int = 0;
+            if (interface_node.methods is !null) {
+                count = interface_node.methods.length();
+            }
+            while (j < count) {
                 let method_node -> MethodDefNode = interface_node.methods[j];
                 let definition -> SymbolDefinition =
                     __definition(

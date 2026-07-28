@@ -5,11 +5,11 @@ import "../frontend/_pkg.wl" as source
 import "../compiler/_pkg.wl" as compiler
 
 class SemanticToken {
-    let line -> Int = 0;
-    let character -> Int = 0;
-    let length -> Int = 0;
-    let token_type -> String = "";
-    let modifiers -> Vector(String) = null;
+    let line -> Int;
+    let character -> Int;
+    let length -> Int;
+    let token_type -> String;
+    let modifiers -> Vector(String);
 
     init(
         line -> Int,
@@ -27,10 +27,10 @@ class SemanticToken {
 }
 
 class __TokenBinding {
-    let kind -> Int = 0;
-    let readonly -> Bool = false;
-    let top_level -> Bool = false;
-    let declaration -> Bool = false;
+    let kind -> Int;
+    let readonly -> Bool;
+    let top_level -> Bool;
+    let declaration -> Bool;
 
     init(kind -> Int, readonly -> Bool, top_level -> Bool, declaration -> Bool) {
         self.kind = kind;

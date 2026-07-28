@@ -50,6 +50,18 @@ func main() -> Int {
         "}\n" +
         "func emit(c -> Compiler) -> Void {\n" +
         "    c.output_file.write();\n" +
+        "}\n" +
+        "class Leaf {\n" +
+        "    method flush() -> Void { return; }\n" +
+        "}\n" +
+        "class Branch {\n" +
+        "    let leaf -> Leaf = null;\n" +
+        "}\n" +
+        "class Root {\n" +
+        "    let branch -> Branch = null;\n" +
+        "}\n" +
+        "func flush(root -> Root) -> Void {\n" +
+        "    root.branch.leaf.flush();\n" +
         "}\n";
 
     let workspace -> source.FrontendWorkspace = source.FrontendWorkspace();
@@ -87,6 +99,19 @@ func main() -> Int {
         chained_field.token_type != "property" ||
         chained_call.token_type != "method") {
         builtin.print("FAIL: chained member call");
+        return 1;
+    }
+
+    let deep_branch -> analysis.SemanticToken = token_at(tokens, 37, 9);
+    let deep_leaf -> analysis.SemanticToken = token_at(tokens, 37, 16);
+    let deep_call -> analysis.SemanticToken = token_at(tokens, 37, 21);
+    if (deep_branch is null ||
+        deep_leaf is null ||
+        deep_call is null ||
+        deep_branch.token_type != "property" ||
+        deep_leaf.token_type != "property" ||
+        deep_call.token_type != "method") {
+        builtin.print("FAIL: deep member chain");
         return 1;
     }
 

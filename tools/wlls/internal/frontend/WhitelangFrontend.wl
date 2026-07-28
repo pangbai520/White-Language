@@ -162,7 +162,13 @@ func index_top_level(path -> String, source_map -> SourceMap, ast -> Struct) -> 
             if (class_node.methods is !null) {
                 let j -> Int = 0;
                 while (j < class_node.methods.length()) {
-                    symbol.children.append(index_method(path, source_map, class_node.methods[j]));
+                    let method_node -> MethodDefNode =
+                        class_node.methods[j];
+                    if (method_node.name_tok.value != "$field_init") {
+                        symbol.children.append(
+                            index_method(path, source_map, method_node)
+                        );
+                    }
                     j += 1;
                 }
             }
