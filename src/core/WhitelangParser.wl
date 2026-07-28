@@ -1812,13 +1812,11 @@ func parse_class_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
 
             let tid -> TypedIdent = parse_typed_identifier_param(p);
 
-            if (p.current_tok.type != TOK_ASSIGN) {
-                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-                throw_invalid_syntax(err_pos, "Class fields must be initialized (e.g., = null;).");
+            let default_val -> Struct = null;
+            if (p.current_tok.type == TOK_ASSIGN) {
+                parser_advance(p); // skip '='
+                default_val = expression(p);
             }
-            parser_advance(p); // skip '='
-    
-            let default_val -> Struct = expression(p); 
 
             if (p.current_tok.type != TOK_SEMICOLON) {
                 let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -1945,6 +1943,63 @@ func parse_class_def(p -> Parser, anns -> Vector(Struct)) -> Struct {
         throw_invalid_syntax(err_pos, "Expected '}' after class body.");
     }
     parser_advance(p); // skip '}'
+
+    let field_init_stmts -> Vector(Struct) = [];
+    let field_idx -> Int = 0;
+    while (field_idx < fields.length()) {
+        let field -> VarDeclareNode = fields[field_idx];
+        if (field.value is !null) {
+            let self_tok -> Token = Token(
+                type=TOK_IDENTIFIER,
+                value="self",
+                line=field.name_tok.line,
+                col=field.name_tok.col
+            );
+            let self_node -> VarAccessNode = VarAccessNode(
+                type=NODE_VAR_ACCESS,
+                name_tok=self_tok,
+                pos=field.pos
+            );
+            field_init_stmts.append(FieldAssignNode(
+                type=NODE_FIELD_ASSIGN,
+                obj=self_node,
+                field_name=field.name_tok.value,
+                value=field.value,
+                pos=field.pos
+            ));
+        }
+        field_idx += 1;
+    }
+
+    if (field_init_stmts.length() > 0) {
+        let field_init_tok -> Token = Token(
+            type=TOK_IDENTIFIER,
+            value="$field_init",
+            line=pos.ln,
+            col=pos.col
+        );
+        let void_tok -> Token = Token(
+            type=TOK_T_VOID,
+            value="Void",
+            line=pos.ln,
+            col=pos.col
+        );
+        let return_type -> Struct = VarAccessNode(
+            type=NODE_VAR_ACCESS,
+            name_tok=void_tok,
+            pos=pos
+        );
+        methods.append(MethodDefNode(
+            type=NODE_METHOD_DEF,
+            pos=pos,
+            name_tok=field_init_tok,
+            params=[],
+            return_type=return_type,
+            body=BlockNode(type=NODE_BLOCK, stmts=field_init_stmts),
+            is_override=false,
+            annotations=null
+        ));
+    }
 
     return ClassDefNode(type=NODE_CLASS_DEF, pos=pos, name_tok=name_tok, parent_tok=parent_tok, interfaces=interfaces, fields=fields, methods=methods, annotations=anns);
 }

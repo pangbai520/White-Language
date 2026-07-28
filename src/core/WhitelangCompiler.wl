@@ -3981,6 +3981,649 @@ func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode
     return CompileResult(reg=obj_ptr, type=s_info.type_id);
 }
 
+struct InitFlow(initialized -> Vector(String), terminates  -> Bool)
+func init_has(initialized -> Vector(String), name -> String) -> Bool {
+    let i -> Int = 0;
+    while (i < initialized.length()) {
+        if (initialized[i] == name) { return true; }
+        i += 1;
+    }
+    return false;
+}
+func init_add(initialized -> Vector(String), name -> String) -> Void {
+    if (!init_has(initialized, name)) { initialized.append(name); }
+}
+func init_copy(initialized -> Vector(String)) -> Vector(String) {
+    let copy -> Vector(String) = [];
+    let i -> Int = 0;
+    while (i < initialized.length()) {
+        copy.append(initialized[i]);
+        i += 1;
+    }
+    return copy;
+}
+func init_intersection(left -> Vector(String), right -> Vector(String)) -> Vector(String) {
+    let result -> Vector(String) = [];
+    let i -> Int = 0;
+    while (i < left.length()) {
+        if (init_has(right, left[i])) { result.append(left[i]); }
+        i += 1;
+    }
+    return result;
+}
+func init_complete(required -> Vector(String), initialized -> Vector(String)) -> Bool {
+    let i -> Int = 0;
+    while (i < required.length()) {
+        if (!init_has(initialized, required[i])) { return false; }
+        i += 1;
+    }
+    return true;
+}
+func init_require_complete(class_name -> String, required -> Vector(String), initialized -> Vector(String), pos -> Position) -> Bool {
+    let i -> Int = 0;
+    while (i < required.length()) {
+        let name -> String = required[i];
+        if (!init_has(initialized, name)) {
+            if (name == "$super") {
+                throw_missing_initializer(
+                    pos,
+                    "Constructor for class '" + class_name +
+                    "' must call super.init(...) before returning."
+                );
+            } else {
+                throw_missing_initializer(
+                    pos,
+                    "Field '" + name + "' is not initialized on every path through '" +
+                    class_name + ".init'."
+                );
+            }
+            return false;
+        }
+        i += 1;
+    }
+    return true;
+}
+func init_is_self(node -> Struct) -> Bool {
+    if (node is null) { return false; }
+    let base -> BaseNode = node;
+    if (base.type != NODE_VAR_ACCESS) { return false; }
+    let access -> VarAccessNode = node;
+    return access.name_tok.value == "self";
+}
+func class_need_init(c -> Compiler, info -> StructInfo) -> Bool {
+    if (info is null || !info.is_class || info.init_body is null) {
+        return false;
+    }
+
+    let class_node -> ClassDefNode = info.init_body;
+    let fields -> Vector(Struct) = class_node.fields;
+    let i -> Int = 0;
+    while (fields is !null && i < fields.length()) {
+        let field -> VarDeclareNode = fields[i];
+        if (field.value is null) { return true; }
+        i += 1;
+    }
+
+    if (info.parent_id != 0) {
+        let parent -> StructInfo = c.struct_id_map.get("" + info.parent_id);
+        return class_need_init(c, parent);
+    }
+    return false;
+}
+func check_init_node(c -> Compiler, class_name -> String, node -> Struct, required -> Vector(String), known_fields -> Vector(String), initialized -> Vector(String)) -> InitFlow {
+    if (node is null) { return InitFlow(initialized, false); }
+    let base -> BaseNode = node;
+
+    if (base.type == NODE_BLOCK) {
+        let block -> BlockNode = node;
+        let state -> Vector(String) = initialized;
+        let i -> Int = 0;
+        while (block.stmts is !null && i < block.stmts.length()) {
+            let flow -> InitFlow = check_init_node(
+                c, class_name, block.stmts[i], required, known_fields, state
+            );
+            state = flow.initialized;
+            if (flow.terminates) { return InitFlow(state, true); }
+            i += 1;
+        }
+        return InitFlow(state, false);
+    }
+
+    if (base.type == NODE_IF) {
+        let branch -> IfNode = node;
+        check_init_node(
+            c, class_name, branch.condition, required, known_fields, initialized
+        );
+
+        let selected -> Int = fold_os_cond(c, branch.condition);
+        let condition -> BaseNode = branch.condition;
+        if (condition is !null && condition.type == NODE_BOOL) {
+            let boolean -> BooleanNode = branch.condition;
+            selected = boolean.value;
+        }
+        if (selected == 1) {
+            return check_init_node(
+                c,
+                class_name,
+                branch.body,
+                required,
+                known_fields,
+                initialized
+            );
+        }
+        if (selected == 0) {
+            return check_init_node(
+                c,
+                class_name,
+                branch.else_body,
+                required,
+                known_fields,
+                initialized
+            );
+        }
+
+        let then_flow -> InitFlow = check_init_node(
+            c,
+            class_name,
+            branch.body,
+            required,
+            known_fields,
+            init_copy(initialized)
+        );
+        let else_flow -> InitFlow = InitFlow(init_copy(initialized), false);
+        if (branch.else_body is !null) {
+            else_flow = check_init_node(
+                c,
+                class_name,
+                branch.else_body,
+                required,
+                known_fields,
+                init_copy(initialized)
+            );
+        }
+
+        if (then_flow.terminates && else_flow.terminates) {
+            return InitFlow(initialized, true);
+        }
+        if (then_flow.terminates) {
+            return InitFlow(else_flow.initialized, false);
+        }
+        if (else_flow.terminates) {
+            return InitFlow(then_flow.initialized, false);
+        }
+        return InitFlow(
+            init_intersection(then_flow.initialized, else_flow.initialized),
+            false
+        );
+    }
+
+    if (base.type == NODE_WHILE) {
+        let loop -> WhileNode = node;
+        check_init_node(
+            c, class_name, loop.condition, required, known_fields, initialized
+        );
+        check_init_node(
+            c,
+            class_name,
+            loop.body,
+            required,
+            known_fields,
+            init_copy(initialized)
+        );
+        return InitFlow(initialized, must_terminate(c, node));
+    }
+
+    if (base.type == NODE_FOR) {
+        let loop -> ForNode = node;
+        let state -> Vector(String) = initialized;
+        if (loop.init is !null) {
+            let init_flow -> InitFlow = check_init_node(
+                c, class_name, loop.init, required, known_fields, state
+            );
+            state = init_flow.initialized;
+        }
+        check_init_node(c, class_name, loop.cond, required, known_fields, state);
+        check_init_node(
+            c,
+            class_name,
+            loop.body,
+            required,
+            known_fields,
+            init_copy(state)
+        );
+        check_init_node(
+            c,
+            class_name,
+            loop.step,
+            required,
+            known_fields,
+            init_copy(state)
+        );
+        return InitFlow(state, must_terminate(c, node));
+    }
+
+    if (base.type == NODE_CATCH) {
+        let caught -> CatchNode = node;
+        let success -> InitFlow = check_init_node(
+            c,
+            class_name,
+            caught.stmt,
+            required,
+            known_fields,
+            init_copy(initialized)
+        );
+        let failure -> InitFlow = check_init_node(
+            c,
+            class_name,
+            caught.body,
+            required,
+            known_fields,
+            init_copy(initialized)
+        );
+        if (success.terminates && failure.terminates) {
+            return InitFlow(initialized, true);
+        }
+        if (success.terminates) { return InitFlow(failure.initialized, false); }
+        if (failure.terminates) { return InitFlow(success.initialized, false); }
+        return InitFlow(
+            init_intersection(success.initialized, failure.initialized),
+            false
+        );
+    }
+
+    if (base.type == NODE_RETURN) {
+        let return_node -> ReturnNode = node;
+        check_init_node(
+            c, class_name, return_node.value, required, known_fields, initialized
+        );
+        init_require_complete(class_name, required, initialized, return_node.pos);
+        return InitFlow(initialized, true);
+    }
+
+    if (base.type == NODE_THROW) {
+        let thrown -> ThrowNode = node;
+        check_init_node(
+            c, class_name, thrown.value, required, known_fields, initialized
+        );
+        return InitFlow(initialized, true);
+    }
+
+    if (base.type == NODE_BREAK || base.type == NODE_CONTINUE) {
+        return InitFlow(initialized, true);
+    }
+
+    if (base.type == NODE_FIELD_ASSIGN) {
+        let assignment -> FieldAssignNode = node;
+        check_init_node(
+            c, class_name, assignment.value, required, known_fields, initialized
+        );
+        if (init_is_self(assignment.obj)) {
+            if (init_has(required, "$super") &&
+                !init_has(initialized, "$super")) {
+                throw_missing_initializer(
+                    assignment.pos,
+                    "Call super.init(...) before initializing fields of '" +
+                    class_name + "'."
+                );
+                init_add(initialized, "$super");
+            }
+            if (init_has(known_fields, assignment.field_name)) {
+                init_add(initialized, assignment.field_name);
+            }
+            return InitFlow(initialized, false);
+        }
+        check_init_node(
+            c, class_name, assignment.obj, required, known_fields, initialized
+        );
+        return InitFlow(initialized, false);
+    }
+
+    if (base.type == NODE_FIELD_ACCESS) {
+        let access -> FieldAccessNode = node;
+        if (init_is_self(access.obj)) {
+            if (init_has(known_fields, access.field_name)) {
+                if (!init_has(initialized, access.field_name)) {
+                    throw_missing_initializer(
+                        access.pos,
+                        "Field '" + access.field_name +
+                        "' is read before it is initialized."
+                    );
+                }
+            } else if (!init_complete(required, initialized)) {
+                throw_missing_initializer(
+                    access.pos,
+                    "Cannot use 'self' before all fields of '" +
+                    class_name + "' are initialized."
+                );
+            }
+            return InitFlow(initialized, false);
+        }
+        check_init_node(
+            c, class_name, access.obj, required, known_fields, initialized
+        );
+        return InitFlow(initialized, false);
+    }
+
+    if (base.type == NODE_CALL) {
+        let call -> CallNode = node;
+        let is_super_init -> Bool = false;
+        if (call.callee is !null) {
+            let callee_base -> BaseNode = call.callee;
+            if (callee_base.type == NODE_FIELD_ACCESS) {
+                let member -> FieldAccessNode = call.callee;
+                if (member.field_name == "init" && member.obj is !null) {
+                    let owner -> BaseNode = member.obj;
+                    is_super_init = owner.type == NODE_SUPER;
+                }
+            }
+        }
+
+        let i -> Int = 0;
+        while (call.args is !null && i < call.args.length()) {
+            let arg -> ArgNode = call.args[i];
+            check_init_node(
+                c, class_name, arg.val, required, known_fields, initialized
+            );
+            i += 1;
+        }
+
+        if (is_super_init) {
+            init_add(initialized, "$super");
+        } else {
+            check_init_node(
+                c, class_name, call.callee, required, known_fields, initialized
+            );
+        }
+        return InitFlow(initialized, false);
+    }
+
+    if (base.type == NODE_VAR_ACCESS) {
+        let access -> VarAccessNode = node;
+        if (access.name_tok.value == "self" &&
+            !init_complete(required, initialized)) {
+            throw_missing_initializer(
+                access.pos,
+                "Cannot use 'self' before all fields of '" +
+                class_name + "' are initialized."
+            );
+        }
+        return InitFlow(initialized, false);
+    }
+
+    if (base.type == NODE_BINOP ||
+        base.type == NODE_IS ||
+        base.type == NODE_IS_NOT) {
+        let binary -> BinOpNode = node;
+        check_init_node(
+            c, class_name, binary.left, required, known_fields, initialized
+        );
+        check_init_node(
+            c, class_name, binary.right, required, known_fields, initialized
+        );
+        return InitFlow(initialized, false);
+    }
+
+    if (base.type == NODE_UNARYOP) {
+        let unary -> UnaryOpNode = node;
+        return check_init_node(
+            c, class_name, unary.node, required, known_fields, initialized
+        );
+    }
+    if (base.type == NODE_POSTFIX) {
+        let postfix -> PostfixOpNode = node;
+        return check_init_node(
+            c, class_name, postfix.node, required, known_fields, initialized
+        );
+    }
+    if (base.type == NODE_REF) {
+        let reference -> RefNode = node;
+        return check_init_node(
+            c, class_name, reference.node, required, known_fields, initialized
+        );
+    }
+    if (base.type == NODE_DEREF) {
+        let dereference -> DerefNode = node;
+        return check_init_node(
+            c, class_name, dereference.node, required, known_fields, initialized
+        );
+    }
+    if (base.type == NODE_TRY_UNWRAP) {
+        let unwrap -> TryUnwrapNode = node;
+        return check_init_node(
+            c, class_name, unwrap.expr, required, known_fields, initialized
+        );
+    }
+
+    if (base.type == NODE_VAR_DECL) {
+        let declaration -> VarDeclareNode = node;
+        check_init_node(
+            c, class_name, declaration.value, required, known_fields, initialized
+        );
+        return InitFlow(initialized, false);
+    }
+    if (base.type == NODE_VAR_ASSIGN) {
+        let assignment -> VarAssignNode = node;
+        check_init_node(
+            c, class_name, assignment.value, required, known_fields, initialized
+        );
+        return InitFlow(initialized, false);
+    }
+    if (base.type == NODE_PTR_ASSIGN) {
+        let assignment -> PtrAssignNode = node;
+        check_init_node(
+            c, class_name, assignment.pointer, required, known_fields, initialized
+        );
+        check_init_node(
+            c, class_name, assignment.value, required, known_fields, initialized
+        );
+        return InitFlow(initialized, false);
+    }
+    if (base.type == NODE_INDEX_ACCESS) {
+        let access -> IndexAccessNode = node;
+        check_init_node(
+            c, class_name, access.target, required, known_fields, initialized
+        );
+        check_init_node(
+            c, class_name, access.index_node, required, known_fields, initialized
+        );
+        return InitFlow(initialized, false);
+    }
+    if (base.type == NODE_INDEX_ASSIGN) {
+        let assignment -> IndexAssignNode = node;
+        check_init_node(
+            c, class_name, assignment.target, required, known_fields, initialized
+        );
+        check_init_node(
+            c, class_name, assignment.index_node, required, known_fields, initialized
+        );
+        check_init_node(
+            c, class_name, assignment.value, required, known_fields, initialized
+        );
+        return InitFlow(initialized, false);
+    }
+    if (base.type == NODE_SLICE_ACCESS) {
+        let access -> SliceAccessNode = node;
+        check_init_node(
+            c, class_name, access.target, required, known_fields, initialized
+        );
+        check_init_node(
+            c, class_name, access.start_idx, required, known_fields, initialized
+        );
+        check_init_node(
+            c, class_name, access.end_idx, required, known_fields, initialized
+        );
+        return InitFlow(initialized, false);
+    }
+    if (base.type == NODE_VECTOR_LIT) {
+        let vector -> VectorLitNode = node;
+        let i -> Int = 0;
+        while (vector.elements is !null && i < vector.elements.length()) {
+            check_init_node(
+                c, class_name, vector.elements[i], required, known_fields, initialized
+            );
+            i += 1;
+        }
+        return InitFlow(initialized, false);
+    }
+    if (base.type == NODE_MAP_LIT) {
+        let map -> MapLitNode = node;
+        let i -> Int = 0;
+        while (map.pairs is !null && i < map.pairs.length()) {
+            let pair -> MapPairNode = map.pairs[i];
+            check_init_node(
+                c, class_name, pair.key, required, known_fields, initialized
+            );
+            check_init_node(
+                c, class_name, pair.value, required, known_fields, initialized
+            );
+            i += 1;
+        }
+        return InitFlow(initialized, false);
+    }
+    if (base.type == NODE_SUPER &&
+        init_has(required, "$super") &&
+        !init_has(initialized, "$super")) {
+        let super_node -> SuperNode = node;
+        throw_missing_initializer(
+            super_node.pos,
+            "Call super.init(...) before using the parent part of '" +
+            class_name + "'."
+        );
+    }
+
+    return InitFlow(initialized, false);
+}
+func check_class_init(c -> Compiler, class_name -> String, node -> ClassDefNode, parent -> StructInfo) -> Void {
+    let required -> Vector(String) = [];
+    let known_fields -> Vector(String) = [];
+    let initialized -> Vector(String) = [];
+
+    let fields -> Vector(Struct) = node.fields;
+    let i -> Int = 0;
+    while (fields is !null && i < fields.length()) {
+        let field -> VarDeclareNode = fields[i];
+        let name -> String = field.name_tok.value;
+        known_fields.append(name);
+        if (field.value is null) {
+            required.append(name);
+        } else {
+            initialized.append(name);
+        }
+        i += 1;
+    }
+
+    let parent_requires_init -> Bool =
+        class_need_init(c, parent);
+    if (parent_requires_init) {
+        required.append("$super");
+    } else {
+        initialized.append("$super");
+    }
+
+    let default_required -> Vector(String) = init_copy(known_fields);
+    if (parent_requires_init) { default_required.append("$super"); }
+    let default_state -> Vector(String) = [];
+    if (!parent_requires_init) { default_state.append("$super"); }
+    i = 0;
+    while (fields is !null && i < fields.length()) {
+        let field -> VarDeclareNode = fields[i];
+        if (field.value is !null) {
+            check_init_node(
+                c,
+                class_name,
+                field.value,
+                default_required,
+                known_fields,
+                default_state
+            );
+            init_add(default_state, field.name_tok.value);
+        }
+        i += 1;
+    }
+
+    if (required.length() == 0) { return; }
+
+    let initializer -> MethodDefNode = null;
+    let methods -> Vector(Struct) = node.methods;
+    i = 0;
+    while (methods is !null && i < methods.length()) {
+        let method_node -> MethodDefNode = methods[i];
+        if (method_node.name_tok.value == "$init") {
+            initializer = method_node;
+            break;
+        }
+        i += 1;
+    }
+
+    if (initializer is null) {
+        let missing -> String = required[0];
+        if (missing == "$super") {
+            throw_missing_initializer(
+                node.pos,
+                "Class '" + class_name +
+                "' must define init and call super.init(...)."
+            );
+        } else {
+            throw_missing_initializer(
+                node.pos,
+                "Field '" + missing + "' has no initializer, but class '" +
+                class_name + "' does not define init."
+            );
+        }
+        return;
+    }
+
+    let flow -> InitFlow = check_init_node(
+        c,
+        class_name,
+        initializer.body,
+        required,
+        known_fields,
+        initialized
+    );
+    if (!flow.terminates) {
+        init_require_complete(
+            class_name,
+            required,
+            flow.initialized,
+            initializer.pos
+        );
+    }
+}
+
+func emit_class_field_initializers(c -> Compiler, class_info -> StructInfo, object_reg -> String, object_llvm_type -> String) -> Void {
+    if (class_info is null) { return; }
+
+    if (class_info.parent_id != 0) {
+        let parent -> StructInfo =
+            c.struct_id_map.get("" + class_info.parent_id);
+        emit_class_field_initializers(
+            c,
+            parent,
+            object_reg,
+            object_llvm_type
+        );
+    }
+
+    let initializer -> FuncInfo =
+        c.func_table.get(class_info.name + "_$field_init");
+    if (initializer is null) { return; }
+
+    let target_reg -> String = object_reg;
+    if (class_info.llvm_name != object_llvm_type) {
+        target_reg = next_reg(c);
+        c.output_file.write(
+            c.indent + target_reg + " = bitcast " +
+            object_llvm_type + "* " + object_reg + " to " +
+            class_info.llvm_name + "*\n"
+        );
+    }
+    c.output_file.write(
+        c.indent + "call void @" + initializer.name + "(" +
+        class_info.llvm_name + "* " + target_reg + ")\n"
+    );
+}
+
 func compile_class_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode) -> CompileResult {
     let size_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + size_ptr + " = getelementptr " + s_info.llvm_name + ", " + s_info.llvm_name + "* null, i64 1\n");
@@ -4021,6 +4664,8 @@ func compile_class_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode)
         }
         f_idx += 1;
     }
+
+    emit_class_field_initializers(c, s_info, obj_ptr, s_info.llvm_name);
 
     let init_name -> String = s_info.name + "_$init";
     let init_func -> FuncInfo = c.func_table.get(init_name);
@@ -4103,6 +4748,8 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
         info.parent_id = parent_info.type_id;
     }
 
+    check_class_init(c, class_name, node, parent_info);
+
     let llvm_body -> String = "";
     let fields_vec -> Vector(Struct) = [];
     let vtable_vec -> Vector(Struct) = [];
@@ -4143,6 +4790,14 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
         let f_type_id -> Int = resolve_type(c, p.type_node);
 
         if (f_type_id == TYPE_AUTO) {
+            if (p.value is null) {
+                throw_type_error(
+                    p.pos,
+                    "Field '" + f_name +
+                    "' needs an explicit type when it has no initializer."
+                );
+                return void_result();
+            }
             f_type_id = get_expr_type(c, p.value);
             if (f_type_id == 0 || f_type_id == TYPE_AUTO) {
                 throw_type_error(p.pos, "Failed to statically infer type for 'Auto' in class field '" + f_name + "'.");
@@ -4170,7 +4825,7 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
         let m_node -> MethodDefNode = my_methods[mm_idx];
         let raw_m_name -> String = method_base_name(c, m_node);
         
-        if (raw_m_name != "$init") {
+        if (raw_m_name != "$init" && raw_m_name != "$field_init") {
             let m_name -> String = class_name + "_" + raw_m_name;
             let f_info -> FuncInfo = c.func_table.get(m_name);
 
