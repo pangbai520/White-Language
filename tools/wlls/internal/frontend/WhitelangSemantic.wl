@@ -32,6 +32,8 @@ class SymbolReference {
     let range -> WhitelangExceptions.SourceRange = null;
     let definition -> SymbolDefinition = null;
     let qualifier -> String = "";
+    let owner_type -> String = "";
+    let receiver -> SymbolReference = null;
 
     init(
         name -> String,
@@ -42,6 +44,8 @@ class SymbolReference {
         self.range = range;
         self.definition = definition;
         self.qualifier = "";
+        self.owner_type = "";
+        self.receiver = null;
     }
 }
 
@@ -417,24 +421,42 @@ func __walk_node(document -> SemanticDocument, scope -> __Scope, node -> Struct)
         __walk_node(document, scope, return_node.value);
     } else if (base.type == NODE_FIELD_ACCESS) {
         let access -> FieldAccessNode = node;
+        let reference_start -> Int = document.references.length();
         __walk_node(document, scope, access.obj);
+        let receiver -> SymbolReference = null;
+        let object_base -> BaseNode = access.obj;
+        if ((object_base.type == NODE_VAR_ACCESS ||
+             object_base.type == NODE_FIELD_ACCESS) &&
+            document.references.length() > reference_start) {
+            receiver =
+                document.references[document.references.length() - 1];
+        }
+        let owner_type -> String =
+            __expression_type(document, scope, access.obj);
         let field_reference -> SymbolReference =
             __reference(document, scope, __field_token(access));
-        if (field_reference.definition is null) {
-            field_reference.definition = __find_member(
-                document,
-                __expression_type(document, scope, access.obj),
-                access.field_name
-            );
-        }
-        let object_base -> BaseNode = access.obj;
+        field_reference.owner_type = owner_type;
+        field_reference.receiver = receiver;
+        field_reference.definition =
+            __find_member(document, owner_type, access.field_name);
         if (object_base.type == NODE_VAR_ACCESS) {
             let object -> VarAccessNode = access.obj;
             field_reference.qualifier = object.name_tok.value;
         }
     } else if (base.type == NODE_FIELD_ASSIGN) {
         let assignment -> FieldAssignNode = node;
+        let reference_start -> Int = document.references.length();
         __walk_node(document, scope, assignment.obj);
+        let receiver -> SymbolReference = null;
+        let object_base -> BaseNode = assignment.obj;
+        if ((object_base.type == NODE_VAR_ACCESS ||
+             object_base.type == NODE_FIELD_ACCESS) &&
+            document.references.length() > reference_start) {
+            receiver =
+                document.references[document.references.length() - 1];
+        }
+        let owner_type -> String =
+            __expression_type(document, scope, assignment.obj);
         let field_token -> Token = Token(
             type=WhitelangTokens.TOK_IDENTIFIER,
             value=assignment.field_name,
@@ -443,14 +465,10 @@ func __walk_node(document -> SemanticDocument, scope -> __Scope, node -> Struct)
         );
         let field_reference -> SymbolReference =
             __reference(document, scope, field_token);
-        if (field_reference.definition is null) {
-            field_reference.definition = __find_member(
-                document,
-                __expression_type(document, scope, assignment.obj),
-                assignment.field_name
-            );
-        }
-        let object_base -> BaseNode = assignment.obj;
+        field_reference.owner_type = owner_type;
+        field_reference.receiver = receiver;
+        field_reference.definition =
+            __find_member(document, owner_type, assignment.field_name);
         if (object_base.type == NODE_VAR_ACCESS) {
             let object -> VarAccessNode = assignment.obj;
             field_reference.qualifier = object.name_tok.value;
@@ -707,6 +725,10 @@ func __walk_top_level(document -> SemanticDocument, scope -> __Scope) -> Void {
             }
 
             let class_scope -> __Scope = __Scope(scope);
+            let self_definition -> SymbolDefinition =
+                SymbolDefinition("self", SYMBOL_VARIABLE, null);
+            self_definition.type_name = class_node.name_tok.value;
+            class_scope.define(self_definition);
             let j -> Int = 0;
             while (j < class_node.fields.length()) {
                 let field -> VarDeclareNode = class_node.fields[j];

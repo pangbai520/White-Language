@@ -90,6 +90,54 @@ func main() -> Int {
         return 1;
     }
 
+    let external_path -> String = "project/main.wl";
+    let external -> source.FrontendResult = workspace.update(
+        external_path,
+        1,
+        "import Driver from \"driver.wl\"\n" +
+        "func run(driver -> Driver) -> Void {\n" +
+        "    driver.output.write();\n" +
+        "}\n"
+    );
+    workspace.update(
+        "project/driver.wl",
+        1,
+        "import Sink from \"output.wl\"\n" +
+        "class Driver {\n" +
+        "    let output -> Sink = null;\n" +
+        "}\n"
+    );
+    workspace.update(
+        "project/output.wl",
+        1,
+        "class Sink {\n" +
+        "    method write() -> Void { return; }\n" +
+        "}\n"
+    );
+    let external_tokens -> Vector(Struct) =
+        analysis.semantic_tokens(external, workspace, external_path);
+    let external_field -> analysis.SemanticToken =
+        token_at(external_tokens, 2, 11);
+    let external_call -> analysis.SemanticToken =
+        token_at(external_tokens, 2, 18);
+    if (external_field is null ||
+        external_call is null ||
+        external_field.token_type != "property" ||
+        external_call.token_type != "method") {
+        builtin.print("FAIL: cross-document member call");
+        return 1;
+    }
+
+    workspace.remove("project/output.wl");
+    let closed_tokens -> Vector(Struct) =
+        analysis.semantic_tokens(external, workspace, external_path);
+    let closed_call -> analysis.SemanticToken =
+        token_at(closed_tokens, 2, 18);
+    if (closed_call is null || closed_call.token_type != "variable") {
+        builtin.print("FAIL: closed document member remained indexed");
+        return 1;
+    }
+
     builtin.print("PASS: wlls member calls");
     return 0;
 }
