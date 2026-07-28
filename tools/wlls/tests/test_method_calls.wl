@@ -62,6 +62,22 @@ func main() -> Int {
         "}\n" +
         "func flush(root -> Root) -> Void {\n" +
         "    root.branch.leaf.flush();\n" +
+        "    if (root.branch.leaf is !null) { return; }\n" +
+        "}\n" +
+        "const LIMIT -> Int = 1;\n" +
+        "@Trace(LIMIT)\n" +
+        "struct Item(value -> Int) {\n" +
+        "    this.value = 0;\n" +
+        "}\n" +
+        "class Base {\n" +
+        "    method ping() -> Void { return; }\n" +
+        "}\n" +
+        "class Child(Base) {\n" +
+        "    method inspect(items -> Vector(Item)) -> Void {\n" +
+        "        let local -> Item = items[0];\n" +
+        "        let copies -> Vector(Item) = [local];\n" +
+        "        if (items[0].value > 0) { super.ping(); }\n" +
+        "    }\n" +
         "}\n";
 
     let workspace -> source.FrontendWorkspace = source.FrontendWorkspace();
@@ -115,6 +131,23 @@ func main() -> Int {
         return 1;
     }
 
+    let condition_branch -> analysis.SemanticToken = token_at(tokens, 38, 13);
+    let condition_leaf -> analysis.SemanticToken = token_at(tokens, 38, 20);
+    if (condition_branch is null || condition_leaf is null || condition_branch.token_type != "property" || condition_leaf.token_type != "property") {
+        builtin.print("FAIL: member chain in is condition");
+        return 1;
+    }
+
+    let annotation_arg -> analysis.SemanticToken = token_at(tokens, 41, 7);
+    let struct_field -> analysis.SemanticToken = token_at(tokens, 43, 9);
+    let vector_element -> analysis.SemanticToken = token_at(tokens, 51, 38);
+    let indexed_field -> analysis.SemanticToken = token_at(tokens, 52, 21);
+    let super_method -> analysis.SemanticToken = token_at(tokens, 52, 40);
+    if (annotation_arg is null || annotation_arg.token_type != "variable" || struct_field is null || struct_field.token_type != "property" || vector_element is null || vector_element.token_type != "variable" || indexed_field is null || indexed_field.token_type != "property" || super_method is null || super_method.token_type != "method") {
+        builtin.print("FAIL: semantic expression coverage");
+        return 1;
+    }
+
     let external_path -> String = "project/main.wl";
     let external -> source.FrontendResult = workspace.update(
         external_path,
@@ -150,6 +183,37 @@ func main() -> Int {
         external_field.token_type != "property" ||
         external_call.token_type != "method") {
         builtin.print("FAIL: cross-document member call");
+        return 1;
+    }
+
+    let inherited_path -> String = "project/use.wl";
+    let inherited -> source.FrontendResult = workspace.update(inherited_path, 1, "import Child from \"child.wl\"\nfunc use(value -> Child) -> Void {\n    value.ping();\n}\n");
+    workspace.update("project/child.wl", 1, "import Base from \"base.wl\"\nclass Child(Base) {\n}\n");
+    workspace.update("project/base.wl", 1, "class Base {\n    method ping() -> Void { return; }\n}\n");
+    let inherited_tokens -> Vector(Struct) = analysis.semantic_tokens(inherited, workspace, inherited_path);
+    let inherited_call -> analysis.SemanticToken = token_at(inherited_tokens, 2, 10);
+    if (inherited_call is null || inherited_call.token_type != "method") {
+        builtin.print("FAIL: inherited cross-document member call");
+        return 1;
+    }
+
+    let compound_path -> String = "project/compound.wl";
+    let compound -> source.FrontendResult = workspace.update(compound_path, 1, "import Box from \"box.wl\"\nfunc use_box(box -> Box) -> Void {\n    box.items[0].flush();\n    box.make().flush();\n}\n");
+    workspace.update("project/box.wl", 1, "import Item from \"item.wl\"\nclass Box {\n    let items -> Vector(Item) = [];\n    method make() -> Item { return null; }\n}\n");
+    workspace.update("project/item.wl", 1, "class Item {\n    method flush() -> Void { return; }\n}\n");
+    if (workspace.resolve_member("project/box.wl", "Item", "flush") is null) {
+        builtin.print("FAIL: imported member resolution context");
+        return 1;
+    }
+    let compound_tokens -> Vector(Struct) = analysis.semantic_tokens(compound, workspace, compound_path);
+    let indexed_call -> analysis.SemanticToken = token_at(compound_tokens, 2, 17);
+    let returned_call -> analysis.SemanticToken = token_at(compound_tokens, 3, 15);
+    if (indexed_call is null || indexed_call.token_type != "method") {
+        builtin.print("FAIL: late-bound indexed member chain");
+        return 1;
+    }
+    if (returned_call is null || returned_call.token_type != "method") {
+        builtin.print("FAIL: late-bound call result member chain");
         return 1;
     }
 

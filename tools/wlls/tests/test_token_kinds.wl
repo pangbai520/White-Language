@@ -16,6 +16,16 @@ func has_token_type(tokens -> Vector(Struct), expected -> String) -> Bool {
     return false;
 }
 
+func token_at(tokens -> Vector(Struct), line -> Int, character -> Int) -> analysis.SemanticToken {
+    let i -> Int = 0;
+    while (i < tokens.length()) {
+        let token -> analysis.SemanticToken = tokens[i];
+        if (token.line == line && token.character == character) { return token; }
+        i += 1;
+    }
+    return null;
+}
+
 func main() -> Int {
     let path -> String = "kinds.wl";
     let text -> String =
@@ -24,6 +34,8 @@ func main() -> Int {
         "interface Named { method name(prefix -> String) -> String; }\n" +
         "class User with Named {\n" +
         "    let value -> Int = 0;\n" +
+        "    let wide -> UInt128 = UInt128(0);\n" +
+        "    let values -> Vector(Int) = [];\n" +
         "    method name(prefix -> String) -> String { return prefix + \"user\"; }\n" +
         "}\n";
 
@@ -53,6 +65,12 @@ func main() -> Int {
             return 1;
         }
         i += 1;
+    }
+    let wide_type -> analysis.SemanticToken = token_at(tokens, 5, 16);
+    let vector_type -> analysis.SemanticToken = token_at(tokens, 6, 18);
+    if (wide_type is null || vector_type is null || wide_type.token_type != "type" || vector_type.token_type != "type") {
+        builtin.print("FAIL: named builtin types");
+        return 1;
     }
 
     builtin.print("PASS: semantic token kinds");

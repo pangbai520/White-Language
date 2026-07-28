@@ -168,6 +168,24 @@ func __is_builtin_type(token_type -> Int) -> Bool {
            token_type == compiler.WhitelangTokens.TOK_T_VOID;
 }
 
+func __is_builtin_type_name(name -> String) -> Bool {
+    return name == "Int" || name == "Int32" || name == "Long" || name == "Int64" || name == "Float" || name == "Float64" || name == "Byte" || name == "UInt8" || name == "Int8" || name == "Int16" || name == "Int128" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "UInt128" || name == "Float32" || name == "IntSize" || name == "UIntSize" || name == "Bool" || name == "Char" || name == "String" || name == "Void" || name == "Struct" || name == "Function" || name == "Class" || name == "Method" || name == "Enum" || name == "Auto" || name == "AnyPtr" || name == "Vector" || name == "Array";
+}
+
+func __is_space(value -> Char) -> Bool {
+    return value == ' ' || value == '\t' || value == '\r' || value == '\n';
+}
+
+func __is_named_argument(result -> source.FrontendResult, token -> compiler.WhitelangTokens.Token) -> Bool {
+    let text -> String = result.syntax.source;
+    let start -> Int = result.syntax.source_map.line_start(token.line) + token.col;
+    let left -> Int = start - 1;
+    while (left >= 0 && __is_space(text[left])) { left -= 1; }
+    let right -> Int = start + token.value.length();
+    while (right < text.length() && __is_space(text[right])) { right += 1; }
+    return left >= 0 && right < text.length() && (text[left] == '(' || text[left] == ',') && text[right] == '=';
+}
+
 func __is_operator(token_type -> Int) -> Bool {
     return token_type == compiler.WhitelangTokens.TOK_PLUS ||
            token_type == compiler.WhitelangTokens.TOK_SUB ||
@@ -352,6 +370,11 @@ func semantic_tokens(
             if (binding is !null) {
                 token_type = __semantic_type(binding.kind);
                 modifiers = __binding_modifiers(binding);
+            } else if (__is_builtin_type_name(token.value)) {
+                token_type = "type";
+                modifiers.append("defaultLibrary");
+            } else if (token.type == compiler.WhitelangTokens.TOK_TYPE && __is_named_argument(result, token)) {
+                token_type = "parameter";
             } else if (token.type == compiler.WhitelangTokens.TOK_TYPE) {
                 token_type = "keyword";
             } else {

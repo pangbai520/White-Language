@@ -138,6 +138,13 @@ func main() -> Int {
         return 1;
     }
 
+    let named -> source.FrontendResult = workspace.update("named.wl", 1, "struct Pair(value -> Int, type -> Int)\nfunc make() -> Pair { return Pair(value=1, type=2); }\n");
+    let named_tokens -> Vector(Struct) = analysis.semantic_tokens(named, workspace, "named.wl");
+    if (!has_token(named_tokens, 0, 26, "property") || !has_token(named_tokens, 1, 43, "parameter")) {
+        builtin.print("FAIL: contextual type label");
+        return 1;
+    }
+
     builtin.print("PASS: semantic tokens");
     return 0;
 }

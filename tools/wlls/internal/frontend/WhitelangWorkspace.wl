@@ -116,12 +116,18 @@ class FrontendWorkspace {
     let sources -> Vector(Struct) = null;
     let members -> Dict = null;
     let file_members -> Dict = null;
+    let parents -> Dict = null;
+    let file_parents -> Dict = null;
+    let type_files -> Dict = null;
 
     init() {
         self.documents = Dict(32);
         self.sources = [];
         self.members = Dict(64);
         self.file_members = Dict(64);
+        self.parents = Dict(32);
+        self.file_parents = Dict(32);
+        self.type_files = Dict(64);
     }
 
     method __member_key(owner_type -> String, name -> String) -> String {
@@ -139,10 +145,59 @@ class FrontendWorkspace {
         return result;
     }
 
+    method __element_type(type_name -> String) -> String {
+        if (type_name == "String") { return "Byte"; }
+        if (type_name.starts_with("ptr ")) { return type_name.slice(4, type_name.length()); }
+        let start -> Int = 0;
+        if (type_name.starts_with("Vector(")) { start = 7; }
+        else if (type_name.starts_with("Array(")) { start = 6; }
+        else { return ""; }
+        let depth -> Int = 0;
+        let i -> Int = start;
+        while (i < type_name.length()) {
+            let ch -> Char = type_name[i];
+            if (ch == '(') { depth += 1; }
+            else if (ch == ')') {
+                if (depth == 0) { return type_name.slice(start, i); }
+                depth -= 1;
+            } else if (ch == ',' && depth == 0) {
+                return type_name.slice(start, i);
+            }
+            i += 1;
+        }
+        return "";
+    }
+
+    method __apply_type_steps(type_name -> String, steps -> String) -> String {
+        let result -> String = type_name;
+        let start -> Int = 0;
+        let i -> Int = 0;
+        while (i <= steps.length()) {
+            if (i == steps.length() || steps[i] == ';') {
+                let step -> String = steps.slice(start, i);
+                if (step == "index") { result = self.__element_type(result); }
+                else if (step == "slice") {
+                    if (result != "String") {
+                        let element_type -> String = self.__element_type(result);
+                        if (element_type.length() > 0) { result = "Array(" + element_type + ")"; }
+                    }
+                } else if (step == "deref" && result.starts_with("ptr ")) {
+                    result = result.slice(4, result.length());
+                }
+                start = i + 1;
+            }
+            i += 1;
+        }
+        return result;
+    }
+
     method __rebuild_members() -> Void {
         // rebuilding keeps replacement and close semantics deterministic
         self.members = Dict(64);
         self.file_members = Dict(64);
+        self.parents = Dict(32);
+        self.file_parents = Dict(32);
+        self.type_files = Dict(64);
         let i -> Int = 0;
         while (i < self.sources.length()) {
             let source -> WorkspaceSource = self.sources[i];
@@ -154,6 +209,11 @@ class FrontendWorkspace {
                 let j -> Int = 0;
                 while (j < definitions.length()) {
                     let definition -> SymbolDefinition = definitions[j];
+                    if (definition.top_level && (definition.kind == SYMBOL_STRUCT || definition.kind == SYMBOL_CLASS || definition.kind == SYMBOL_INTERFACE || definition.kind == SYMBOL_ENUM || definition.kind == SYMBOL_ERROR)) {
+                        let type_file -> String = self.type_files[definition.name];
+                        if (type_file is null) { self.type_files.put(definition.name, definition.range.file); }
+                        else if (type_file != definition.range.file) { self.type_files.put(definition.name, ""); }
+                    }
                     if (definition.owner_type.length() > 0) {
                         let key -> String = self.__member_key(
                             definition.owner_type,
@@ -174,6 +234,24 @@ class FrontendWorkspace {
                                 SymbolDefinition("", 0, null);
                             ambiguous.owner_type = definition.owner_type;
                             self.members.put(key, ambiguous);
+                        }
+                    }
+                    j += 1;
+                }
+                let block -> BlockNode = source.result.syntax.ast;
+                let statement_count -> Int = 0;
+                if (block is !null && block.stmts is !null) { statement_count = block.stmts.length(); }
+                j = 0;
+                while (j < statement_count) {
+                    let base -> BaseNode = block.stmts[j];
+                    if (base.type == NODE_CLASS_DEF) {
+                        let class_node -> ClassDefNode = block.stmts[j];
+                        if (class_node.parent_tok is !null) {
+                            let class_name -> String = class_node.name_tok.value;
+                            self.file_parents.put(source.path + "\n" + class_name, class_node.parent_tok.value);
+                            let existing_parent -> String = self.parents[class_name];
+                            if (existing_parent is null) { self.parents.put(class_name, class_node.parent_tok.value); }
+                            else { self.parents.put(class_name, ""); }
                         }
                     }
                     j += 1;
@@ -206,7 +284,9 @@ class FrontendWorkspace {
     ) -> SymbolDefinition {
         let block -> BlockNode = source.result.syntax.ast;
         let i -> Int = 0;
-        while (i < block.stmts.length()) {
+        let count -> Int = 0;
+        if (block is !null && block.stmts is !null) { count = block.stmts.length(); }
+        while (i < count) {
             let base -> BaseNode = block.stmts[i];
             if (base.type == NODE_IMPORT) {
                 let import_node -> ImportNode = block.stmts[i];
@@ -260,21 +340,37 @@ class FrontendWorkspace {
         name -> String
     ) -> SymbolDefinition {
         if (owner_type.length() == 0) { return null; }
-        let key -> String = self.__member_key(owner_type, name);
-        let candidate -> SymbolDefinition = self.members[key];
-        if (candidate is null) { return null; }
-        if (candidate.range is !null) { return candidate; }
-
-        // duplicate type names need the import source to select a member table
-        let owner -> SymbolDefinition =
-            self.__local_type(source, owner_type);
-        if (owner is null) {
-            owner = self.__imported_type(source, owner_type);
-        }
-        if (owner is !null && owner.range is !null) {
-            let exact -> SymbolDefinition =
-                self.file_members[owner.range.file + "\n" + key];
-            if (exact is !null) { return exact; }
+        let current -> String = self.__member_owner(owner_type);
+        let context -> WorkspaceSource = source;
+        let seen -> Dict = Dict(8);
+        while (current.length() > 0 && seen[current] is null) {
+            seen.put(current, true);
+            let key -> String = self.__member_key(current, name);
+            let type_file -> String = self.type_files[current];
+            if (type_file is !null && type_file.length() > 0) {
+                let exact -> SymbolDefinition = self.file_members[type_file + "\n" + key];
+                if (exact is !null) { return exact; }
+                let parent -> String = self.file_parents[type_file + "\n" + current];
+                context = self.find(type_file);
+                if (parent is null || context is null) { break; }
+                current = parent;
+            } else if (type_file is !null) {
+                let owner -> SymbolDefinition = self.__local_type(context, current);
+                if (owner is null) { owner = self.__imported_type(context, current); }
+                if (owner is null || owner.range is null) { break; }
+                let exact -> SymbolDefinition = self.file_members[owner.range.file + "\n" + key];
+                if (exact is !null) { return exact; }
+                let parent -> String = self.file_parents[owner.range.file + "\n" + current];
+                context = self.find(owner.range.file);
+                if (parent is null || context is null) { break; }
+                current = parent;
+            } else {
+                let candidate -> SymbolDefinition = self.members[key];
+                if (candidate is !null && candidate.range is !null) { return candidate; }
+                let parent -> String = self.parents[current];
+                if (parent is null || parent.length() == 0) { break; }
+                current = parent;
+            }
         }
         return null;
     }
@@ -296,8 +392,8 @@ class FrontendWorkspace {
                         let receiver_type -> String =
                             reference.receiver.definition.type_name;
                         if (receiver_type.length() > 0) {
-                            reference.owner_type =
-                                self.__member_owner(receiver_type);
+                            receiver_type = self.__apply_type_steps(receiver_type, reference.receiver_steps);
+                            reference.owner_type = self.__member_owner(receiver_type);
                         }
                     }
                     if (reference.owner_type.length() > 0) {
@@ -306,8 +402,10 @@ class FrontendWorkspace {
                             reference.definition.range is !null &&
                             reference.definition.range.file == source.path;
                         if (!local) {
+                            let resolve_path -> String = source.path;
+                            if (reference.receiver is !null && reference.receiver.definition is !null && reference.receiver.definition.range is !null) { resolve_path = reference.receiver.definition.range.file; }
                             reference.definition = self.resolve_member(
-                                source.path,
+                                resolve_path,
                                 reference.owner_type,
                                 reference.name
                             );
@@ -417,7 +515,9 @@ class FrontendWorkspace {
     ) -> SymbolDefinition {
         let block -> BlockNode = source_document.result.syntax.ast;
         let i -> Int = 0;
-        while (i < block.stmts.length()) {
+        let count -> Int = 0;
+        if (block is !null && block.stmts is !null) { count = block.stmts.length(); }
+        while (i < count) {
             let base -> BaseNode = block.stmts[i];
             if (base.type == NODE_IMPORT) {
                 let import_node -> ImportNode = block.stmts[i];
@@ -447,7 +547,9 @@ class FrontendWorkspace {
     ) -> SymbolDefinition {
         let block -> BlockNode = source_document.result.syntax.ast;
         let i -> Int = 0;
-        while (i < block.stmts.length()) {
+        let count -> Int = 0;
+        if (block is !null && block.stmts is !null) { count = block.stmts.length(); }
+        while (i < count) {
             let base -> BaseNode = block.stmts[i];
             if (base.type == NODE_IMPORT) {
                 let import_node -> ImportNode = block.stmts[i];
