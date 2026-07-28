@@ -324,17 +324,10 @@ tests/          language, diagnostic, FFI and integration tests
 
 ## Tooling & ecosystem
 
-There is a VS Code extension built around a Langium grammar. It currently
-provides syntax highlighting and basic diagnostics. The extension exists and
-works as an early development tool, but most of new syntax are not supported and 
-it is not where most of the work is going at the moment.
+- [wlls](https://github.com/pangbai520/White-Language-LangServer) — language server for diagnostics, navigation, and semantic highlighting.
 
-There is also an official website and download portal for prebuilt Windows,
-Linux and macOS binaries. 
+- [website](https://www.white-lang.org) - Our official website.
 
-Work on the site and extension is temporarily paused
-while the compiler and standard library settle down, but neither project has been
-abandoned.
 
 A package manager `wlp` is planned (Maybe?).
 
