@@ -2541,6 +2541,21 @@ func must_terminate(c -> Compiler, node -> Struct) -> Bool {
     return false;
 }
 
+func discard_statement_result(c -> Compiler, node -> Struct, result -> CompileResult) -> Void {
+    if (node is null || result is null) { return; }
+    let base -> BaseNode = node;
+    if (base.type == NODE_VAR_ASSIGN || base.type == NODE_FIELD_ASSIGN || base.type == NODE_INDEX_ASSIGN || base.type == NODE_PTR_ASSIGN || base.type == NODE_CATCH) { return; }
+    if (result.owns_ref) {
+        emit_release_owned(c, result);
+        result.owns_ref = false;
+        return;
+    }
+    if (base.type == NODE_CALL && result_owns_value(c, result.type)) {
+        emit_retain_value(c, result.reg, result.type);
+        emit_drop_value(c, result.reg, result.type);
+    }
+}
+
 func compile_block(c -> Compiler, node -> BlockNode) -> CompileResult {
     let is_root -> Bool = false;
     if (c.scope_depth == 0) {
@@ -2561,6 +2576,7 @@ func compile_block(c -> Compiler, node -> BlockNode) -> CompileResult {
     while (i < len) {
         let stmt -> BaseNode = stmts[i];
         last_res = compile_node(c, stmts[i]);
+        discard_statement_result(c, stmts[i], last_res);
         if (must_terminate(c, stmts[i])) {
             terminated = true;
             break;
@@ -2979,7 +2995,8 @@ func compile_while(c -> Compiler, node -> WhileNode) -> CompileResult {
 
 func compile_for(c -> Compiler, node -> ForNode) -> CompileResult {
     if (node.init is !null) {
-        compile_node(c, node.init);
+        let init_res -> CompileResult = compile_node(c, node.init);
+        discard_statement_result(c, node.init, init_res);
     }
     let label_cond -> String = next_label(c);
     let label_body -> String = next_label(c);
@@ -3009,7 +3026,8 @@ func compile_for(c -> Compiler, node -> ForNode) -> CompileResult {
     c.output_file.write(c.indent + "br label %" + label_step + "\n");
     c.output_file.write("\n" + label_step + ":\n");
     if (node.step is !null) {
-        compile_node(c, node.step);
+        let step_res -> CompileResult = compile_node(c, node.step);
+        discard_statement_result(c, node.step, step_res);
     }
     c.output_file.write(c.indent + "br label %" + label_cond + "\n");
     c.output_file.write("\n" + label_end + ":\n");
@@ -6539,6 +6557,7 @@ func compile_catch(c -> Compiler, node -> CatchNode) -> CompileResult {
     c.current_catch_scope = c.symbol_table;
     
     let res -> CompileResult = compile_node(c, node.stmt);
+    discard_statement_result(c, node.stmt, res);
     
     c.current_catch_label = old_catch_label;
     c.current_catch_err_ptr = old_err_ptr;
