@@ -950,14 +950,14 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
         let format_hook -> String = get_mangled_symbol(c, hook_name, null);
         let result -> String = next_reg(c);
         c.output_file.write(c.indent + result + " = call %struct.$String* @" + format_hook + "(i128 " + res.reg + ")\n");
-        return CompileResult(reg=result, type=TYPE_STRING);
+        return CompileResult(reg=result, type=TYPE_STRING, owns_ref=true);
     }
 
     if (res.type == TYPE_UINT64 || res.type == TYPE_UINTSIZE) {
         let format_hook -> String = get_mangled_symbol(c, "format_uint64", null);
         let result -> String = next_reg(c);
         c.output_file.write(c.indent + result + " = call %struct.$String* @" + format_hook + "(i64 " + res.reg + ")\n");
-        return CompileResult(reg=result, type=TYPE_STRING);
+        return CompileResult(reg=result, type=TYPE_STRING, owns_ref=true);
     }
 
     if (res.type == TYPE_INT || res.type == TYPE_BYTE) {
@@ -970,21 +970,21 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
         let format_hook -> String = get_mangled_symbol(c, "format_int", null);
         let result -> String = next_reg(c);
         c.output_file.write(c.indent + result + " = call %struct.$String* @" + format_hook + "(i32 " + val_reg + ")\n");
-        return CompileResult(reg=result, type=TYPE_STRING);
+        return CompileResult(reg=result, type=TYPE_STRING, owns_ref=true);
     }
 
     if (res.type == TYPE_LONG) {
         let format_hook -> String = get_mangled_symbol(c, "format_long", null);
         let result -> String = next_reg(c);
         c.output_file.write(c.indent + result + " = call %struct.$String* @" + format_hook + "(i64 " + res.reg + ")\n");
-        return CompileResult(reg=result, type=TYPE_STRING);
+        return CompileResult(reg=result, type=TYPE_STRING, owns_ref=true);
     }
 
     if (res.type == TYPE_FLOAT) {
         let format_hook -> String = get_mangled_symbol(c, "format_float", null);
         let result -> String = next_reg(c);
         c.output_file.write(c.indent + result + " = call %struct.$String* @" + format_hook + "(double " + res.reg + ")\n");
-        return CompileResult(reg=result, type=TYPE_STRING);
+        return CompileResult(reg=result, type=TYPE_STRING, owns_ref=true);
     }
 
     if (res.type == TYPE_BOOL) {
@@ -999,7 +999,7 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
         let format_hook -> String = get_mangled_symbol(c, "utf8_encode_char", null);
         let result -> String = next_reg(c);
         c.output_file.write(c.indent + result + " = call %struct.$String* @" + format_hook + "(i32 " + res.reg + ")\n");
-        return CompileResult(reg=result, type=TYPE_STRING);
+        return CompileResult(reg=result, type=TYPE_STRING, owns_ref=true);
     }
 
     // fallback for null uses an immortal string literal and requires no allocation.
@@ -3981,7 +3981,11 @@ func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode
     return CompileResult(reg=obj_ptr, type=s_info.type_id);
 }
 
-struct InitFlow(initialized -> Vector(String), terminates  -> Bool)
+struct InitFlow(
+    initialized -> Vector(String),
+    terminates  -> Bool
+)
+
 func init_has(initialized -> Vector(String), name -> String) -> Bool {
     let i -> Int = 0;
     while (i < initialized.length()) {
@@ -3990,9 +3994,11 @@ func init_has(initialized -> Vector(String), name -> String) -> Bool {
     }
     return false;
 }
+
 func init_add(initialized -> Vector(String), name -> String) -> Void {
     if (!init_has(initialized, name)) { initialized.append(name); }
 }
+
 func init_copy(initialized -> Vector(String)) -> Vector(String) {
     let copy -> Vector(String) = [];
     let i -> Int = 0;
@@ -4002,7 +4008,11 @@ func init_copy(initialized -> Vector(String)) -> Vector(String) {
     }
     return copy;
 }
-func init_intersection(left -> Vector(String), right -> Vector(String)) -> Vector(String) {
+
+func init_intersection(
+    left -> Vector(String),
+    right -> Vector(String)
+) -> Vector(String) {
     let result -> Vector(String) = [];
     let i -> Int = 0;
     while (i < left.length()) {
@@ -4011,7 +4021,11 @@ func init_intersection(left -> Vector(String), right -> Vector(String)) -> Vecto
     }
     return result;
 }
-func init_complete(required -> Vector(String), initialized -> Vector(String)) -> Bool {
+
+func init_complete(
+    required -> Vector(String),
+    initialized -> Vector(String)
+) -> Bool {
     let i -> Int = 0;
     while (i < required.length()) {
         if (!init_has(initialized, required[i])) { return false; }
@@ -4019,7 +4033,13 @@ func init_complete(required -> Vector(String), initialized -> Vector(String)) ->
     }
     return true;
 }
-func init_require_complete(class_name -> String, required -> Vector(String), initialized -> Vector(String), pos -> Position) -> Bool {
+
+func init_require_complete(
+    class_name -> String,
+    required -> Vector(String),
+    initialized -> Vector(String),
+    pos -> Position
+) -> Bool {
     let i -> Int = 0;
     while (i < required.length()) {
         let name -> String = required[i];
@@ -4043,6 +4063,7 @@ func init_require_complete(class_name -> String, required -> Vector(String), ini
     }
     return true;
 }
+
 func init_is_self(node -> Struct) -> Bool {
     if (node is null) { return false; }
     let base -> BaseNode = node;
@@ -4050,7 +4071,8 @@ func init_is_self(node -> Struct) -> Bool {
     let access -> VarAccessNode = node;
     return access.name_tok.value == "self";
 }
-func class_need_init(c -> Compiler, info -> StructInfo) -> Bool {
+
+func class_requires_initialization(c -> Compiler, info -> StructInfo) -> Bool {
     if (info is null || !info.is_class || info.init_body is null) {
         return false;
     }
@@ -4066,11 +4088,19 @@ func class_need_init(c -> Compiler, info -> StructInfo) -> Bool {
 
     if (info.parent_id != 0) {
         let parent -> StructInfo = c.struct_id_map.get("" + info.parent_id);
-        return class_need_init(c, parent);
+        return class_requires_initialization(c, parent);
     }
     return false;
 }
-func check_init_node(c -> Compiler, class_name -> String, node -> Struct, required -> Vector(String), known_fields -> Vector(String), initialized -> Vector(String)) -> InitFlow {
+
+func check_init_node(
+    c -> Compiler,
+    class_name -> String,
+    node -> Struct,
+    required -> Vector(String),
+    known_fields -> Vector(String),
+    initialized -> Vector(String)
+) -> InitFlow {
     if (node is null) { return InitFlow(initialized, false); }
     let base -> BaseNode = node;
 
@@ -4493,7 +4523,13 @@ func check_init_node(c -> Compiler, class_name -> String, node -> Struct, requir
 
     return InitFlow(initialized, false);
 }
-func check_class_init(c -> Compiler, class_name -> String, node -> ClassDefNode, parent -> StructInfo) -> Void {
+
+func check_class_initialization(
+    c -> Compiler,
+    class_name -> String,
+    node -> ClassDefNode,
+    parent -> StructInfo
+) -> Void {
     let required -> Vector(String) = [];
     let known_fields -> Vector(String) = [];
     let initialized -> Vector(String) = [];
@@ -4513,7 +4549,7 @@ func check_class_init(c -> Compiler, class_name -> String, node -> ClassDefNode,
     }
 
     let parent_requires_init -> Bool =
-        class_need_init(c, parent);
+        class_requires_initialization(c, parent);
     if (parent_requires_init) {
         required.append("$super");
     } else {
@@ -4591,7 +4627,12 @@ func check_class_init(c -> Compiler, class_name -> String, node -> ClassDefNode,
     }
 }
 
-func emit_class_field_initializers(c -> Compiler, class_info -> StructInfo, object_reg -> String, object_llvm_type -> String) -> Void {
+func emit_class_field_initializers(
+    c -> Compiler,
+    class_info -> StructInfo,
+    object_reg -> String,
+    object_llvm_type -> String
+) -> Void {
     if (class_info is null) { return; }
 
     if (class_info.parent_id != 0) {
@@ -4665,7 +4706,12 @@ func compile_class_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode)
         f_idx += 1;
     }
 
-    emit_class_field_initializers(c, s_info, obj_ptr, s_info.llvm_name);
+    emit_class_field_initializers(
+        c,
+        s_info,
+        obj_ptr,
+        s_info.llvm_name
+    );
 
     let init_name -> String = s_info.name + "_$init";
     let init_func -> FuncInfo = c.func_table.get(init_name);
@@ -4748,7 +4794,7 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
         info.parent_id = parent_info.type_id;
     }
 
-    check_class_init(c, class_name, node, parent_info);
+    check_class_initialization(c, class_name, node, parent_info);
 
     let llvm_body -> String = "";
     let fields_vec -> Vector(Struct) = [];
@@ -6248,7 +6294,8 @@ func compile_slice_access(c -> Compiler, node -> SliceAccessNode, shared -> Bool
         let slice_hook -> String = get_mangled_symbol(c, "string_slice", node.pos);
         let result -> String = next_reg(c);
         c.output_file.write(c.indent + result + " = call %struct.$String* @" + slice_hook + "(%struct.$String* " + target_res.reg + ", i32 " + start + ", i32 " + end + ")\n");
-        return CompileResult(reg=result, type=TYPE_STRING);
+        emit_release_owned(c, target_res);
+        return CompileResult(reg=result, type=TYPE_STRING, owns_ref=true);
     }
 
     let elem_type -> Int = 0;
@@ -6949,7 +6996,9 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
             let concat_hook -> String = get_mangled_symbol(c, "string_concat", node.pos);
             let new_str_ptr -> String = next_reg(c);
             c.output_file.write(c.indent + new_str_ptr + " = call %struct.$String* @" + concat_hook + "(%struct.$String* " + left.reg + ", %struct.$String* " + right.reg + ")\n");
-            return CompileResult(reg=new_str_ptr, type=TYPE_STRING);
+            emit_release_owned(c, left);
+            emit_release_owned(c, right);
+            return CompileResult(reg=new_str_ptr, type=TYPE_STRING, owns_ref=true);
         }
 
         if (left.type != right.type) {
@@ -6970,6 +7019,8 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         let compare_hook -> String = get_mangled_symbol(c, "string_compare", node.pos);
         let cmp_val -> String = next_reg(c);
         c.output_file.write(c.indent + cmp_val + " = call i32 @" + compare_hook + "(%struct.$String* " + left.reg + ", %struct.$String* " + right.reg + ")\n");
+        emit_release_owned(c, left);
+        emit_release_owned(c, right);
 
         let res_reg -> String = next_reg(c);
         let op_code -> String = "icmp eq";
@@ -8991,6 +9042,7 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
     if (type_id == TYPE_INT128 || type_id == TYPE_UINT128) {
         let formatted -> CompileResult = convert_to_string(c, CompileResult(reg=reg, type=type_id, origin_type=origin_id));
         compile_print(c, formatted.reg, TYPE_STRING, pos, TYPE_STRING);
+        emit_release_owned(c, formatted);
         return;
     }
 
