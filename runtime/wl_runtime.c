@@ -12,6 +12,35 @@
 int _fltused = 0x9875;
 void __main(void) {}
 
+__attribute__((used, noinline)) void* memcpy(void* dest, const void* src, size_t count) {
+    volatile unsigned char* output = (volatile unsigned char*)dest;
+    const volatile unsigned char* input = (const volatile unsigned char*)src;
+    for (size_t i = 0; i < count; ++i) output[i] = input[i];
+    return dest;
+}
+
+__attribute__((used, noinline)) void* memmove(void* dest, const void* src, size_t count) {
+    volatile unsigned char* output = (volatile unsigned char*)dest;
+    const volatile unsigned char* input = (const volatile unsigned char*)src;
+    const uintptr_t output_addr = (uintptr_t)dest;
+    const uintptr_t input_addr = (uintptr_t)src;
+
+    if (output_addr == input_addr || count == 0) return dest;
+    if (output_addr < input_addr || output_addr - input_addr >= count) {
+        for (size_t i = 0; i < count; ++i) output[i] = input[i];
+        return dest;
+    }
+    for (size_t i = count; i > 0; --i) output[i - 1] = input[i - 1];
+    return dest;
+}
+
+__attribute__((used, noinline)) void* memset(void* dest, int value, size_t count) {
+    volatile unsigned char* output = (volatile unsigned char*)dest;
+    const unsigned char byte = (unsigned char)value;
+    for (size_t i = 0; i < count; ++i) output[i] = byte;
+    return dest;
+}
+
 #if defined(__x86_64__) || defined(_M_X64)
 // probe each guard page before a large stack allocation
 __attribute__((naked, weak)) void ___chkstk_ms(void) {
