@@ -43,6 +43,48 @@ func __float_integer_kind(value -> Float) -> Int {
     return 1;
 }
 
+@CompilerLink("float_mod")
+func float_mod(left -> Float, right -> Float) -> Float {
+    // reduce the significands directly so code generation never needs a libc fmod
+    let left_bits -> UInt64 = __float_bits(left);
+    let right_bits -> UInt64 = __float_bits(right);
+    let sign -> UInt64 = left_bits & __FLOAT_SIGN;
+    let left_abs -> UInt64 = left_bits & __FLOAT_ABS;
+    let right_abs -> UInt64 = right_bits & __FLOAT_ABS;
+    if (right_abs == UInt64(0) || left_abs >= __FLOAT_EXP || right_abs > __FLOAT_EXP) { return __float_from_bits(__FLOAT_NAN); }
+    if (left_abs < right_abs) { return left; }
+    if (left_abs == right_abs) { return __float_from_bits(sign); }
+
+    let left_exp_bits -> Int = Int((left_abs >> UInt64(52)) & UInt64(2047));
+    let right_exp_bits -> Int = Int((right_abs >> UInt64(52)) & UInt64(2047));
+    let left_exp -> Int = -1022;
+    let right_exp -> Int = -1022;
+    let left_mantissa -> UInt64 = left_abs & __FLOAT_FRAC;
+    let right_mantissa -> UInt64 = right_abs & __FLOAT_FRAC;
+    if (left_exp_bits != 0) { left_exp = left_exp_bits - 1023; left_mantissa |= UInt64(1) << UInt64(52); }
+    else { while (left_mantissa < (UInt64(1) << UInt64(52))) { left_mantissa <<= UInt64(1); left_exp -= 1; } }
+    if (right_exp_bits != 0) { right_exp = right_exp_bits - 1023; right_mantissa |= UInt64(1) << UInt64(52); }
+    else { while (right_mantissa < (UInt64(1) << UInt64(52))) { right_mantissa <<= UInt64(1); right_exp -= 1; } }
+
+    while (left_exp > right_exp) {
+        if (left_mantissa >= right_mantissa) { left_mantissa -= right_mantissa; }
+        left_mantissa <<= UInt64(1);
+        left_exp -= 1;
+    }
+    if (left_mantissa >= right_mantissa) { left_mantissa -= right_mantissa; }
+    if (left_mantissa == UInt64(0)) { return __float_from_bits(sign); }
+    while (left_mantissa < (UInt64(1) << UInt64(52))) { left_mantissa <<= UInt64(1); left_exp -= 1; }
+
+    let result_bits -> UInt64 = sign;
+    if (left_exp >= -1022) {
+        result_bits |= UInt64(left_exp + 1023) << UInt64(52);
+        result_bits |= left_mantissa & __FLOAT_FRAC;
+    } else {
+        result_bits |= left_mantissa >> UInt64(-1022 - left_exp);
+    }
+    return __float_from_bits(result_bits);
+}
+
 func __float_log(value -> Float, ptr low_out -> Float) -> Float {
     let bits -> UInt64 = __float_bits(value);
     let exponent_bits -> Int = Int((bits >> UInt64(52)) & UInt64(2047));

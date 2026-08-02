@@ -4,6 +4,7 @@ import "sys"
 import "file"
 import "process"
 import Dict from "dict"
+import "../../std/internal/runtime/math.wl" as compiler_math
 
 import * from "WhitelangNodes.wl"
 import * from "WhitelangUtils.wl"
@@ -217,6 +218,7 @@ func eval_const_long(c -> Compiler, node -> Struct, pos -> Position) -> Long {
         let n -> IntNode = node;
         return string_to_long(n.tok.value, n.pos);
     }
+    if (base.type == NODE_VAR_ACCESS) { return get_const_integer(c, node, pos); }
     if (base.type == NODE_UNARYOP) {
         let u -> UnaryOpNode = node;
         let op_str -> String = u.op_tok.value;
@@ -254,6 +256,123 @@ func eval_const_long(c -> Compiler, node -> Struct, pos -> Position) -> Long {
     }
     throw_invalid_syntax(pos, "Expression is not a compile-time constant integer.");
     return 0L;
+}
+
+func get_const_symbol(c -> Compiler, node -> VarAccessNode, pos -> Position) -> SymbolInfo {
+    let info -> SymbolInfo = find_symbol(c, node.name_tok.value);
+    if (info is null) {
+        throw_name_error(pos, "Unknown constant '" + node.name_tok.value + "'.");
+        return null;
+    }
+    if (!info.is_const) {
+        throw_type_error(pos, "Global initializer cannot use non-constant variable '" + node.name_tok.value + "'.");
+        return null;
+    }
+    if (info.reg == "poison") {
+        throw_invalid_syntax(pos, "Constant '" + node.name_tok.value + "' is used before its declaration.");
+        return null;
+    }
+    return info;
+}
+
+func get_const_num(c -> Compiler, node -> VarAccessNode, pos -> Position) -> Float {
+    let info -> SymbolInfo = get_const_symbol(c, node, pos);
+    if (info is null) { return 0.0; }
+    if (!c.constant_nums.contains_key(info.reg)) {
+        throw_type_error(pos, "Constant '" + node.name_tok.value + "' is not numeric.");
+        return 0.0;
+    }
+    return c.constant_nums.get(info.reg);
+}
+
+func get_const_integer(c -> Compiler, node -> VarAccessNode, pos -> Position) -> Long {
+    let info -> SymbolInfo = get_const_symbol(c, node, pos);
+    if (info is null) { return 0L; }
+    if (!c.constant_integers.contains_key(info.reg)) {
+        throw_type_error(pos, "Constant '" + node.name_tok.value + "' is not an integer.");
+        return 0L;
+    }
+    return c.constant_integers.get(info.reg);
+}
+
+func get_const_wide_integer(c -> Compiler, node -> VarAccessNode, pos -> Position) -> UInt128 {
+    let info -> SymbolInfo = get_const_symbol(c, node, pos);
+    if (info is null) { return UInt128(0); }
+    if (c.constant_wide_integers.contains_key(info.reg)) { return c.constant_wide_integers.get(info.reg); }
+    if (c.constant_integers.contains_key(info.reg)) { let integer -> Long = c.constant_integers.get(info.reg); return UInt128(integer); }
+    throw_type_error(pos, "Constant '" + node.name_tok.value + "' is not an integer.");
+    return UInt128(0);
+}
+
+func eval_const_float(c -> Compiler, node -> Struct, pos -> Position) -> Float {
+    if (node is null) { return 0.0; }
+    let base -> BaseNode = node;
+    if (base.type == NODE_FLOAT) {
+        let value -> FloatNode = node;
+        return parse_decimal_float_literal(value.tok.value);
+    }
+    if (base.type == NODE_INT) {
+        let value_type -> Int = get_expr_type(c, node);
+        if (get_type_bitwidth(value_type) == 128) {
+            throw_type_error(pos, "128-bit integers are not supported in floating-point constant expressions.");
+            return 0.0;
+        }
+        return Float(eval_const_long(c, node, pos));
+    }
+    if (base.type == NODE_CHAR) {
+        let value -> CharNode = node;
+        return Float(string_to_int(value.tok.value, value.pos));
+    }
+    if (base.type == NODE_BOOL) {
+        let value -> BooleanNode = node;
+        return Float(value.value);
+    }
+    if (base.type == NODE_VAR_ACCESS) { return get_const_num(c, node, pos); }
+    if (base.type == NODE_UNARYOP) {
+        let unary -> UnaryOpNode = node;
+        let value -> Float = eval_const_float(c, unary.node, pos);
+        if (unary.op_tok.type == TOK_PLUS) { return value; }
+        if (unary.op_tok.type == TOK_SUB) { return 0.0 - value; }
+        throw_type_error(pos, "Invalid unary operator in floating-point constant expression.");
+        return 0.0;
+    }
+    if (base.type == NODE_BINOP) {
+        let binary -> BinOpNode = node;
+        let left -> Float = eval_const_float(c, binary.left, pos);
+        let right -> Float = eval_const_float(c, binary.right, pos);
+        let op -> Int = binary.op_tok.type;
+        if (op == TOK_PLUS) { return left + right; }
+        if (op == TOK_SUB) { return left - right; }
+        if (op == TOK_MUL) { return left * right; }
+        if (op == TOK_DIV) {
+            if (right == 0.0) { throw_zero_division_error(pos, "Compile-time division by zero."); return 0.0; }
+            return left / right;
+        }
+        if (op == TOK_MOD) {
+            if (right == 0.0) { throw_zero_division_error(pos, "Compile-time modulo by zero."); return 0.0; }
+            return compiler_math.float_mod(left, right);
+        }
+        if (op == TOK_POW) { return compiler_math.float_pow(left, right); }
+        throw_type_error(pos, "Invalid binary operator in floating-point constant expression.");
+        return 0.0;
+    }
+    throw_invalid_syntax(pos, "Expression is not a compile-time floating-point constant.");
+    return 0.0;
+}
+
+func llvm_float_literal(value -> Float) -> String {
+    let raw -> AnyPtr = AnyPtr(ref value);
+    let ptr bits -> UInt64 = raw;
+    let encoded -> UInt64 = deref bits;
+    let digits -> String = "0123456789ABCDEF";
+    let result -> String = "0x";
+    let shift -> Int = 60;
+    while (shift >= 0) {
+        let digit -> Int = Int((encoded >> UInt64(shift)) & UInt64(15));
+        result += digits.slice(digit, digit + 1);
+        shift -= 4;
+    }
+    return result;
 }
 
 func parse_const_uint128(raw -> String, pos -> Position) -> UInt128 {
@@ -297,6 +416,7 @@ func eval_const_wide(c -> Compiler, node -> Struct, pos -> Position, is_unsigned
         }
         return parsed;
     }
+    if (base.type == NODE_VAR_ACCESS) { return get_const_wide_integer(c, node, pos); }
     if (base.type == NODE_UNARYOP) {
         let unary -> UnaryOpNode = node;
         let value -> UInt128 = eval_const_wide(c, unary.node, pos, is_unsigned);
@@ -356,6 +476,13 @@ func eval_const_bool(c -> Compiler, node -> Struct, pos -> Position) -> Int {
     if (base.type == NODE_BOOL) {
         let b -> BooleanNode = node;
         return b.value;
+    }
+    if (base.type == NODE_VAR_ACCESS) {
+        let value -> Long = get_const_integer(c, node, pos);
+        if (value == 0L) { return 0; }
+        if (value == 1L) { return 1; }
+        throw_type_error(pos, "Boolean constant expression requires a Bool value.");
+        return 0;
     }
     if (base.type == NODE_UNARYOP) {
         let u -> UnaryOpNode = node;
@@ -1166,9 +1293,9 @@ func pre_register_globals(c -> Compiler, node -> Struct) -> Void {
             if (c.current_package_prefix != "") {
                 full_var_name = c.current_package_prefix + var_name;
             }
-            // register a dummy SymbolInfo so bind_import_symbols can find it
-            // it will be overwritten with actual type and llvm reg in compile_ast_pass
-            c.global_symbol_table.put(full_var_name, SymbolInfo(reg="poison", type=0, origin_type=0, is_const=var_decl.is_const));
+            // keep the declared type visible while module imports are bound
+            let declared_type -> Int = resolve_type(c, var_decl.type_node);
+            c.global_symbol_table.put(full_var_name, SymbolInfo(reg="poison", type=declared_type, origin_type=declared_type, is_const=var_decl.is_const));
         }
         i += 1;
     }
@@ -2655,6 +2782,8 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         }
 
         let init_val_str -> String = "0";
+        let has_const_num -> Bool = false;
+        let const_num -> Float = 0.0;
         if (is_nullable_reference_type(c, target_type_id)) { 
             let s_info -> StructInfo = c.struct_id_map.get("" + target_type_id);
             if (s_info is !null && s_info.is_interface) {
@@ -2705,8 +2834,12 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                     } else {
                         init_val_str = "" + Int128(folded_wide);
                     }
+                    if (node.is_const) { c.constant_wide_integers.put(global_name, folded_wide); }
                 } else {
                     let folded_val -> Long = eval_const_long(c, val_node, node.pos);
+                    const_num = Float(folded_val);
+                    has_const_num = true;
+                    if (node.is_const) { c.constant_integers.put(global_name, folded_val); }
                     let is_overflow -> Bool = false;
                     
                     if (bits == 8) {
@@ -2744,18 +2877,22 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
                 }
                 let cn -> CharNode = node.value;
                 init_val_str = "" + string_to_int(cn.tok.value, cn.pos);
+                const_num = Float(string_to_int(cn.tok.value, cn.pos));
+                has_const_num = true;
+                if (node.is_const) { c.constant_integers.put(global_name, Long(string_to_int(cn.tok.value, cn.pos))); }
             }
             else if (target_type_id == TYPE_BOOL) {
                 let folded_val -> Int = eval_const_bool(c, val_node, node.pos);
                 if (folded_val == 1) { init_val_str = "1"; } else { init_val_str = "0"; }
+                const_num = Float(folded_val);
+                has_const_num = true;
+                if (node.is_const) { c.constant_integers.put(global_name, Long(folded_val)); }
             }
             else if (target_type_id == TYPE_FLOAT || target_type_id == TYPE_FLOAT32) {
-                if (val_node.type != NODE_FLOAT) {
-                    throw_type_error(node.pos, "Type mismatch. Expected Float literal.");
-                    return void_result();
-                }
-                let n -> FloatNode = node.value;
-                init_val_str = n.tok.value;
+                const_num = eval_const_float(c, val_node, node.pos);
+                if (target_type_id == TYPE_FLOAT32) { const_num = Float(Float32(const_num)); }
+                init_val_str = llvm_float_literal(const_num);
+                has_const_num = true;
             } else {
                 throw_invalid_syntax(node.pos, "Global variable initialisation must be a compile-time constant expression. ");
                 return void_result();
@@ -2771,8 +2908,11 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
             }
         }
 
-        c.output_file.write(global_name + " = " + linkage + "global " + llvm_ty_str + " " + init_val_str + "\n");
+        let storage -> String = "global";
+        if (node.is_const) { storage = "constant"; }
+        c.output_file.write(global_name + " = " + linkage + storage + " " + llvm_ty_str + " " + init_val_str + "\n");
         c.global_symbol_table.put(full_var_name, SymbolInfo(reg=global_name, type=target_type_id, origin_type=target_type_id, is_const=node.is_const));
+        if (node.is_const && has_const_num) { c.constant_nums.put(global_name, const_num); }
         return void_result();
     }
 
@@ -7214,7 +7354,7 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         else if (op_type == TOK_SUB)   { op_code = "fsub"; }
         else if (op_type == TOK_MUL)   { op_code = "fmul"; }
         else if (op_type == TOK_DIV)   { op_code = "fdiv"; }
-        else if (op_type == TOK_MOD)   { op_code = "frem"; } 
+        else if (op_type == TOK_MOD)   { op_code = ""; }
     } else {
         if (op_type == TOK_PLUS)  { op_code = "add"; }
         else if (op_type == TOK_SUB)   { op_code = "sub"; }
@@ -7283,6 +7423,25 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         }
         let arithmetic_hook -> String = get_mangled_symbol(c, hook_name, node.pos);
         c.output_file.write(c.indent + res_reg + " = call i128 @" + arithmetic_hook + "(i128 " + left.reg + ", i128 " + right.reg + ")\n");
+        return CompileResult(reg=res_reg, type=target_type);
+    }
+
+    if ((target_type == TYPE_FLOAT || target_type == TYPE_FLOAT32) && op_type == TOK_MOD) {
+        let left_reg -> String = left.reg;
+        let right_reg -> String = right.reg;
+        if (target_type == TYPE_FLOAT32) {
+            let widened_left -> String = next_reg(c);
+            let widened_right -> String = next_reg(c);
+            c.output_file.write(c.indent + widened_left + " = fpext float " + left_reg + " to double\n");
+            c.output_file.write(c.indent + widened_right + " = fpext float " + right_reg + " to double\n");
+            left_reg = widened_left;
+            right_reg = widened_right;
+        }
+        let mod_hook -> String = get_mangled_symbol(c, "float_mod", node.pos);
+        let mod_result -> String = res_reg;
+        if (target_type == TYPE_FLOAT32) { mod_result = next_reg(c); }
+        c.output_file.write(c.indent + mod_result + " = call double @" + mod_hook + "(double " + left_reg + ", double " + right_reg + ")\n");
+        if (target_type == TYPE_FLOAT32) { c.output_file.write(c.indent + res_reg + " = fptrunc double " + mod_result + " to float\n"); }
         return CompileResult(reg=res_reg, type=target_type);
     }
 
