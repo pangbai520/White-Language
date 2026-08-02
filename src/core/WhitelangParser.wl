@@ -18,6 +18,50 @@ struct TypedIdent(
     type_node -> Struct
 )
 
+const MAX_PARSE_NESTING -> Int = 256;
+
+func parser_enter(p -> Parser, pos -> Position) -> Bool {
+    if (p.nesting >= MAX_PARSE_NESTING) {
+        throw_invalid_syntax(pos, "Syntax nesting exceeds the limit of 256.");
+        return false;
+    }
+    p.nesting += 1;
+    return true;
+}
+
+func parser_leave(p -> Parser) -> Void {
+    if (p.nesting > 0) { p.nesting -= 1; }
+}
+
+func skip_group(p -> Parser, open_type -> Int, close_type -> Int) -> Void {
+    let depth -> Int = 0;
+    while (p.current_tok.type != TOK_EOF) {
+        if (p.current_tok.type == open_type) { depth += 1; }
+        else if (p.current_tok.type == close_type) {
+            depth -= 1;
+            parser_advance(p);
+            if (depth == 0) { return; }
+            continue;
+        }
+        parser_advance(p);
+    }
+}
+
+func nesting_fallback(p -> Parser, pos -> Position) -> Struct {
+    if (p.current_tok.type == TOK_LPAREN) { skip_group(p, TOK_LPAREN, TOK_RPAREN); }
+    else if (p.current_tok.type == TOK_LBRACKET) { skip_group(p, TOK_LBRACKET, TOK_RBRACKET); }
+    else if (p.current_tok.type == TOK_LBRACE) { skip_group(p, TOK_LBRACE, TOK_RBRACE); }
+    else if (p.current_tok.type != TOK_EOF) { parser_advance(p); }
+    let zero_tok -> Token = Token(type=TOK_INT, value="0", line=pos.ln, col=pos.col);
+    return IntNode(type=NODE_INT, tok=zero_tok, pos=pos);
+}
+
+func type_nesting_fallback(p -> Parser, pos -> Position) -> Struct {
+    if (p.current_tok.type != TOK_EOF) { parser_advance(p); }
+    let int_tok -> Token = Token(type=TOK_T_INT, value="Int", line=pos.ln, col=pos.col);
+    return VarAccessNode(type=NODE_VAR_ACCESS, name_tok=int_tok, pos=pos);
+}
+
 func is_name_token(token_type -> Int) -> Bool {
     return token_type == TOK_IDENTIFIER ||
            token_type == TOK_TYPE;
@@ -172,6 +216,14 @@ func parse_decimal_int(p -> Parser, tok -> Token) -> Int {
 }
 
 func parse_type_base(p -> Parser) -> Struct {
+    let pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+    if (!parser_enter(p, pos)) { return type_nesting_fallback(p, pos); }
+    let result -> Struct = parse_type_base_inner(p);
+    parser_leave(p);
+    return result;
+}
+
+func parse_type_base_inner(p -> Parser) -> Struct {
     // Support 'ptr' in type position (e.g. -> ptr Int) for compatibility
     if (p.current_tok.type == TOK_PTR) {
         let start_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -534,30 +586,8 @@ func atom(p -> Parser) -> Struct {
 
     // Parenthesized expressions
     if (tok.type == TOK_LPAREN) {
-        if (p.nesting >= 256) {
-            let err_pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
-            throw_invalid_syntax(err_pos, "Expression nesting exceeds the limit of 256.");
-
-            let balance -> Int = 0;
-            while (p.current_tok.type != TOK_EOF) {
-                if (p.current_tok.type == TOK_LPAREN) { balance += 1; }
-                else if (p.current_tok.type == TOK_RPAREN) {
-                    balance -= 1;
-                    parser_advance(p);
-                    if (balance == 0) { break; }
-                    continue;
-                }
-                parser_advance(p);
-            }
-
-            let zero_tok -> Token = Token(type=TOK_INT, value="0", line=tok.line, col=tok.col);
-            return IntNode(type=NODE_INT, tok=zero_tok, pos=err_pos);
-        }
-
-        p.nesting += 1;
         parser_advance(p);
         let node -> Struct = expression(p);
-        p.nesting -= 1;
         
         if (p.current_tok.type != TOK_RPAREN) {
             let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
@@ -772,8 +802,10 @@ func unary_expr(p -> Parser) -> Struct {
     // ref x
     if (tok.type == TOK_REF) {
         parser_advance(p);
-        let node -> Struct = unary_expr(p);
         let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        if (!parser_enter(p, pos)) { return nesting_fallback(p, pos); }
+        let node -> Struct = unary_expr(p);
+        parser_leave(p);
         return RefNode(type=NODE_REF, node=node, pos=pos);
     }
     
@@ -791,16 +823,20 @@ func unary_expr(p -> Parser) -> Struct {
                 throw_invalid_syntax(err_pos, "Expected dereference level.");
             }
         }
-        let node -> Struct = unary_expr(p);
         let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        if (!parser_enter(p, pos)) { return nesting_fallback(p, pos); }
+        let node -> Struct = unary_expr(p);
+        parser_leave(p);
         return DerefNode(type=NODE_DEREF, node=node, level=level, pos=pos);
     }
     
     // -5, +3.14, !b, ~c
     if (tok.type == TOK_PLUS || tok.type == TOK_SUB || tok.type == TOK_NOT || tok.type == TOK_BIT_NOT) {
         parser_advance(p);
-        let node -> Struct = unary_expr(p); // recursive
         let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        if (!parser_enter(p, pos)) { return nesting_fallback(p, pos); }
+        let node -> Struct = unary_expr(p); // recursive
+        parser_leave(p);
         return UnaryOpNode(type=NODE_UNARYOP, op_tok=tok, node=node, pos=pos);
     }
     
@@ -813,8 +849,10 @@ func power(p -> Parser) -> Struct {
     if (p.current_tok.type == TOK_POW) {
         let op_tok -> Token = p.current_tok;
         parser_advance(p);
-        let right -> Struct = factor(p);
         let pos -> Position = Position(idx=0, ln=op_tok.line, col=op_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        if (!parser_enter(p, pos)) { return nesting_fallback(p, pos); }
+        let right -> Struct = factor(p);
+        parser_leave(p);
         return BinOpNode(type=NODE_BINOP, left=left, op_tok=op_tok, right=right, pos=pos);
     }
     
@@ -1023,7 +1061,11 @@ func factor(p -> Parser) -> Struct {
 }
 
 func expression(p -> Parser) -> Struct {
-    return assignment(p);
+    let pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+    if (!parser_enter(p, pos)) { return nesting_fallback(p, pos); }
+    let result -> Struct = assignment(p);
+    parser_leave(p);
+    return result;
 }
 
 func term(p -> Parser) -> Struct {
@@ -1088,6 +1130,17 @@ func var_decl(p -> Parser, anns -> Vector(Struct)) -> Struct {
 }
 
 func parse_block(p -> Parser) -> Struct {
+    let pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+    if (!parser_enter(p, pos)) {
+        if (p.current_tok.type == TOK_LBRACE) { skip_group(p, TOK_LBRACE, TOK_RBRACE); }
+        return BlockNode(type=NODE_BLOCK, stmts=[]);
+    }
+    let result -> Struct = parse_block_inner(p);
+    parser_leave(p);
+    return result;
+}
+
+func parse_block_inner(p -> Parser) -> Struct {
     // '{'
     if (p.current_tok.type != TOK_LBRACE) {
         let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);

@@ -77,8 +77,12 @@ func __last_error() -> Error {
 }
 
 func run(program -> String, args -> Vector(String)) -> Int? {
-    if (program is null || program.length() == 0) {
-        throw Error.InvalidArgument;
+    if (!runtime_string.is_native_text(program) || program.length() == 0) { throw Error.InvalidArgument; }
+    let count -> Int = 0; if (args is !null) { count = args.length(); }
+    let arg_index -> Int = 0;
+    while (arg_index < count) {
+        if (!runtime_string.is_native_text(args[arg_index])) { throw Error.InvalidArgument; }
+        arg_index += 1;
     }
 
     if (sys.OS == "WINDOWS") {
@@ -141,7 +145,6 @@ func run(program -> String, args -> Vector(String)) -> Int? {
         return exit_code;
     }
 
-    let count -> Int = 0; if (args is !null) { count = args.length(); }
     let bytes -> Long = Long(count + 2) * runtime.pointer_size();
     let raw_argv -> AnyPtr = runtime.mem_alloc_zeroed(bytes);
     if (raw_argv is nullptr) { throw Error.OutOfMemory; }
@@ -176,7 +179,7 @@ func run(program -> String, args -> Vector(String)) -> Int? {
 }
 
 func shell(command -> String) -> Int {
-    if (command is null || command.length() == 0) { return -1; }
+    if (!runtime_string.is_native_text(command) || command.length() == 0) { return -1; }
     if (sys.OS == "WINDOWS") {
         let args -> Vector(String) = ["/d", "/s", "/c", command];
         let status -> Int = run("cmd.exe", args)?;

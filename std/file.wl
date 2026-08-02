@@ -20,6 +20,10 @@ class File {
 
     init(file_path -> String, mode -> String) {
         self.path = file_path;
+        if (!runtime_string.is_native_text(file_path) || !runtime_string.is_native_text(mode)) {
+            self.last_error = Error.InvalidArgument;
+            return;
+        }
         if (sys.OS == "WINDOWS") {
             let access -> Int = windows.GENERIC_READ;
             let disposition -> Int = windows.OPEN_EXISTING;
@@ -283,6 +287,7 @@ func append(path -> String) -> File? {
 }
 
 func exists(path -> String) -> Bool {
+    if (!runtime_string.is_native_text(path)) { return false; }
     if (sys.OS == "WINDOWS") {
         let wide_path -> AnyPtr = windows.utf8_to_utf16(path);
         if (wide_path is nullptr) { return false; }
@@ -298,6 +303,7 @@ func exists(path -> String) -> Bool {
 }
 
 func remove(path -> String) -> Void? {
+    if (!runtime_string.is_native_text(path)) { throw Error.InvalidArgument; }
     if (sys.OS == "WINDOWS") {
         let wide_path -> AnyPtr = windows.utf8_to_utf16(path);
         if (wide_path is nullptr) { throw platform_errors.last(); }

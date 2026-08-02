@@ -7055,7 +7055,8 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         left = promote_to_float(c, left);
         right = promote_to_float(c, right);
         let res_reg -> String = next_reg(c);
-        c.output_file.write(c.indent + res_reg + " = call double @llvm.pow.f64(double " + left.reg + ", double " + right.reg + ")\n");
+        let pow_hook -> String = get_mangled_symbol(c, "float_pow", node.pos);
+        c.output_file.write(c.indent + res_reg + " = call double @" + pow_hook + "(double " + left.reg + ", double " + right.reg + ")\n");
         return CompileResult(reg=res_reg, type=TYPE_FLOAT);
     }
 
@@ -9634,7 +9635,6 @@ func compile_start(c -> Compiler) -> Void {
     c.output_file.write("declare %struct.$String* @wl_alloc_string(i64)\n");
     c.declared_externs.put("wl_alloc_string", StringConstant(id=0, value=""));
 
-    c.output_file.write("declare double @llvm.pow.f64(double, double)\n\n");
     c.output_file.write("declare void @llvm.trap()\n\n");
 
     c.output_file.write("@.fmt_int = private unnamed_addr constant [4 x i8] c\"%d\\0A\\00\"\n");

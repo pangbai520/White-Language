@@ -95,7 +95,7 @@ __declspec(noreturn) __attribute__((weak)) void mainCRTStartup(void) {
     }
 
     for (int i = 0; i < argc; ++i) {
-        int bytes = WideCharToMultiByte(CP_UTF8, 0, wide_argv[i], -1, NULL, 0, NULL, NULL);
+        int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide_argv[i], -1, NULL, 0, NULL, NULL);
         if (bytes <= 0) {
             for (int j = 0; j < i; ++j) HeapFree(heap, 0, argv[j]);
             HeapFree(heap, 0, argv);
@@ -104,7 +104,7 @@ __declspec(noreturn) __attribute__((weak)) void mainCRTStartup(void) {
         }
 
         argv[i] = (char*)HeapAlloc(heap, 0, (SIZE_T)bytes);
-        if (argv[i] == NULL || WideCharToMultiByte(CP_UTF8, 0, wide_argv[i], -1, argv[i], bytes, NULL, NULL) <= 0) {
+        if (argv[i] == NULL || WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide_argv[i], -1, argv[i], bytes, NULL, NULL) <= 0) {
             if (argv[i] != NULL) HeapFree(heap, 0, argv[i]);
             for (int j = 0; j < i; ++j) HeapFree(heap, 0, argv[j]);
             HeapFree(heap, 0, argv);

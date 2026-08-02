@@ -207,18 +207,33 @@ func validate_number(l -> Lexer, line -> Int, col -> Int, value -> String, is_fl
     return true;
 }
 
+func lexer_load_current(l -> Lexer) -> Void {
+    while (l.pos.idx < l.text.length()) {
+        let unit -> Utf8Unit = decode_utf8_unit(l.text, l.pos.idx);
+        if (!unit.valid || unit.value == '\0') {
+            let err_pos -> Position = Position(idx=l.pos.idx, ln=l.pos.ln, col=l.pos.col, text=l.text, fn=l.pos.fn);
+            if (!unit.valid) { throw_illegal_char(err_pos, "Invalid UTF-8 byte in source."); }
+            else { throw_illegal_char(err_pos, "NUL byte is not allowed in source."); }
+            let width -> Int = unit.width;
+            if (width <= 0) { width = 1; }
+            l.pos.idx += width;
+            l.pos.col += width;
+            continue;
+        }
+        l.current_char = unit.value;
+        l.current_width = unit.width;
+        l.current_valid = true;
+        return;
+    }
+    l.current_char = '\0';
+    l.current_width = 0;
+    l.current_valid = true;
+}
+
 func __new_lexer(fn -> String, text -> String, collect_trivia -> Bool) -> Lexer {
     let pos -> Position = Position(idx=0, ln=0, col=0, text=text, fn=fn);
-    let unit -> Utf8Unit = decode_utf8_unit(text, 0);
-    let l -> Lexer = Lexer(
-        text=text,
-        pos=pos,
-        current_char=unit.value,
-        current_width=unit.width,
-        current_valid=unit.valid,
-        collect_trivia=collect_trivia,
-        trivia=[]
-    );
+    let l -> Lexer = Lexer(text=text, pos=pos, current_char='\0', current_width=0, current_valid=true, collect_trivia=collect_trivia, trivia=[]);
+    lexer_load_current(l);
     return l;
 }
 
@@ -240,16 +255,7 @@ func lexer_advance(l -> Lexer) -> Void {
         l.pos.col += previous_width;
     }
     l.pos.idx += previous_width;
-    if (l.pos.idx < l.text.length()) {
-        let unit -> Utf8Unit = decode_utf8_unit(l.text, l.pos.idx);
-        l.current_char = unit.value;
-        l.current_width = unit.width;
-        l.current_valid = unit.valid;
-    } else {
-        l.current_char = '\0';
-        l.current_width = 0;
-        l.current_valid = true;
-    }
+    lexer_load_current(l);
 }
 
 func get_string(l -> Lexer) -> Token {

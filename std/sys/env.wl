@@ -4,10 +4,16 @@ import * from "target.wl"
 import "internal/platform/windows"
 import "internal/platform/posix"
 import "internal/platform/errors" as platform_errors
+import "internal/runtime/string" as runtime_string
 import Error from "errors"
 
 func get(name -> String) -> String? {
-    if (name is null || name.length() == 0) { throw Error.InvalidArgument; }
+    if (!runtime_string.is_native_text(name) || name.length() == 0) { throw Error.InvalidArgument; }
+    let i -> Int = 0;
+    while (i < name.length()) {
+        if (name[i] == Byte(61)) { throw Error.InvalidArgument; }
+        i += 1;
+    }
     if (OS == "WINDOWS") {
         let wide_name -> AnyPtr = windows.utf8_to_utf16(name);
         if (wide_name is nullptr) { throw platform_errors.last(); }
@@ -42,6 +48,7 @@ func get(name -> String) -> String? {
 
     let result -> String = posix.wl_getenv(name);
     if (result is null) { throw Error.NotFound; }
+    if (!runtime_string.is_native_text(result)) { throw Error.InvalidArgument; }
     return result;
 }
 

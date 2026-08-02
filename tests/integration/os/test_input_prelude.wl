@@ -1,6 +1,6 @@
 // Test: INPUT_PRELUDE
 // File: tests/integration/os/test_input_prelude.wl
-// Focus: Duiltin input namespace and zero-length operations.
+// Focus: Builtin input namespace and zero-length operations.
 
 func main() -> Int {
     let bytes -> String = input.read_bytes("", 0)?;

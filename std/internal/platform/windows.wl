@@ -38,6 +38,8 @@ const STD_INPUT_HANDLE -> Int = -10;
 const STD_OUTPUT_HANDLE -> Int = -11;
 const STD_ERROR_HANDLE -> Int = -12;
 const CP_UTF8 -> Int = 65001;
+const MB_ERR_INVALID_CHARS -> Int = 8;
+const WC_ERR_INVALID_CHARS -> Int = 128;
 const HEAP_ZERO_MEMORY -> Int = 8;
 const ERROR_ENVVAR_NOT_FOUND -> Int = 203;
 const ERROR_HANDLE_EOF -> Int = 38;
@@ -66,18 +68,18 @@ func is_invalid_handle(handle -> AnyPtr) -> Bool {
 
 func utf8_to_utf16(value -> String) -> AnyPtr {
     if (OS != "WINDOWS") { return nullptr; }
-    if (value is null) { return nullptr; }
+    if (!runtime_string.is_native_text(value)) { return nullptr; }
 
     let length -> Int = value.length();
     let wide_length -> Int = 0;
     if (length > 0) {
-        wide_length = MultiByteToWideChar(CP_UTF8, 0, runtime_string.data(value), length, nullptr, 0);
+        wide_length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, runtime_string.data(value), length, nullptr, 0);
         if (wide_length <= 0) { return nullptr; }
     }
 
     let buffer -> AnyPtr = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (Long(wide_length) + 1L) * 2L);
     if (buffer is nullptr) { return nullptr; }
-    if (wide_length > 0 && MultiByteToWideChar(CP_UTF8, 0, runtime_string.data(value), length, buffer, wide_length) <= 0) {
+    if (wide_length > 0 && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, runtime_string.data(value), length, buffer, wide_length) <= 0) {
         HeapFree(GetProcessHeap(), 0, buffer);
         return nullptr;
     }
@@ -89,12 +91,12 @@ func utf16_to_utf8(value -> AnyPtr, length -> Int) -> String {
     if (value is nullptr || length < 0) { return null; }
     if (length == 0) { return runtime_string.alloc(0L); }
 
-    let utf8_length -> Int = WideCharToMultiByte(CP_UTF8, 0, value, length, nullptr, 0, nullptr, nullptr);
+    let utf8_length -> Int = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, length, nullptr, 0, nullptr, nullptr);
     if (utf8_length <= 0) { return null; }
 
     let result -> String = runtime_string.alloc(Long(utf8_length));
     if (result is null) { return null; }
-    if (WideCharToMultiByte(CP_UTF8, 0, value, length, runtime_string.data(result), utf8_length, nullptr, nullptr) <= 0) {
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, length, runtime_string.data(result), utf8_length, nullptr, nullptr) <= 0) {
         return null;
     }
     return result;
