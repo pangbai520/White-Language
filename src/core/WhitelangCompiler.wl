@@ -4,7 +4,6 @@ import "sys"
 import "file"
 import "process"
 import Dict from "dict"
-import "../../std/internal/runtime/math.wl" as compiler_math
 
 import * from "WhitelangNodes.wl"
 import * from "WhitelangUtils.wl"
@@ -350,9 +349,9 @@ func eval_const_float(c -> Compiler, node -> Struct, pos -> Position) -> Float {
         }
         if (op == TOK_MOD) {
             if (right == 0.0) { throw_zero_division_error(pos, "Compile-time modulo by zero."); return 0.0; }
-            return compiler_math.float_mod(left, right);
+            return left % right;
         }
-        if (op == TOK_POW) { return compiler_math.float_pow(left, right); }
+        if (op == TOK_POW) { return left ** right; }
         throw_type_error(pos, "Invalid binary operator in floating-point constant expression.");
         return 0.0;
     }
