@@ -2,7 +2,6 @@
 // File: tests/e2e/projects/test_memory_heavy.wl
 // Focus: Recursive struct linking, nested member offsets, and raw pointer memory mutation.
 
-import "builtin"
 
 struct Node(id -> Int, data -> Int, next -> Node)
 struct Point(x -> Int, y -> Int)
@@ -36,9 +35,9 @@ func main() -> Int {
 
     // final integrity assertion
     if (tail_val == 20 && nested_y == 20 && target == 99999) {
-        builtin.print("PASS: Memory layout and pointer mutation");
+        print("PASS: Memory layout and pointer mutation");
     } else {
-        builtin.print("FAIL: Memory stress corruption");
+        print("FAIL: Memory stress corruption");
     }
     return 0;
 }

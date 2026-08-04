@@ -1,7 +1,6 @@
 // Test: RC_CONTROL_FLOW_JUMPS
 // File: tests/language/control/test_rc_control_flow.wl
 // Focus: Reference counting consistency during non-local jumps (break, continue, return).
-import "builtin"
 
 
 func fail_func() -> Int? {
@@ -49,6 +48,6 @@ func main() -> Int {
     
     // if the program reaches here without a segmentation fault 
     // (caused by double-free) or memory exhaustion (caused by leak), PASS.
-    builtin.print("PASS: RC control flow jumps compiled and ran successfully.");
+    print("PASS: RC control flow jumps compiled and ran successfully.");
     return 0;
 }

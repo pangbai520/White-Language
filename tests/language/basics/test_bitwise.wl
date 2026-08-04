@@ -1,7 +1,6 @@
 // Test: BITWISE_OPERATIONS_INTEGRITY
 // File: tests/language/basics/test_bitwise.wl
 // Focus: Integer bitwise logic, shift arithmetic, and sign-aware inversion.
-import "builtin"
 
 func main() -> Int {
     let a -> Int = 12;      // operand a: 0000 1100
@@ -34,10 +33,10 @@ func main() -> Int {
 
     // finalize validation without intermediate noise
     if (logic_ok && shift_ok && compound_ok) {
-        builtin.print("PASS: Bitwise logic gates and compound mutation");
+        print("PASS: Bitwise logic gates and compound mutation");
     } else {
         // likely an LLVM IR generation error in bitwise mapping
-        builtin.print("FAIL: Bitwise operator mismatch or sign-extension error");
+        print("FAIL: Bitwise operator mismatch or sign-extension error");
         return 1;
     }
 

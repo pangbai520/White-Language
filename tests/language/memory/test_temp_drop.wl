@@ -2,7 +2,6 @@
 // File: tests/language/memory/test_temp_drop.wl
 // Focus: Dropping unused class and container return values at the end of an expression statement.
 
-import "builtin"
 
 let DROPPED -> Int = 0;
 

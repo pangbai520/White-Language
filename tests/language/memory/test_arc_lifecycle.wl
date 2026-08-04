@@ -1,7 +1,6 @@
 // Test: ARC_LIFECYCLE_MANAGEMENT
 // File: tests/language/memory/test_arc_lifecycle.wl
 // Focus: Automatic Reference Counting (ARC) during scope transitions and reassignments.
-import "builtin"
 
 
 struct Point(x -> Int, y -> Int)
@@ -21,9 +20,9 @@ func main() -> Int {
     
     // if the compiler reaches here without memory leaks or crashes, scope logic is valid
     if (assign_ok) {
-        builtin.print("PASS: ARC lifecycle and assignment");
+        print("PASS: ARC lifecycle and assignment");
     } else {
-        builtin.print("FAIL: ARC assignment logic error");
+        print("FAIL: ARC assignment logic error");
     }
     return 0;
 }

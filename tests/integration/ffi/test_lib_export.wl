@@ -1,7 +1,6 @@
 // Test: DLL_SYMBOL_EXPORT
 // File: tests/language/integration/ffi/test_lib_export.wl
 // Focus: Shared library symbol exporting, recursive stack frame integrity, and float ABI stability.
-import "builtin"
 
 @ExportLib
 // basic i32 addition for export validation

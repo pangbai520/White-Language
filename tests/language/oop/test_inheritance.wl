@@ -1,7 +1,6 @@
 // Test: INHERITANCE_AND_POLYMORPHISM
 // File: tests/language/oop/test_inheritance.wl
 // Focus: VTable layout for overridden methods, super-constructor chaining, and implicit upcasting.
-import "builtin"
 
 
 class Animal {
@@ -66,9 +65,9 @@ func main() -> Int {
     let cat_vtable_ok -> Bool = (cat_speaks == "Whiskers says: Meow~");
 
     if (dog_name_ok && dog_vtable_ok && cat_vtable_ok) {
-        builtin.print("PASS: OOP inheritance and polymorphic dispatch");
+        print("PASS: OOP inheritance and polymorphic dispatch");
     } else {
-        builtin.print("FAIL: VTable dispatch or field inheritance mismatch");
+        print("FAIL: VTable dispatch or field inheritance mismatch");
         return 1;
     }
 

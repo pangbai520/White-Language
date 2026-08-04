@@ -2,7 +2,6 @@
 // File: tests/language/types/test_numeric_format.wl
 // Focus: Signed integer limit string conversion and six-digit float rounding independent of libc.
 
-import "builtin"
 
 func main() -> Int {
     let int_min -> Int = -2147483647 - 1;
@@ -26,10 +25,10 @@ func main() -> Int {
     if (!int_ok || !long_ok || !zero_ok || !round_ok || !carry_ok || !negative_ok ||
         !int128_ok || !uint128_ok || !uint128_zero_ok || !uint128_chunk_ok ||
         !uint128_limb_ok || !int128_mid_ok) {
-        builtin.print("FAIL: libc-free numeric formatting");
+        print("FAIL: libc-free numeric formatting");
         return 1;
     }
 
-    builtin.print("PASS: libc-free numeric formatting");
+    print("PASS: libc-free numeric formatting");
     return 0;
 }

@@ -2,7 +2,6 @@
 // File: tests/language/errors/test_error_handling.wl
 // Focus: Fallible function propagation (?), catch blocks with control flow, and complex type support.
 
-import "builtin"
 import Error from "errors"
 
 func may_fail(x -> Int) -> Int? {
@@ -56,10 +55,10 @@ func main() -> Int {
 
     let complex_ok -> Bool = vec_catch_hit;
     if (loop_ok && complex_ok) {
-        builtin.print("PASS: Error propagation, loop control, and complex type unwinding");
+        print("PASS: Error propagation, loop control, and complex type unwinding");
         return 0;
     } else {
-        builtin.print("FAIL: Error handling logic mismatch");
+        print("FAIL: Error handling logic mismatch");
         return 1;
     }
 }

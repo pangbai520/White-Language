@@ -3,7 +3,6 @@
 // Focus: Structured String ABI stability across runtime calls, ARC cleanup,
 // stdlib methods, native file I/O, and type conversions.
 
-import "builtin"
 import "file"
 
 func main() -> Int {
@@ -26,12 +25,12 @@ func main() -> Int {
     let path -> String = "tests_structured_string_runtime.tmp";
     let writer -> file.File = file.create(path)?;
     catch(err) {
-        builtin.print("FAIL: could not create structured String runtime fixture");
+        print("FAIL: could not create structured String runtime fixture");
         return 1;
     }
     writer.write_all(description)?;
     catch(err) {
-        builtin.print("FAIL: could not write structured String runtime fixture");
+        print("FAIL: could not write structured String runtime fixture");
         return 1;
     }
     writer.close();
@@ -41,12 +40,12 @@ func main() -> Int {
         file.remove(path)?;
         catch(cleanup_err) {
         }
-        builtin.print("FAIL: could not append structured String runtime fixture");
+        print("FAIL: could not append structured String runtime fixture");
         return 1;
     }
     appender.write_all("!")?;
     catch(err) {
-        builtin.print("FAIL: could not append structured String runtime fixture");
+        print("FAIL: could not append structured String runtime fixture");
         return 1;
     }
     appender.close();
@@ -56,27 +55,27 @@ func main() -> Int {
         file.remove(path)?;
         catch(cleanup_err) {
         }
-        builtin.print("FAIL: could not reopen structured String runtime fixture");
+        print("FAIL: could not reopen structured String runtime fixture");
         return 1;
     }
     let roundtrip -> String = reader.read_all()?;
     catch(err) {
-        builtin.print("FAIL: could not read structured String runtime fixture");
+        print("FAIL: could not read structured String runtime fixture");
         return 1;
     }
     reader.close();
     file.remove(path)?;
     catch(err) {
-        builtin.print("FAIL: could not remove structured String runtime fixture");
+        print("FAIL: could not remove structured String runtime fixture");
         return 1;
     }
 
     let file_ok -> Bool = roundtrip.length() == description.length() + 1 && roundtrip == description + "!";
     if (methods_ok && conversions_ok && file_ok) {
-        builtin.print("PASS: Structured String runtime ABI");
+        print("PASS: Structured String runtime ABI");
         return 0;
     }
 
-    builtin.print("FAIL: Structured String runtime ABI");
+    print("FAIL: Structured String runtime ABI");
     return 1;
 }

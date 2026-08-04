@@ -2,7 +2,6 @@
 // File: tests/language/basics/test_const_expr.wl
 // Focus: Folding numeric global constants without losing floating-point precision.
 
-import "builtin"
 
 const PI -> Float = 3.14159265358979323846;
 const HALF_PI -> Float = PI / 2;
@@ -25,9 +24,9 @@ func close(left -> Float, right -> Float, tolerance -> Float) -> Bool {
 
 func main() -> Int {
     if (!close(HALF_PI, 1.5707963267948966, 0.000000000000001) || !close(RESTORED_PI, PI, 0.000000000000001) || POWER != 1024.0 || REMAINDER != 1.5 || !close(Float(THIRD), 0.3333333432674408, 0.000000000000001) || OFFSET != 5 || WIDE_NEXT != 170141183460469231731687303715884105721LL || !ENABLED_COPY) {
-        builtin.print("FAIL: global constant expressions");
+        print("FAIL: global constant expressions");
         return 1;
     }
-    builtin.print("PASS: global constant expressions");
+    print("PASS: global constant expressions");
     return 0;
 }

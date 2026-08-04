@@ -2,7 +2,6 @@
 // File: tests/language/errors/test_std_errors.wl
 // Focus: File and environment failures report structured errors
 
-import "builtin"
 import "file"
 import "sys"
 import "errors"
@@ -26,13 +25,13 @@ func missing_env_reports_error() -> Bool {
 
 func main() -> Int {
     if (!missing_file_reports_error()) {
-        builtin.print("FAIL: missing file error");
+        print("FAIL: missing file error");
         return 1;
     }
     if (!missing_env_reports_error()) {
-        builtin.print("FAIL: missing environment error");
+        print("FAIL: missing environment error");
         return 1;
     }
-    builtin.print("PASS: standard library errors");
+    print("PASS: standard library errors");
     return 0;
 }

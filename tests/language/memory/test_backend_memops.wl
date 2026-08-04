@@ -2,7 +2,6 @@
 // File: tests/language/memory/test_backend_memops.wl
 // Focus: Linking and executing memory operations synthesized by the optimized Windows backend.
 
-import "builtin"
 
 extern "C" {
     func memcpy(dest -> AnyPtr, src -> AnyPtr, count -> Long) -> AnyPtr;

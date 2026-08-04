@@ -1,6 +1,4 @@
 // core/WhitelangLexer.wl
-import "builtin"
-
 import "WhitelangTokens.wl"
 import * from "WhitelangTokens.wl"
 import * from "WhitelangExceptions.wl"

@@ -1,5 +1,4 @@
 // core/WhitelangCompiler.wl
-import "builtin"
 import "sys"
 import "file"
 import "process"
@@ -2425,6 +2424,23 @@ func reserve_module_prefix(c -> Compiler, canonical_name -> String, final_path -
     return "";
 }
 
+func bind_loaded_prelude(c -> Compiler, path -> String, pos -> Position) -> Void {
+    let final_path -> String = resolve_import_path(c, path, pos);
+    if (final_path is null || final_path.length() == 0) { return; }
+    let loaded -> StringConstant = c.imported_modules.get(final_path);
+    if (loaded is null) { return; }
+    let star -> Token = Token(type=TOK_MUL, value="*", line=pos.ln, col=pos.col);
+    let symbols -> Vector(Struct) = [ImportSymbolNode(name_tok=star, alias_tok=null)];
+    let path_tok -> Token = Token(type=TOK_STR_LIT, value=path, line=pos.ln, col=pos.col);
+    bind_import_symbols(c, ImportNode(type=NODE_IMPORT, path_tok=path_tok, symbols=symbols, alias_tok=null, pos=pos), loaded.value);
+}
+
+func bind_module_prelude(c -> Compiler, pos -> Position) -> Void {
+    bind_loaded_prelude(c, "errors", pos);
+    bind_loaded_prelude(c, "builtin", pos);
+    bind_loaded_prelude(c, "dict", pos);
+}
+
 func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     let raw_path -> String = node.path_tok.value;
     let final_path -> String = resolve_import_path(c, raw_path, node.pos);
@@ -2462,10 +2478,7 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
         import_prefix = reserve_module_prefix(c, canonical_name, final_path);
     }
     if (node.symbols is null) {
-        if (c.current_file_namespaces.get(module_name) is !null) {
-            throw_import_error(node.pos, "Module name '" + module_name + "' is already bound by another import.");
-            return;
-        }
+        if (c.current_file_namespaces.get(module_name) is !null) { unbind_namespace(c, module_name); }
         let existing_prefix -> String = c.current_file_visible_prefixes.get(module_name);
         if (existing_prefix is !null && existing_prefix != import_prefix) {
             throw_import_error(node.pos, "Module name '" + module_name + "' is already bound to another module.");
@@ -2530,6 +2543,7 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     c.current_file_type_aliases     = Dict(32);
     c.current_file_func_aliases     = Dict(32);
     c.current_file_global_aliases   = Dict(32);
+    bind_module_prelude(c, node.pos);
 
     let lexer -> Lexer = new_lexer(final_path, source);
     let parser -> Parser = Parser(lexer=lexer, current_tok=get_next_token(lexer), nesting=0);
@@ -2682,6 +2696,14 @@ func discard_statement_result(c -> Compiler, node -> Struct, result -> CompileRe
     }
 }
 
+func validate_fallible_call(c -> Compiler, type_id -> Int, handled -> Bool, name -> String, pos -> Position) -> Bool {
+    if (!is_fallible_type(c, type_id) || handled) { return true; }
+    let message -> String = "fallible call requires '?'";
+    if (name is !null && name.length() > 0) { message = "call to fallible function '" + name + "' requires '?'"; }
+    throw_type_error(pos, message);
+    return false;
+}
+
 func compile_block(c -> Compiler, node -> BlockNode) -> CompileResult {
     let is_root -> Bool = false;
     if (c.scope_depth == 0) {
@@ -2742,6 +2764,13 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
             curr_scope.table.put(node.name_tok.value, SymbolInfo(reg="poison", type=TYPE_POISON, origin_type=TYPE_POISON, is_const=false));
             return void_result();
         }
+    }
+
+    if (is_fallible_type(c, target_type_id)) {
+        throw_type_error(node.pos, "fallible values cannot be stored; handle the call with '?'");
+        let curr_scope -> Scope = c.symbol_table;
+        curr_scope.table.put(node.name_tok.value, SymbolInfo(reg="poison", type=TYPE_POISON, origin_type=TYPE_POISON, is_const=false));
+        return void_result();
     }
 
     if (target_type_id == TYPE_VOID || target_type_id == TYPE_POISON) {
@@ -3350,6 +3379,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     c.hoist_scope = Scope(parent=null, table=Dict(32), gc_vars=[], depth=0);
     c.alloc_regs = [];
     hoist_allocas(c, node.body);
+    check_local_init(c, node.body);
 
     compile_node(c, node.body);
 
@@ -3448,6 +3478,7 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
     c.hoist_scope = Scope(parent=null, table=Dict(32), gc_vars=[], depth=0);
     c.alloc_regs = [];
     hoist_allocas(c, node.body);
+    check_local_init(c, node.body);
     compile_node(c, node.body);
 
     let has_term -> Bool = must_terminate(c, node.body);
@@ -3605,6 +3636,10 @@ func compile_class_method_call(c -> Compiler, s_info -> StructInfo, obj_res -> C
         c.expected_type = 0;
         
         args_str = get_llvm_type_str(c, self_expected_type) + " " + casted_obj.reg;
+    }
+
+    if (!validate_fallible_call(c, ret_type, n_call.preserve_fallible, method_name, n_call.pos)) {
+        return CompileResult(reg="poison", type=TYPE_POISON);
     }
     
     let args -> Vector(Struct) = n_call.args;
@@ -3849,6 +3884,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     c.hoist_scope = Scope(parent=null, table=Dict(32), gc_vars=[], depth=0);
     c.alloc_regs = [];
     hoist_allocas(c, func_def.body);
+    check_local_init(c, func_def.body);
     let lambda_terminates -> Bool = must_terminate(c, func_def.body);
     compile_node(c, func_def.body);
     
@@ -4143,6 +4179,12 @@ struct InitFlow(
     terminates  -> Bool
 )
 
+struct LocalInitScope(
+    table -> Dict,
+    parent -> Struct,
+    declarations -> Vector(Struct)
+)
+
 func init_has(initialized -> Vector(String), name -> String) -> Bool {
     let i -> Int = 0;
     while (i < initialized.length()) {
@@ -4166,10 +4208,7 @@ func init_copy(initialized -> Vector(String)) -> Vector(String) {
     return copy;
 }
 
-func init_intersection(
-    left -> Vector(String),
-    right -> Vector(String)
-) -> Vector(String) {
+func init_intersection(left -> Vector(String), right -> Vector(String)) -> Vector(String) {
     let result -> Vector(String) = [];
     let i -> Int = 0;
     while (i < left.length()) {
@@ -4179,10 +4218,268 @@ func init_intersection(
     return result;
 }
 
-func init_complete(
-    required -> Vector(String),
-    initialized -> Vector(String)
-) -> Bool {
+func init_without(initialized -> Vector(String), removed -> Vector(String)) -> Vector(String) {
+    let result -> Vector(String) = [];
+    let i -> Int = 0;
+    while (i < initialized.length()) {
+        if (!init_has(removed, initialized[i])) { result.append(initialized[i]); }
+        i += 1;
+    }
+    return result;
+}
+
+func local_init_key(node -> VarDeclareNode) -> String {
+    return "" + node.alloc_id;
+}
+
+func bind_local_init(scope -> LocalInitScope, node -> VarDeclareNode) -> Void {
+    scope.table.put(node.name_tok.value, SymbolInfo(reg="", type=node.alloc_id + 1, origin_type=0, is_const=node.is_const));
+    scope.declarations.append(node);
+}
+
+func lookup_local_init(scope -> LocalInitScope, name -> String) -> String {
+    let current -> LocalInitScope = scope;
+    while (current is !null) {
+        let info -> SymbolInfo = current.table.get(name);
+        if (info is !null) {
+            if (info.type <= 0) { return ""; }
+            return "" + (info.type - 1);
+        }
+        current = current.parent;
+    }
+    return "";
+}
+
+func read_local_init(scope -> LocalInitScope, initialized -> Vector(String), name -> String, pos -> Position) -> Void {
+    let key -> String = lookup_local_init(scope, name);
+    if (key.length() == 0 || init_has(initialized, key)) { return; }
+    throw_missing_initializer(pos, "Variable '" + name + "' may be used before initialization.");
+    init_add(initialized, key);
+}
+
+func merge_local_init(before -> Vector(String), success -> InitFlow, failure -> InitFlow) -> InitFlow {
+    if (success.terminates && failure.terminates) { return InitFlow(before, true); }
+    if (success.terminates) { return InitFlow(failure.initialized, false); }
+    if (failure.terminates) { return InitFlow(success.initialized, false); }
+    return InitFlow(init_intersection(success.initialized, failure.initialized), false);
+}
+
+func check_local_init_block(c -> Compiler, node -> BlockNode, parent -> LocalInitScope, initialized -> Vector(String)) -> InitFlow {
+    let scope -> LocalInitScope = LocalInitScope(table=Dict(32), parent=parent, declarations=[]);
+    let state -> Vector(String) = initialized;
+    let terminates -> Bool = false;
+    let i -> Int = 0;
+    while (node.stmts is !null && i < node.stmts.length()) {
+        let flow -> InitFlow = check_local_init_node(c, node.stmts[i], scope, state);
+        state = flow.initialized;
+        if (flow.terminates) { terminates = true; break; }
+        i += 1;
+    }
+
+    let local_keys -> Vector(String) = [];
+    i = 0;
+    while (i < scope.declarations.length()) {
+        let declaration -> VarDeclareNode = scope.declarations[i];
+        let key -> String = local_init_key(declaration);
+        local_keys.append(key);
+        if (!terminates && !init_has(state, key)) {
+            throw_missing_initializer(declaration.pos, "Local variable '" + declaration.name_tok.value + "' is not initialized on every path.");
+            init_add(state, key);
+        }
+        i += 1;
+    }
+    return InitFlow(init_without(state, local_keys), terminates);
+}
+
+func check_local_init_node(c -> Compiler, node -> Struct, scope -> LocalInitScope, initialized -> Vector(String)) -> InitFlow {
+    if (node is null) { return InitFlow(initialized, false); }
+    let base -> BaseNode = node;
+
+    if (base.type == NODE_BLOCK) { return check_local_init_block(c, node, scope, initialized); }
+    if (base.type == NODE_VAR_ACCESS) {
+        let access -> VarAccessNode = node;
+        read_local_init(scope, initialized, access.name_tok.value, access.pos);
+        return InitFlow(initialized, false);
+    }
+    if (base.type == NODE_VAR_DECL) {
+        let declaration -> VarDeclareNode = node;
+        let value_flow -> InitFlow = check_local_init_node(c, declaration.value, scope, initialized);
+        bind_local_init(scope, declaration);
+        init_add(value_flow.initialized, local_init_key(declaration));
+        return InitFlow(value_flow.initialized, false);
+    }
+    if (base.type == NODE_VAR_ASSIGN) {
+        let assignment -> VarAssignNode = node;
+        let value_flow -> InitFlow = check_local_init_node(c, assignment.value, scope, initialized);
+        let key -> String = lookup_local_init(scope, assignment.name_tok.value);
+        if (key.length() > 0) { init_add(value_flow.initialized, key); }
+        return InitFlow(value_flow.initialized, false);
+    }
+    if (base.type == NODE_CATCH) {
+        let caught -> CatchNode = node;
+        let before -> Vector(String) = init_copy(initialized);
+        let success -> InitFlow = check_local_init_node(c, caught.stmt, scope, init_copy(initialized));
+        let failure -> InitFlow = check_local_init_block(c, caught.body, scope, init_copy(before));
+        return merge_local_init(before, success, failure);
+    }
+    if (base.type == NODE_IF) {
+        let branch -> IfNode = node;
+        let condition_flow -> InitFlow = check_local_init_node(c, branch.condition, scope, initialized);
+        let selected -> Int = fold_os_cond(c, branch.condition);
+        let condition -> BaseNode = branch.condition;
+        if (condition is !null && condition.type == NODE_BOOL) {
+            let boolean -> BooleanNode = branch.condition;
+            selected = boolean.value;
+        }
+        if (selected == 1) { return check_local_init_node(c, branch.body, scope, condition_flow.initialized); }
+        if (selected == 0) { return check_local_init_node(c, branch.else_body, scope, condition_flow.initialized); }
+        let then_flow -> InitFlow = check_local_init_node(c, branch.body, scope, init_copy(condition_flow.initialized));
+        let else_flow -> InitFlow = InitFlow(init_copy(condition_flow.initialized), false);
+        if (branch.else_body is !null) { else_flow = check_local_init_node(c, branch.else_body, scope, init_copy(condition_flow.initialized)); }
+        return merge_local_init(condition_flow.initialized, then_flow, else_flow);
+    }
+    if (base.type == NODE_WHILE) {
+        let loop -> WhileNode = node;
+        let condition_flow -> InitFlow = check_local_init_node(c, loop.condition, scope, initialized);
+        check_local_init_node(c, loop.body, scope, init_copy(condition_flow.initialized));
+        return InitFlow(condition_flow.initialized, must_terminate(c, node));
+    }
+    if (base.type == NODE_FOR) {
+        let loop -> ForNode = node;
+        let state -> Vector(String) = initialized;
+        if (loop.init is !null) { state = check_local_init_node(c, loop.init, scope, state).initialized; }
+        state = check_local_init_node(c, loop.cond, scope, state).initialized;
+        let body_flow -> InitFlow = check_local_init_node(c, loop.body, scope, init_copy(state));
+        if (!body_flow.terminates) { check_local_init_node(c, loop.step, scope, body_flow.initialized); }
+        return InitFlow(state, must_terminate(c, node));
+    }
+    if (base.type == NODE_RETURN) {
+        let statement -> ReturnNode = node;
+        check_local_init_node(c, statement.value, scope, initialized);
+        return InitFlow(initialized, true);
+    }
+    if (base.type == NODE_THROW) {
+        let statement -> ThrowNode = node;
+        check_local_init_node(c, statement.value, scope, initialized);
+        return InitFlow(initialized, true);
+    }
+    if (base.type == NODE_BREAK || base.type == NODE_CONTINUE) { return InitFlow(initialized, true); }
+    if (base.type == NODE_BINOP || base.type == NODE_IS || base.type == NODE_IS_NOT) {
+        let binary -> BinOpNode = node;
+        let left_flow -> InitFlow = check_local_init_node(c, binary.left, scope, initialized);
+        return check_local_init_node(c, binary.right, scope, left_flow.initialized);
+    }
+    if (base.type == NODE_UNARYOP) {
+        let unary -> UnaryOpNode = node;
+        return check_local_init_node(c, unary.node, scope, initialized);
+    }
+    if (base.type == NODE_POSTFIX) {
+        let postfix -> PostfixOpNode = node;
+        return check_local_init_node(c, postfix.node, scope, initialized);
+    }
+    if (base.type == NODE_REF) {
+        let reference -> RefNode = node;
+        return check_local_init_node(c, reference.node, scope, initialized);
+    }
+    if (base.type == NODE_DEREF) {
+        let dereference -> DerefNode = node;
+        return check_local_init_node(c, dereference.node, scope, initialized);
+    }
+    if (base.type == NODE_TRY_UNWRAP) {
+        let unwrap -> TryUnwrapNode = node;
+        return check_local_init_node(c, unwrap.expr, scope, initialized);
+    }
+    if (base.type == NODE_CALL) {
+        let call -> CallNode = node;
+        let state -> Vector(String) = check_local_init_node(c, call.callee, scope, initialized).initialized;
+        let i -> Int = 0;
+        while (call.args is !null && i < call.args.length()) {
+            let arg -> ArgNode = call.args[i];
+            state = check_local_init_node(c, arg.val, scope, state).initialized;
+            i += 1;
+        }
+        return InitFlow(state, false);
+    }
+    if (base.type == NODE_FIELD_ACCESS) {
+        let access -> FieldAccessNode = node;
+        return check_local_init_node(c, access.obj, scope, initialized);
+    }
+    if (base.type == NODE_FIELD_ASSIGN) {
+        let assignment -> FieldAssignNode = node;
+        let object_flow -> InitFlow = check_local_init_node(c, assignment.obj, scope, initialized);
+        return check_local_init_node(c, assignment.value, scope, object_flow.initialized);
+    }
+    if (base.type == NODE_PTR_ASSIGN) {
+        let assignment -> PtrAssignNode = node;
+        let pointer_flow -> InitFlow = check_local_init_node(c, assignment.pointer, scope, initialized);
+        return check_local_init_node(c, assignment.value, scope, pointer_flow.initialized);
+    }
+    if (base.type == NODE_INDEX_ACCESS) {
+        let access -> IndexAccessNode = node;
+        let target_flow -> InitFlow = check_local_init_node(c, access.target, scope, initialized);
+        return check_local_init_node(c, access.index_node, scope, target_flow.initialized);
+    }
+    if (base.type == NODE_INDEX_ASSIGN) {
+        let assignment -> IndexAssignNode = node;
+        let target_flow -> InitFlow = check_local_init_node(c, assignment.target, scope, initialized);
+        let index_flow -> InitFlow = check_local_init_node(c, assignment.index_node, scope, target_flow.initialized);
+        return check_local_init_node(c, assignment.value, scope, index_flow.initialized);
+    }
+    if (base.type == NODE_SLICE_ACCESS) {
+        let access -> SliceAccessNode = node;
+        let state -> Vector(String) = check_local_init_node(c, access.target, scope, initialized).initialized;
+        state = check_local_init_node(c, access.start_idx, scope, state).initialized;
+        return check_local_init_node(c, access.end_idx, scope, state);
+    }
+    if (base.type == NODE_VECTOR_LIT) {
+        let vector -> VectorLitNode = node;
+        let state -> Vector(String) = initialized;
+        let i -> Int = 0;
+        while (vector.elements is !null && i < vector.elements.length()) {
+            state = check_local_init_node(c, vector.elements[i], scope, state).initialized;
+            i += 1;
+        }
+        return InitFlow(state, false);
+    }
+    if (base.type == NODE_MAP_LIT) {
+        let map -> MapLitNode = node;
+        let state -> Vector(String) = initialized;
+        let i -> Int = 0;
+        while (map.pairs is !null && i < map.pairs.length()) {
+            let pair -> MapPairNode = map.pairs[i];
+            state = check_local_init_node(c, pair.key, scope, state).initialized;
+            state = check_local_init_node(c, pair.value, scope, state).initialized;
+            i += 1;
+        }
+        return InitFlow(state, false);
+    }
+    if (base.type == NODE_FUNC_DEF) {
+        let function -> FunctionDefNode = node;
+        let captures -> CaptureScope = CaptureScope(local_vars=Dict(32), captured_vars=Dict(32), captured_list=[]);
+        let i -> Int = 0;
+        while (function.params is !null && i < function.params.length()) {
+            let param -> ParamNode = function.params[i];
+            captures.local_vars.put(param.name_tok.value, TypeListNode(type=1));
+            i += 1;
+        }
+        analyze_captures(function.body, captures);
+        i = 0;
+        while (i < captures.captured_list.length()) {
+            read_local_init(scope, initialized, captures.captured_list[i], function.pos);
+            i += 1;
+        }
+        return InitFlow(initialized, false);
+    }
+    return InitFlow(initialized, false);
+}
+
+func check_local_init(c -> Compiler, body -> Struct) -> Void {
+    if (body is null) { return; }
+    let root -> LocalInitScope = LocalInitScope(table=Dict(32), parent=null, declarations=[]);
+    check_local_init_block(c, body, root, []);
+}
+
+func init_complete(required -> Vector(String), initialized -> Vector(String)) -> Bool {
     let i -> Int = 0;
     while (i < required.length()) {
         if (!init_has(initialized, required[i])) { return false; }
@@ -4191,12 +4488,7 @@ func init_complete(
     return true;
 }
 
-func init_require_complete(
-    class_name -> String,
-    required -> Vector(String),
-    initialized -> Vector(String),
-    pos -> Position
-) -> Bool {
+func init_require_complete(class_name -> String, required -> Vector(String), initialized -> Vector(String), pos -> Position) -> Bool {
     let i -> Int = 0;
     while (i < required.length()) {
         let name -> String = required[i];
@@ -4250,14 +4542,7 @@ func class_requires_initialization(c -> Compiler, info -> StructInfo) -> Bool {
     return false;
 }
 
-func check_init_node(
-    c -> Compiler,
-    class_name -> String,
-    node -> Struct,
-    required -> Vector(String),
-    known_fields -> Vector(String),
-    initialized -> Vector(String)
-) -> InitFlow {
+func check_init_node(c -> Compiler, class_name -> String, node -> Struct, required -> Vector(String), known_fields -> Vector(String), initialized -> Vector(String)) -> InitFlow {
     if (node is null) { return InitFlow(initialized, false); }
     let base -> BaseNode = node;
 
@@ -4681,12 +4966,7 @@ func check_init_node(
     return InitFlow(initialized, false);
 }
 
-func check_class_initialization(
-    c -> Compiler,
-    class_name -> String,
-    node -> ClassDefNode,
-    parent -> StructInfo
-) -> Void {
+func check_class_initialization(c -> Compiler, class_name -> String, node -> ClassDefNode, parent -> StructInfo) -> Void {
     let required -> Vector(String) = [];
     let known_fields -> Vector(String) = [];
     let initialized -> Vector(String) = [];
@@ -4784,12 +5064,7 @@ func check_class_initialization(
     }
 }
 
-func emit_class_field_initializers(
-    c -> Compiler,
-    class_info -> StructInfo,
-    object_reg -> String,
-    object_llvm_type -> String
-) -> Void {
+func emit_class_field_initializers(c -> Compiler, class_info -> StructInfo, object_reg -> String, object_llvm_type -> String) -> Void {
     if (class_info is null) { return; }
 
     if (class_info.parent_id != 0) {
@@ -6710,20 +6985,6 @@ func compile_catch(c -> Compiler, node -> CatchNode) -> CompileResult {
     
     compile_node(c, node.body);
     
-    let last_stmt_returns -> Bool = false;
-    let b_node -> BlockNode = node.body;
-    if (b_node.stmts is !null && b_node.stmts.length() > 0) {
-        let last -> BaseNode = b_node.stmts[b_node.stmts.length() - 1];
-        if (last.type == NODE_RETURN || last.type == NODE_BREAK ||
-            last.type == NODE_CONTINUE || last.type == NODE_THROW) {
-            last_stmt_returns = true;
-        }
-    }
-    
-    let stmt_base -> BaseNode = node.stmt;
-    if (stmt_base.type == NODE_VAR_DECL && !last_stmt_returns) {
-        throw_invalid_syntax(node.pos, "Catch block for a fallible variable declaration must diverge (return/break/continue) because the variable could be uninitialized.");
-    }
     exit_scope(c);
     
     c.output_file.write(c.indent + "br label %" + success_label + "\n\n");
@@ -8045,7 +8306,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 let conversion -> FuncInfo = find_class_conversion(source_info, cast_target);
                 if (conversion is !null) {
                     let no_args -> Vector(Struct) = [];
-                    let conversion_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=no_args, pos=n_call.pos, preserve_fallible=false);
+                    let conversion_call -> CallNode = CallNode(type=NODE_CALL, callee=null, args=no_args, pos=n_call.pos, preserve_fallible=true);
                     let converted -> CompileResult = compile_class_method_call(
                         c,
                         source_info,
@@ -8172,6 +8433,10 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             if (func_info is null) {
                 throw_name_error(n_call.pos, "Function '" + func_name + "' is not defined.");
                 return void_result();
+            }
+
+            if (!validate_fallible_call(c, func_info.ret_type, n_call.preserve_fallible, func_info.base_name, n_call.pos)) {
+                return CompileResult(reg="poison", type=TYPE_POISON);
             }
 
             let args_str -> String = "";
@@ -8343,6 +8608,9 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             }
 
             if is_valid_call {
+                if (!validate_fallible_call(c, ret_type_id, n_call.preserve_fallible, "", n_call.pos)) {
+                    return CompileResult(reg="poison", type=TYPE_POISON);
+                }
                 let is_closure -> Bool = false;
                 let actual_env_reg -> String = "";
                 let raw_func_ptr -> String = callee_res.reg;
@@ -9216,6 +9484,11 @@ func compile_type_cast(c -> Compiler, val_res -> CompileResult, target_type -> I
 
 // BUILTIN HELPER
 func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position, origin_id -> Int) -> Void {
+    if (type_id == TYPE_POISON) { return; }
+    if (is_fallible_type(c, type_id)) {
+        throw_type_error(pos, "fallible value must be handled with '?' before printing");
+        return;
+    }
 
     if (type_id == TYPE_INT128 || type_id == TYPE_UINT128) {
         let formatted -> CompileResult = convert_to_string(c, CompileResult(reg=reg, type=type_id, origin_type=origin_id));
@@ -9745,6 +10018,11 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
         return null;
     }
 
+    let f_info -> FuncInfo = c.func_table.get(real_func_name);
+    if (!validate_fallible_call(c, f_info.ret_type, call_node.preserve_fallible, method_name, call_node.pos)) {
+        return CompileResult(reg="poison", type=TYPE_POISON);
+    }
+
     let obj_res -> CompileResult = compile_node(c, obj_node);
 
     // WhiteLang methods receive the string object, native adapters receive its buffer
@@ -9771,7 +10049,6 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
         a_idx += 1;
     }
 
-    let f_info -> FuncInfo = c.func_table.get(real_func_name);
     let ret_ty_str -> String = get_llvm_type_str(c, f_info.ret_type);
     let call_reg -> String = "";
     if (f_info.ret_type == TYPE_VOID) {
@@ -9810,7 +10087,7 @@ func compile_start(c -> Compiler) -> Void {
     c.output_file.write("@.str_idx_err = private unnamed_addr constant [21 x i8] c\"Index out of bounds\\0A\\00\"\n\n");
     c.output_file.write("@.fmt_err_bounds = private unnamed_addr constant [66 x i8] c\"\\0ARuntimeError\\1B[0m: Index out of bounds\\0A    at Line %d, Column %d\\0A\\00\"\n\n");
 
-    // builtin.print
+    // print
     c.output_file.write("@.str_open_bracket = private unnamed_addr constant [2 x i8] c\"[\\00\"\n");
     c.output_file.write("@.str_close_bracket = private unnamed_addr constant [2 x i8] c\"]\\00\"\n");
     c.output_file.write("@.str_comma_space = private unnamed_addr constant [3 x i8] c\", \\00\"\n");

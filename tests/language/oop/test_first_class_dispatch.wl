@@ -1,7 +1,6 @@
 // Test: FIRST_CLASS_METHOD_DISPATCH
 // File: tests/language/oop/test_first_class_dispatch.wl
 // Focus: Method-to-closure binding, environment capture (self-pointer), and 'Class' type erasure.
-import "builtin"
 
 
 // global flag for side-effect verification in higher-order functions
@@ -51,10 +50,10 @@ func main() -> Int {
     let callback_ok -> Bool = (callback_res == "Buddy says: Woof!" && CALLBACK_EXECUTED);
 
     if (upcast_ok && bark_ok && info_ok && callback_ok) {
-        builtin.print("PASS: First-class methods and environment capture");
+        print("PASS: First-class methods and environment capture");
     } else {
         // if this fails, the closure environment or VTable routing is corrupted
-        builtin.print("FAIL: Method binding or higher-order dispatch error");
+        print("FAIL: Method binding or higher-order dispatch error");
         return 1;
     }
 

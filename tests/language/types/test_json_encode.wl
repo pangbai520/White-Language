@@ -2,7 +2,6 @@
 // File: tests/language/types/test_json_encode.wl
 // Focus: Stable object order, escaping, exact number text, pretty output, and limits.
 
-import "builtin"
 import "json"
 
 func rejects_indent(value -> json.Value) -> Bool {
@@ -33,16 +32,16 @@ func main() -> Int {
 
     let root -> json.Value = json.decode(source)?;
     catch(err) {
-        builtin.print("FAIL: encoder fixture did not parse");
+        print("FAIL: encoder fixture did not parse");
         return 1;
     }
     let compact -> String = json.encode(root)?;
     catch(err) {
-        builtin.print("FAIL: compact JSON encoding");
+        print("FAIL: compact JSON encoding");
         return 2;
     }
     if (compact != source) {
-        builtin.print("FAIL: compact JSON was not stable");
+        print("FAIL: compact JSON was not stable");
         return 3;
     }
 
@@ -50,7 +49,7 @@ func main() -> Int {
     encoder.set_indent(2);
     let pretty -> String = encoder.encode(root)?;
     catch(err) {
-        builtin.print("FAIL: pretty JSON encoding");
+        print("FAIL: pretty JSON encoding");
         return 4;
     }
     let expected_pretty -> String =
@@ -65,13 +64,13 @@ func main() -> Int {
         "  ]\n" +
         "}";
     if (pretty != expected_pretty) {
-        builtin.print("FAIL: pretty JSON layout");
+        print("FAIL: pretty JSON layout");
         return 5;
     }
 
     let round_trip -> json.Value = json.decode(compact)?;
     catch(err) {
-        builtin.print("FAIL: encoded JSON could not be parsed");
+        print("FAIL: encoded JSON could not be parsed");
         return 6;
     }
     let number_source -> String = round_trip.get("number")?.as_number_text()?;
@@ -81,7 +80,7 @@ func main() -> Int {
     if (number_source != "1.2300e+4" ||
         control.length() != 30 ||
         control[control.length() - 1] != Byte(0)) {
-        builtin.print("FAIL: JSON round-trip changed a value");
+        print("FAIL: JSON round-trip changed a value");
         return 9;
     }
 
@@ -89,10 +88,10 @@ func main() -> Int {
     nested.append(json.array())?;
     catch(err) { return 10; }
     if (!rejects_indent(root) || !rejects_depth(nested)) {
-        builtin.print("FAIL: encoder limits");
+        print("FAIL: encoder limits");
         return 11;
     }
 
-    builtin.print("PASS: JSON encoder and round-trip");
+    print("PASS: JSON encoder and round-trip");
     return 0;
 }

@@ -1,7 +1,6 @@
 // Test: OOP_CORE_LOGIC
 // File: tests/language/oop/test_class.wl
 // Focus: VTable method dispatch, self-pointer (this) field mutation, and heap allocation integrity.
-import "builtin"
 
 
 // POD struct - Ensure stack layout remains contiguous
@@ -40,7 +39,7 @@ func main() -> Int {
     // POD layout verification
     let v -> Vector3 = Vector3(10, 20, 30);
     if (v.z != 30) {
-        builtin.print("FAIL: Struct field offset error");
+        print("FAIL: Struct field offset error");
         return 1;
     }
 
@@ -57,9 +56,9 @@ func main() -> Int {
 
     // final integrity check
     if (deposit_ok && overdraw_blocked && valid_draw_ok && acc.get_balance() == 100) {
-        builtin.print("PASS: OOP method dispatch and state mutation");
+        print("PASS: OOP method dispatch and state mutation");
     } else {
-        builtin.print("FAIL: BankAccount state corruption or logic error");
+        print("FAIL: BankAccount state corruption or logic error");
         return 1;
     }
 

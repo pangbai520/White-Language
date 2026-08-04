@@ -1,7 +1,6 @@
 // Test: WHILE_LOOP_CONTROL
 // File: tests/language/control/test_while_jump.wl
 // Focus: While loop execution with 'continue' and 'break' jump instructions.
-import "builtin"
 
 
 func main() -> Int {
@@ -19,9 +18,9 @@ func main() -> Int {
 
     // 1+2+3+4+6+7+8 = 31
     if (sum == 31) {
-        builtin.print("PASS: While loop with jump instructions");
+        print("PASS: While loop with jump instructions");
     } else {
-        builtin.print("FAIL: While loop sum mismatch. Got: " + sum);
+        print("FAIL: While loop sum mismatch. Got: " + sum);
     }
     return 0;
 }

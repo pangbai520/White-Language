@@ -1,7 +1,6 @@
 // Test: ARITHMETIC_VAR
 // File: tests/language/basics/test_var_arithmetic.wl
 // Focus: Implicit type promotion (Int to Float) and complex expression precedence.
-import "builtin"
 
 
 func main() -> Int {
@@ -16,9 +15,9 @@ func main() -> Int {
     let complex_calc -> Float = a * a / b + b / a - b -+ b;
 
     if (complex_calc != 0.0) {
-        builtin.print("PASS: Arithmetic integrity");
+        print("PASS: Arithmetic integrity");
     } else {
-        builtin.print("FAIL: Arithmetic mismatch");
+        print("FAIL: Arithmetic mismatch");
     }
 
     return 0;

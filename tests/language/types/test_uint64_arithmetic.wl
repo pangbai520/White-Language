@@ -2,7 +2,6 @@
 // File: tests/language/types/test_uint64_arithmetic.wl
 // Focus: Full-width unsigned arithmetic operations, compound assignments, bitwise shifts, and string formatting preservation for UInt64.
 
-import "builtin"
 
 func main() -> Int {
     let maximum -> UInt64 = 18446744073709551615UL;
@@ -17,11 +16,11 @@ func main() -> Int {
         remainder != UInt64(5) ||
         sum != UInt64(42) ||
         shifted != UInt64(1)) {
-        builtin.print("FAIL: UInt64 arithmetic lost its type or signedness");
+        print("FAIL: UInt64 arithmetic lost its type or signedness");
         return 1;
     }
 
-    builtin.print("UInt64:" + maximum);
-    builtin.print("PASS: UInt64 arithmetic and formatting");
+    print("UInt64:" + maximum);
+    print("PASS: UInt64 arithmetic and formatting");
     return 0;
 }

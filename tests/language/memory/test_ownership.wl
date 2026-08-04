@@ -1,7 +1,6 @@
 // Test: OWNERSHIP_CONTRACT
 // File: tests/language/memory/test_ownership.wl
 // Focus: Owned returns, parameter lifetimes, partial arrays, and Vector.drop ownership transfer.
-import "builtin"
 
 
 let DROPPED -> Int = 0;
@@ -42,25 +41,25 @@ func pop_text() -> String {
 func main() -> Int {
     let partial -> Int[4] = [7];
     if (partial[0] != 7 || partial[1] != 0 || partial[2] != 0 || partial[3] != 0) {
-        builtin.print("FAIL: Partial fixed array was not zero-initialized");
+        print("FAIL: Partial fixed array was not zero-initialized");
         return 1;
     }
 
     drop_partial_array();
     if (DROPPED != 1) {
-        builtin.print("FAIL: Fixed array did not release exactly its initialized reference");
+        print("FAIL: Fixed array did not release exactly its initialized reference");
         return 1;
     }
 
     let original -> Probe = make_probe(10);
     replace_parameter(original);
     if (original.value != 10 || DROPPED != 2) {
-        builtin.print("FAIL: Parameter reassignment corrupted caller ownership");
+        print("FAIL: Parameter reassignment corrupted caller ownership");
         return 1;
     }
 
     if (read_probe(make_probe(42)) != 42 || DROPPED != 3) {
-        builtin.print("FAIL: Owned call argument was not released after the call");
+        print("FAIL: Owned call argument was not released after the call");
         return 1;
     }
 
@@ -71,10 +70,10 @@ func main() -> Int {
         i += 1;
     }
     if (text != "WhiteLanguage") {
-        builtin.print("FAIL: Vector.drop returned a dangling reference");
+        print("FAIL: Vector.drop returned a dangling reference");
         return 1;
     }
 
-    builtin.print("PASS: Ownership and initialization contract");
+    print("PASS: Ownership and initialization contract");
     return 0;
 }

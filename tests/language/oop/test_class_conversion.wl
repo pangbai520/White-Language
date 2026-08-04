@@ -2,7 +2,6 @@
 // File: tests/language/oop/test_class_conversion.wl
 // Focus: Explicit class conversions, fallible conversion handling, and inherited dispatch.
 
-import "builtin"
 import Error from "errors"
 
 class NumberText {
@@ -55,6 +54,6 @@ func main() -> Int {
     if (String(tagged) != "tag:nine") { return 5; }
     if (Int(tagged) != 9) { return 6; }
 
-    builtin.print("PASS: class type conversions");
+    print("PASS: class type conversions");
     return 0;
 }

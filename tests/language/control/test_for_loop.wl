@@ -1,7 +1,6 @@
 // Test: FOR_LOOP_ITERATION
 // File: tests/language/control/test_for_loop.wl
 // Focus: Standard C-style for-loop syntax (init; cond; post) and iterator mutation.
-import "builtin"
 
 
 func main() -> Int {
@@ -13,9 +12,9 @@ func main() -> Int {
     }
 
     if (counter == 5) {
-        builtin.print("PASS: For loop execution");
+        print("PASS: For loop execution");
     } else {
-        builtin.print("FAIL: Loop iteration count mismatch");
+        print("FAIL: Loop iteration count mismatch");
     }
     return 0;
 }

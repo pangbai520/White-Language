@@ -2,7 +2,6 @@
 // File: tests/language/integration/test_import_logic.wl
 // Focus: Cross-file function invocation, built-in library resolution, and string method intrinsics.
 import "../../fixtures/pkgs/math_calc_helper.wl"
-import "builtin"
 
 
 func main() -> Int {
@@ -14,9 +13,9 @@ func main() -> Int {
     let sub -> String = text.slice(0, 5); // expected: "White"
 
     if (sum == 5 && sub == "White") {
-        builtin.print("PASS: Multi-module integration and intrinsics");
+        print("PASS: Multi-module integration and intrinsics");
     } else {
-        builtin.print("FAIL: Import logic or string slicing mismatch");
+        print("FAIL: Import logic or string slicing mismatch");
     }
 
     return 0;

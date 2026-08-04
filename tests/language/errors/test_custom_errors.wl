@@ -2,7 +2,6 @@
 // File: tests/language/errors/test_custom_errors.wl
 // Focus: Custom error declarations, propagation, and domain-aware comparison.
 
-import "builtin"
 import Error from "errors"
 
 error ParseError {
@@ -74,10 +73,10 @@ func main() -> Int {
         !catches_explicit_code() ||
         !catches_standard_error() ||
         !succeeds_without_error()) {
-        builtin.print("FAIL: User-defined error domains");
+        print("FAIL: User-defined error domains");
         return 1;
     }
 
-    builtin.print("PASS: User-defined error domains");
+    print("PASS: User-defined error domains");
     return 0;
 }

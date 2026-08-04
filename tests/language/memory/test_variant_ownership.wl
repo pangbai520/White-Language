@@ -1,7 +1,6 @@
 // Test: VARIANT_AND_FALLIBLE_OWNERSHIP
 // File: tests/language/memory/test_variant_ownership.wl
 // Focus: Variant payloads, Dict slot cleanup, and fallible reference transfer.
-import "builtin"
 import "dict"
 import Error from "errors"
 
@@ -84,20 +83,20 @@ func exercise_interface_variant() -> Bool {
 
 func main() -> Int {
     if (!exercise_fallible() || DROPPED != 1) {
-        builtin.print("FAIL: Fallible reference ownership was not transferred");
+        print("FAIL: Fallible reference ownership was not transferred");
         return 1;
     }
 
     if (!exercise_dict() || DROPPED != 42) {
-        builtin.print("FAIL: Dict or Variant ownership was not released");
+        print("FAIL: Dict or Variant ownership was not released");
         return 1;
     }
 
     if (!exercise_interface_variant() || DROPPED != 43) {
-        builtin.print("FAIL: Interface Variant payload was corrupted");
+        print("FAIL: Interface Variant payload was corrupted");
         return 1;
     }
 
-    builtin.print("PASS: Variant and fallible ownership");
+    print("PASS: Variant and fallible ownership");
     return 0;
 }

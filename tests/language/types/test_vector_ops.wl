@@ -1,7 +1,6 @@
 // Test: VECTOR_DYNAMIC_ARRAY
 // File: tests/language/types/test_vector_ops.wl
 // Focus: Vector heap growth (append), element removal (drop), and length tracking.
-import "builtin"
 
 
 func main() -> Int {
@@ -13,9 +12,9 @@ func main() -> Int {
     let final_len -> Int = v.length();    // 2
 
     if (original_len == 3 && popped_val == 30 && final_len == 2) {
-        builtin.print("PASS: Vector dynamic mutation");
+        print("PASS: Vector dynamic mutation");
     } else {
-        builtin.print("FAIL: Vector state corruption");
+        print("FAIL: Vector state corruption");
     }
     return 0;
 }

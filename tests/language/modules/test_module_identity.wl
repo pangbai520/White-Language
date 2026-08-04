@@ -2,7 +2,6 @@
 // File: tests/language/modules/test_module_identity.wl
 // Focus: Modules with the same file name keep separate symbols, types, and globals
 
-import "builtin"
 import "../../fixtures/modules/left/provider.wl" as left
 import "../../fixtures/modules/right/provider.wl" as right
 
@@ -17,6 +16,6 @@ func main() -> Int {
     if (left_item.value != 1 || right_item.value != 2) { return 1; }
     if (left.marker != 31 || right.marker != 42) { return 1; }
 
-    builtin.print("PASS: module path identity");
+    print("PASS: module path identity");
     return 0;
 }

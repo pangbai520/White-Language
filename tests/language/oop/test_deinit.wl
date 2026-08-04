@@ -1,7 +1,6 @@
 // Test: ARC_POLYMORPHIC_DEINIT
 // File: tests/language/memory/test_deinit_chain.wl
 // Focus: VTable-based virtual teardown, ARC-driven heap release, and ABI-safe super-call chaining.
-import "builtin"
 
 
 let SUB_DEINIT_TRIGGERED -> Bool = false;
@@ -49,10 +48,10 @@ func main() -> Int {
     let chain_intact -> Bool = SUB_DEINIT_TRIGGERED && SUPER_DEINIT_TRIGGERED;
 
     if chain_intact {
-        builtin.print("PASS: Polymorphic deinit chain and ARC scope-bound cleanup");
+        print("PASS: Polymorphic deinit chain and ARC scope-bound cleanup");
     } else {
         // if one is false, either the VTable is busted or ARC missed the scope exit hook
-        builtin.print("FAIL: Destructor chain broken. Sub:" + SUB_DEINIT_TRIGGERED + " Super:" + SUPER_DEINIT_TRIGGERED);
+        print("FAIL: Destructor chain broken. Sub:" + SUB_DEINIT_TRIGGERED + " Super:" + SUPER_DEINIT_TRIGGERED);
         return 1;
     }
 

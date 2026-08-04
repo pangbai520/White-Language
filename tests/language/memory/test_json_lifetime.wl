@@ -2,7 +2,6 @@
 // File: tests/language/memory/test_json_lifetime.wl
 // Focus: Releasing JSON arrays, their Value elements, and encoder output across repeated construction.
 
-import "builtin"
 import "json"
 
 func main() -> Int {

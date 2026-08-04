@@ -1,7 +1,6 @@
 // Test: SLICE_OMITTED_BOUNDS
 // File: tests/language/types/test_slice_omitted_bounds.wl
 // Focus: Omitted bounds distinguish copied slices from shared views.
-import "builtin"
 
 func main() -> Int {
     let text -> String = "WhiteLang";
@@ -23,10 +22,10 @@ func main() -> Int {
                            values_view[1] == 88;
 
     if (!text_ok || !array_ok) {
-        builtin.print("FAIL: Omitted slice bounds violated copy or view semantics");
+        print("FAIL: Omitted slice bounds violated copy or view semantics");
         return 1;
     }
 
-    builtin.print("PASS: Omitted slice bounds copy and view semantics");
+    print("PASS: Omitted slice bounds copy and view semantics");
     return 0;
 }

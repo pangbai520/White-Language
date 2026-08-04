@@ -2,7 +2,6 @@
 // File: tests/language/types/test_json_decode.wl
 // Focus: Strict grammar, Unicode escapes, number preservation, and error domains.
 
-import "builtin"
 import "json"
 
 func rejects(source -> String, expected -> json.JsonError) -> Bool {
@@ -42,7 +41,7 @@ func main() -> Int {
 
     let root -> json.Value = json.decode(source)?;
     catch(err) {
-        builtin.print("FAIL: valid JSON rejected, error " + Int(err));
+        print("FAIL: valid JSON rejected, error " + Int(err));
         return 1;
     }
     let name -> String = root.get("name")?.as_string()?;
@@ -61,7 +60,7 @@ func main() -> Int {
         ratio_source != "1.25e2" ||
         newline_text != "line\nfeed" ||
         duplicate != 2L) {
-        builtin.print("FAIL: decoded JSON value mismatch");
+        print("FAIL: decoded JSON value mismatch");
         return 7;
     }
 
@@ -90,13 +89,13 @@ func main() -> Int {
         !rejects_long("-9223372036854775809", json.JsonError.NumberOutOfRange) ||
         !rejects_limit("[]", 0, json.JsonError.InvalidOption) ||
         !rejects_limit("[]", 1025, json.JsonError.InvalidOption)) {
-        builtin.print("FAIL: malformed JSON accepted");
+        print("FAIL: malformed JSON accepted");
         return 8;
     }
 
     let invalid_utf8 -> String = "中"[0:1];
     if (!rejects(invalid_utf8, json.JsonError.InvalidUtf8)) {
-        builtin.print("FAIL: invalid UTF-8 accepted");
+        print("FAIL: invalid UTF-8 accepted");
         return 9;
     }
 
@@ -107,13 +106,13 @@ func main() -> Int {
         if (err == json.JsonError.NestingTooDeep &&
             decoder.offset() >= 0 &&
             decoder.line() == 1) {
-            builtin.print("PASS: strict JSON decoder");
+            print("PASS: strict JSON decoder");
             return 0;
         }
-        builtin.print("FAIL: wrong nesting diagnostic");
+        print("FAIL: wrong nesting diagnostic");
         return 10;
     }
 
-    builtin.print("FAIL: nesting limit ignored");
+    print("FAIL: nesting limit ignored");
     return 11;
 }

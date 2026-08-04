@@ -1,7 +1,6 @@
 // Test: BYTE_OVERFLOW
 // File: tests/language/basics/test_byte_overflow.wl
 // Focus: i8 wrap-around behavior and i32 promotion rules.
-import "builtin"
 
 
 func main() -> Int {
@@ -15,9 +14,9 @@ func main() -> Int {
     let i -> Int = b1 + 100;
 
     if (b3 == 4 && i == 350) {
-        builtin.print("PASS: Byte overflow and promotion");
+        print("PASS: Byte overflow and promotion");
     } else {
-        builtin.print("FAIL: Byte semantics error");
+        print("FAIL: Byte semantics error");
     }
     return 0;
 }

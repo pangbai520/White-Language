@@ -1,6 +1,4 @@
 // core/WhitelangParser.wl
-import "builtin"
-
 import "WhitelangTokens.wl"
 import "WhitelangLexer.wl"
 import * from "WhitelangTokens.wl"

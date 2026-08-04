@@ -2,7 +2,6 @@
 // File: tests/language/oop/test_field_init.wl
 // Focus: Initializing class fields in constructors and across branches.
 
-import "builtin"
 
 class Record {
     let name -> String;
@@ -78,9 +77,9 @@ func main() -> Int {
         defaults.child_value != "default" ||
         constant.value != 9 ||
         ordered.second != 5) {
-        builtin.print("FAIL: class field initialization");
+        print("FAIL: class field initialization");
         return 1;
     }
-    builtin.print("PASS: class field initialization");
+    print("PASS: class field initialization");
     return 0;
 }

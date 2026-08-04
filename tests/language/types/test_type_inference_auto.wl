@@ -2,7 +2,6 @@
 // File: tests/language/types/test_type_inference_auto.wl
 // Focus: Verify that the `Auto` keyword successfully deduces function and method signatures.
 
-import "builtin"
 
 func add_nums(x -> Int, y -> Int) -> Int {
     return x + y;
@@ -40,10 +39,10 @@ func main() -> Int {
     }
 
     if res {
-        builtin.print("PASS: Auto type inference for methods and functions is working");
+        print("PASS: Auto type inference for methods and functions is working");
         return 0;
     } else {
-        builtin.print("FAIL: Auto type inference deduction mismatch");
+        print("FAIL: Auto type inference deduction mismatch");
         return 1;
     }
 }

@@ -1,7 +1,6 @@
 // Test: POW_FUNCTIONALITY
 // File: tests/language/basics/test_pow_operator.wl
 // Focus: Power operator (**) precedence, calculation accuracy, and right-associativity.
-import "builtin"
 
 func close(left -> Float, right -> Float, tolerance -> Float) -> Bool {
     let difference -> Float = left - right;
@@ -15,16 +14,16 @@ func main() -> Int {
 
     // 2^3 = 8
     if (a ** b == 8) {
-        builtin.print("PASS: Basic power calculation");
+        print("PASS: Basic power calculation");
     } else {
-        builtin.print("FAIL: Power calculation error");
+        print("FAIL: Power calculation error");
     }
 
     // right-associativity test: 2 ** (3 ** 2) = 2 ** 9 = 512
     if (2 ** 3 ** 2 == 512) {
-        builtin.print("PASS: Power operator associativity");
+        print("PASS: Power operator associativity");
     } else {
-        builtin.print("FAIL: Power operator associativity");
+        print("FAIL: Power operator associativity");
         return 1;
     }
 
@@ -35,10 +34,10 @@ func main() -> Int {
     let signed -> Float = (-2.0) ** 3.0;
     let invalid -> Float = (-2.0) ** half;
     if (!close(root, 3.0, 0.000000000001) || !close(inverse, 0.125, 0.000000000001) || signed != -8.0 || invalid == invalid) {
-        builtin.print("FAIL: Dynamic power edge cases");
+        print("FAIL: Dynamic power edge cases");
         return 1;
     }
-    builtin.print("PASS: Dynamic power edge cases");
+    print("PASS: Dynamic power edge cases");
     
     return 0;
 }

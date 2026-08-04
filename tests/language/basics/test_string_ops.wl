@@ -1,7 +1,6 @@
 // Test: STRING_COMPARE
 // File: tests/language/basics/test_string_ops.wl
 // Focus: String concatenation, escape sequence parsing, and equality comparison.
-import "builtin"
 
 
 func main() -> Int {
@@ -9,9 +8,9 @@ func main() -> Int {
     let combined -> String = "White" + "Lang";
 
     if (str == "Hi" && combined == "WhiteLang") {
-        builtin.print("PASS: String operations");
+        print("PASS: String operations");
     } else {
-        builtin.print("FAIL: String concatenation or comparison");
+        print("FAIL: String concatenation or comparison");
     }
     return 0;
 }

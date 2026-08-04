@@ -2,7 +2,6 @@
 // File: tests/language/errors/test_imported_custom_error.wl
 // Focus: Error-domain identity survives named imports and function boundaries.
 
-import "builtin"
 import WireError from "../../fixtures/errors/custom_error_source.wl"
 import fail_wire from "../../fixtures/errors/custom_error_source.wl"
 
@@ -17,9 +16,9 @@ func receives_imported_error() -> Bool {
 
 func main() -> Int {
     if (!receives_imported_error()) {
-        builtin.print("FAIL: Imported user error");
+        print("FAIL: Imported user error");
         return 1;
     }
-    builtin.print("PASS: Imported user error");
+    print("PASS: Imported user error");
     return 0;
 }

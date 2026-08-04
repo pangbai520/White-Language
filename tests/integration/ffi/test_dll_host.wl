@@ -3,7 +3,6 @@
 // Focus: WhiteLang-to-WhiteLang FFI via ctypes, symbol resolution, and ABI validation.
 // Compile: wlc test_dll_host.wl test_lib_export.dll -o test_dll && ./test_dll
 
-import "builtin"
 
 // map external symbols from the compiled shared object
 extern "C" {
@@ -25,10 +24,10 @@ func main() -> Int {
 
     // finalize integrity check
     if (add_ok && fact_ok && float_ok) {
-        builtin.print("PASS: WhiteLang-to-WhiteLang FFI boundary stable");
+        print("PASS: WhiteLang-to-WhiteLang FFI boundary stable");
     } else {
         // failure indicates a possible symbol mismatch or stack corruption at the boundary
-        builtin.print("FAIL: ABI mismatch or symbol resolution error");
+        print("FAIL: ABI mismatch or symbol resolution error");
         return 1;
     }
 

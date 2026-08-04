@@ -2,7 +2,6 @@
 // File: tests/language/memory/test_string_temps.wl
 // Focus: Releasing temporary strings created by formatting, concatenation, comparison, and slicing.
 
-import "builtin"
 
 func main() -> Int {
     let i -> Int = 0;

@@ -1,7 +1,6 @@
 // Test: COMPOUND_ASSIGNMENT_POINTER
 // File: tests/language/memory/test_compound_ptr.wl
 // Focus: Compound arithmetic (+=, -=) on direct variables, struct fields, and dereferenced pointers.
-import "builtin"
 
 
 struct Point(x -> Int, y -> Int)
@@ -20,9 +19,9 @@ func main() -> Int {
     (deref val_ptr) += 100;
 
     if (a == 115 && p.x == 20) {
-        builtin.print("PASS: Compound assignment across different memory types");
+        print("PASS: Compound assignment across different memory types");
     } else {
-        builtin.print("FAIL: Compound assignment calculation error");
+        print("FAIL: Compound assignment calculation error");
     }
     return 0;
 }

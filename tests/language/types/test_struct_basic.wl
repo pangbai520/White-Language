@@ -1,7 +1,6 @@
 // Test: STRUCT_BASE_FUNCTIONALITY
 // File: tests/language/types/test_struct_basic.wl
 // Focus: Struct declaration, field access, and multi-level default value initialization.
-import "builtin"
 
 
 struct Config(id -> Int, ratio -> Float) {
@@ -21,9 +20,9 @@ func main() -> Int {
     let h2 -> Entity = Entity(hp=500, tag="Hero", conf=Config(ratio=0.8));
 
     if (h1.hp == 100 && h2.hp == 500 && h2.conf.ratio == 0.8) {
-        builtin.print("PASS: Struct initialization and field mapping");
+        print("PASS: Struct initialization and field mapping");
     } else {
-        builtin.print("FAIL: Struct field value mismatch");
+        print("FAIL: Struct field value mismatch");
     }
     return 0;
 }

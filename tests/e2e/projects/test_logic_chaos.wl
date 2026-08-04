@@ -2,7 +2,6 @@
 // File: tests/e2e/projects/test_logic_chaos.wl
 // Focus: Deeply nested functions, symbol table shadowing, short-circuit complexity, and loop-jump traps.
 
-import "builtin"
 
 func math_chaos(a -> Float, b -> Int) -> Float {
     let result -> Float = (a ** 2.0) + (b / 2);
@@ -46,9 +45,9 @@ func main() -> Int {
 
     // final Integrity Assertion
     if (f10 == 55 && post == 10 && counter == 11 && mixed == 54.0) {
-        builtin.print("PASS: Logic chaos and scope shadowing");
+        print("PASS: Logic chaos and scope shadowing");
     } else {
-        builtin.print("FAIL: Logic integrity compromised");
+        print("FAIL: Logic integrity compromised");
     }
     return 0;
 }

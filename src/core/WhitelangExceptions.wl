@@ -1,5 +1,5 @@
 // core/WhitelangExceptions.wl
-import "builtin"
+import * from "builtin"
 import "file"
 import "process"
 import Dict from "dict"
@@ -181,13 +181,7 @@ func source_position(text -> String, line -> Int, byte_column -> Int) -> SourceP
     );
 }
 
-func source_range(
-    file -> String,
-    text -> String,
-    line -> Int,
-    byte_column -> Int,
-    byte_width -> Int
-) -> SourceRange {
+func source_range(file -> String, text -> String, line -> Int, byte_column -> Int, byte_width -> Int) -> SourceRange {
     let width -> Int = byte_width;
     if (width < 0) { width = 0; }
     return SourceRange(
@@ -416,7 +410,7 @@ func throw_import_error(pos -> Position, details -> String) -> Void {
 
 func throw_internal_compiler_error(pos -> Position, details -> String) -> Void {
     if (pos is null) {
-        builtin.print("InternalCompilerError: " + details);
+        print("InternalCompilerError: " + details);
         abort_and_clean(1);
         return;
     }
@@ -436,12 +430,12 @@ func throw_extern_error(pos -> Position, details -> String) -> Void {
 }
 
 func throw_missing_main_function() -> Void { // special
-    builtin.print("MissingMainFunction: No 'main' function defined.");
+    print("MissingMainFunction: No 'main' function defined.");
     abort_and_clean(1);
 }
 
 func throw_environment_error(details -> String) -> Void { // special
-    builtin.print("EnvironmentError: " + details);
+    print("EnvironmentError: " + details);
     abort_and_clean(1);
 }
 
@@ -451,13 +445,13 @@ func check_errors_and_abort() -> Void {
         let buf_len -> Int = 0;
         if (ERROR_BUFFER is !null) { buf_len = ERROR_BUFFER.length(); }
         while (i < buf_len) {
-            builtin.print(ERROR_BUFFER[i]);
+            print(ERROR_BUFFER[i]);
             i += 1;
         }
 
         let suffix -> String = " error.\n";
         if (GLOBAL_ERROR_COUNT > 1) { suffix = " errors.\n"; }
-        builtin.print("Found " + GLOBAL_ERROR_COUNT + suffix);
+        print("Found " + GLOBAL_ERROR_COUNT + suffix);
         abort_and_clean(1);
     }
 }

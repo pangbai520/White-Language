@@ -2,7 +2,6 @@
 // File: tests/e2e/projects/test_e2e_omega.wl
 // Focus: FFI ABI stability, function pointer "fire propagation", and complex generic container recursion.
 
-import "builtin"
 
 extern "C" {
     func malloc(size -> Long) -> ptr Byte;
@@ -29,9 +28,9 @@ func main() -> Int {
 
     // final integrity assertion
     if (calc_res == 100 && v_test.length() == 3 && head.next.val == 2) {
-        builtin.print("PASS: Omega system integration");
+        print("PASS: Omega system integration");
     } else {
-        builtin.print("FAIL: Omega system logic collapse");
+        print("FAIL: Omega system logic collapse");
     }
     return 0;
 }

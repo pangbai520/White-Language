@@ -2,7 +2,6 @@
 // File: tests/integration/tooling/test_lexer_encoding.wl
 // Focus: Rejecting malformed UTF-8 and embedded NUL bytes in every lexical context.
 
-import "builtin"
 import "../../../src/core/WhitelangExceptions.wl"
 import Lexer, new_lexer, get_next_token from "../../../src/core/WhitelangLexer.wl"
 import TOK_EOF from "../../../src/core/WhitelangTokens.wl"
@@ -25,9 +24,9 @@ func main() -> Int {
     let invalid -> String = "中"[0:1];
     let nul -> String = "" + '\0';
     if (!rejects("func " + invalid + "() -> Int { return 0; }") || !rejects("func main() -> Int { let s -> String = \"" + invalid + "\"; return 0; }") || !rejects("func main() -> Int { let c -> Char = '" + invalid + "'; return 0; }") || !rejects("// " + invalid + "\nfunc main() -> Int { return 0; }") || !rejects("/* " + invalid + " */ func main() -> Int { return 0; }") || !rejects("func main() -> Int { return 0; }" + nul + "ignored")) {
-        builtin.print("FAIL: invalid source encoding was accepted");
+        print("FAIL: invalid source encoding was accepted");
         return 1;
     }
-    builtin.print("PASS: lexer source encoding");
+    print("PASS: lexer source encoding");
     return 0;
 }

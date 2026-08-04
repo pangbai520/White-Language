@@ -1,7 +1,6 @@
 // Test: SLICE_ADVANCED_SEMANTICS
 // File: tests/language/types/test_slice_advanced.wl
 // Focus: Shallow-copy slices, shared views, backing lifetime, and implicit conversion.
-import "builtin"
 
 
 // verify universal parameter binding via Array(Int)
@@ -54,9 +53,9 @@ func main() -> Int {
     let nested_ok -> Bool = (nested_copy[0] == 444 && shared[1] == 555 && v[2] == 555);
 
     if (a_ok && v_ok && s_ok && p_ok && copy_ok && shared_ok && nested_ok) {
-        builtin.print("PASS: Slice subsystem semantics and universal interface");
+        print("PASS: Slice subsystem semantics and universal interface");
     } else {
-        builtin.print("FAIL: Slice logic corruption or offset calculation error");
+        print("FAIL: Slice logic corruption or offset calculation error");
         return 1;
     }
 

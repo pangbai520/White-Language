@@ -1,7 +1,6 @@
 // Test: CLOSURE_STATE_CAPTURE
 // File: tests/language/control/test_closure.wl
 // Focus: Lexical scoping, variable capturing in nested functions, and persistent state across calls.
-import "builtin"
 
 
 func main() -> Int {
@@ -20,9 +19,9 @@ func main() -> Int {
     let second_call -> Int = counter_fn(); // 6 + 5 = 11
     
     if (first_call == 6 && second_call == 11) {
-        builtin.print("PASS: Closure variable capture and persistence");
+        print("PASS: Closure variable capture and persistence");
     } else {
-        builtin.print("FAIL: Closure state corruption. Got: " + second_call);
+        print("FAIL: Closure state corruption. Got: " + second_call);
     }
     return 0;
 }

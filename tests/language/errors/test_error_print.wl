@@ -2,7 +2,6 @@
 // File: tests/language/errors/test_error_print.wl
 // Focus: Printing concrete and type-erased error values.
 
-import "builtin"
 
 error ParseError {
     InvalidToken
@@ -13,13 +12,13 @@ func fail() -> Void? {
 }
 
 func main() -> Int {
-    builtin.print(ParseError.InvalidToken);
+    print(ParseError.InvalidToken);
     fail()?;
     catch(err) {
-        builtin.print(err);
-        builtin.print("PASS: Error printing");
+        print(err);
+        print("PASS: Error printing");
         return 0;
     }
-    builtin.print("FAIL: Error printing");
+    print("FAIL: Error printing");
     return 1;
 }

@@ -2,7 +2,6 @@
 // File: tests/integration/os/test_native_text.wl
 // Focus: Native file, process, and environment APIs reject NUL bytes and malformed UTF-8 before entering the operating system.
 
-import "builtin"
 import "file"
 import "process"
 import "sys"
@@ -56,9 +55,9 @@ func rejects_invalid_environment_name() -> Bool {
 
 func main() -> Int {
     if (!rejects_file_path() || !rejects_invalid_file_path() || !rejects_process_argument() || !rejects_invalid_process_argument() || !rejects_environment_name() || !rejects_invalid_environment_name()) {
-        builtin.print("FAIL: invalid native text reached the operating system");
+        print("FAIL: invalid native text reached the operating system");
         return 1;
     }
-    builtin.print("PASS: native text boundaries");
+    print("PASS: native text boundaries");
     return 0;
 }

@@ -1,7 +1,6 @@
 // Test: COMMENT_STRIPPING
 // File: tests/language/basics/test_comments.wl
 // Focus: Ensuring comments (single/multi/URL) do not interfere with execution.
-import "builtin"
 
 
 /*
@@ -12,6 +11,6 @@ import "builtin"
 // https://www.white-lang.org
 
 func main() -> Int {
-    builtin.print("PASS: Lexer comment stripping");
+    print("PASS: Lexer comment stripping");
     return 0;
 }

@@ -1,7 +1,6 @@
 // Test: CHAR_AND_LITERALS_VALIDATION
 // File: tests/language/basics/test_char_and_literals.wl
 // Focus: Constant folding (CTFE), radix literal parsing, type-safe character scalars, and string coercion.
-import "builtin"
 
 
 // validate constant folding (CTFE) and multi-base integer resolution
@@ -43,10 +42,10 @@ func main() -> Int {
 
     // --- Final Integrity Assertion ---
     if (ctfe_ok && runtime_int_ok && char_cmp_ok && string_ok) {
-        builtin.print("PASS: Multi-base literals, constant folding, and strong-typed character semantics");
+        print("PASS: Multi-base literals, constant folding, and strong-typed character semantics");
     } else {
         // potential front-end scanner regression or folding calculator failure
-        builtin.print("FAIL: Literal value mismatch or type-safe character comparison error");
+        print("FAIL: Literal value mismatch or type-safe character comparison error");
         return 1;
     }
 

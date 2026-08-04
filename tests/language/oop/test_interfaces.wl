@@ -2,7 +2,6 @@
 // File: tests/language/oop/test_interfaces.wl
 // Focus: Interface implementation, dynamic dispatch (vtable routing), and multiple interface compliance.
 
-import "builtin"
 
 interface Drawable {
     method draw() -> Void;
@@ -74,10 +73,10 @@ func main() -> Int {
     let sprite_ok -> Bool = (sp.size == 25.0);
 
     if (arr_ok && sprite_ok) {
-        builtin.print("PASS: Interface polymorphism and multiple compliance");
+        print("PASS: Interface polymorphism and multiple compliance");
         return 0;
     } else {
-        builtin.print("FAIL: VTable routing or interface compliance error");
+        print("FAIL: VTable routing or interface compliance error");
         return 1;
     }
 }

@@ -1,7 +1,6 @@
 // Test: ENUM_DECLARATION_AND_USAGE
 // File: tests/language/types/test_enum.wl
 // Focus: Strong-typed scoped enum declaration, explicit value assignment, and equality checks.
-import "builtin"
 
 
 enum Color {
@@ -26,10 +25,10 @@ func main() -> Int {
     if (c2 == c1) { res = false; }
 
     if res {
-        builtin.print("PASS: Enum assignment and equality check working");
+        print("PASS: Enum assignment and equality check working");
         return 0;
     } else {
-        builtin.print("FAIL: Enum value mismatch");
+        print("FAIL: Enum value mismatch");
         return 1;
     }
 }

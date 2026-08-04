@@ -1,5 +1,4 @@
 // src/wlc.wl
-import "builtin"
 import "sys"
 import "process"
 import "file"
@@ -36,35 +35,35 @@ struct CompilerConfig(
 )
 
 func print_usage() -> Void {
-    builtin.print("White Language Compiler (v0.2.15)");
-    builtin.print("Usage: wlc <source.wl> [extra_files...] [options]");
-    builtin.print("");
-    builtin.print("Arguments:");
-    builtin.print("  <source.wl>            Primary WhiteLang source file");
-    builtin.print("  [extra_files...]       Additional .wl, .c, or .obj files to compile/link");
-    builtin.print("");
-    builtin.print("Options:");
-    builtin.print("  -o <file>              Write output to <file>");
-    builtin.print("  -c                     Compile and assemble, but do not link");
-    builtin.print("  -S                     Compile only; do not assemble or link");
-    builtin.print("  --emit-llvm            Use the LLVM representation for assembler and object files");
-    builtin.print("  -O<level>              Optimization level (0, 1, 2, 3, s, z). Default: 2");
-    builtin.print("  -g                     Generate source-level debug information");
-    builtin.print("  -L <dir>               Add <dir> to the linker library search path");
-    builtin.print("  --library-path <dir>   Add <dir> to the linker library search path");
-    builtin.print("  --ldflags <flags>      Pass extra flags to the linker (e.g., \"-lm -lpthread\")");
-    builtin.print("  -v, --verbose          Enable verbose logging");
-    builtin.print("  --dump-ast             Dump Abstract Syntax Tree to stdout");
-    builtin.print("  --dump-ir              Dump LLVM IR to stdout");
-    builtin.print("  --keep-temps           Do not delete intermediate LLVM IR files");
-    builtin.print("  --shared               Build a shared library (dll, so, dylib)");
-    builtin.print("  -h, --help             Display this information");
+    print("White Language Compiler (v0.2.15)");
+    print("Usage: wlc <source.wl> [extra_files...] [options]");
+    print("");
+    print("Arguments:");
+    print("  <source.wl>            Primary WhiteLang source file");
+    print("  [extra_files...]       Additional .wl, .c, or .obj files to compile/link");
+    print("");
+    print("Options:");
+    print("  -o <file>              Write output to <file>");
+    print("  -c                     Compile and assemble, but do not link");
+    print("  -S                     Compile only; do not assemble or link");
+    print("  --emit-llvm            Use the LLVM representation for assembler and object files");
+    print("  -O<level>              Optimization level (0, 1, 2, 3, s, z). Default: 2");
+    print("  -g                     Generate source-level debug information");
+    print("  -L <dir>               Add <dir> to the linker library search path");
+    print("  --library-path <dir>   Add <dir> to the linker library search path");
+    print("  --ldflags <flags>      Pass extra flags to the linker (e.g., \"-lm -lpthread\")");
+    print("  -v, --verbose          Enable verbose logging");
+    print("  --dump-ast             Dump Abstract Syntax Tree to stdout");
+    print("  --dump-ir              Dump LLVM IR to stdout");
+    print("  --keep-temps           Do not delete intermediate LLVM IR files");
+    print("  --shared               Build a shared library (dll, so, dylib)");
+    print("  -h, --help             Display this information");
 }
 
 func log_stage(cfg -> CompilerConfig, name -> String) -> Void {
     if (cfg.verbose) {
-        builtin.print("");
-        builtin.print("[Stage: " + name + "] ------------------------------");
+        print("");
+        print("[Stage: " + name + "] ------------------------------");
     }
 }
 
@@ -159,14 +158,14 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         else if (arg == "-Oz") { cfg.opt_level = "-Oz"; }
         else if (arg == "-o") {
             i++;
-            if (i >= argc) { builtin.print("Error: -o requires an argument"); return 1; }
+            if (i >= argc) { print("Error: -o requires an argument"); return 1; }
             cfg.output_file = get_arg(argv, i);
         }
         else if (arg == "-L" || arg == "--library-path") {
             i++;
-            if (i >= argc) { builtin.print("Error: " + arg + " requires an argument"); return 1; }
+            if (i >= argc) { print("Error: " + arg + " requires an argument"); return 1; }
             let library_path -> String = get_arg(argv, i);
-            if (library_path.length() == 0) { builtin.print("Error: Library search path cannot be empty"); return 1; }
+            if (library_path.length() == 0) { print("Error: Library search path cannot be empty"); return 1; }
             cfg.library_paths.append(library_path);
         }
         else if (arg.starts_with("-L") && arg.length() > 2) {
@@ -174,7 +173,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         }
         else if (arg == "--ldflags") {
             i++;
-            if (i >= argc) { builtin.print("Error: --ldflags requires an argument"); return 1; }
+            if (i >= argc) { print("Error: --ldflags requires an argument"); return 1; }
             let flags -> Vector(String) = split_link_flags(get_arg(argv, i));
             let flag_idx -> Int = 0;
             while (flag_idx < flags.length()) {
@@ -193,7 +192,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     }
 
     if (cfg.source_file.length() == 0) {
-        builtin.print("Error: No input file.");
+        print("Error: No input file.");
         return 1;
     }
 
@@ -266,12 +265,12 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     log_stage(cfg, "Frontend & Middle-end");
     let f_in -> file.File = file.open(cfg.source_file)?;
     catch(err) {
-        builtin.print("Error: Could not open " + cfg.source_file + " (error " + Int(err) + ")");
+        print("Error: Could not open " + cfg.source_file + " (error " + Int(err) + ")");
         return 1;
     }
     let source -> String = f_in.read_all()?;
     catch(err) {
-        builtin.print("Error: Could not read " + cfg.source_file + " (error " + Int(err) + ")");
+        print("Error: Could not read " + cfg.source_file + " (error " + Int(err) + ")");
         return 1;
     }
     f_in.close();
@@ -281,43 +280,43 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     let ast -> Struct = WhitelangParser.parse(parser);
 
     WhitelangExceptions.check_errors_and_abort();
-    if (cfg.verbose) { builtin.print("Parsed source: " + cfg.source_file); }
+    if (cfg.verbose) { print("Parsed source: " + cfg.source_file); }
 
-    if (cfg.dump_ast) { builtin.print("[Debug] AST Dumped"); }
+    if (cfg.dump_ast) { print("[Debug] AST Dumped"); }
 
     let compiler -> WhitelangUtils.Compiler = WhitelangUtils.new_compiler(ll_file, cfg.is_shared, cfg.debug_info)?;
     catch(err) {
-        builtin.print("Error: Could not create temporary IR file " + ll_file + " (error " + Int(err) + ")");
+        print("Error: Could not create temporary IR file " + ll_file + " (error " + Int(err) + ")");
         return 1;
     }
     compiler.current_dir = WhitelangUtils.get_dir_name(cfg.source_file);
     WhitelangExceptions.ACTIVE_FILE = compiler.output_file;
     WhitelangCompiler.compile(compiler, ast);
-    if (cfg.verbose) { builtin.print("Lowered source to LLVM IR"); }
+    if (cfg.verbose) { print("Lowered source to LLVM IR"); }
 
     WhitelangExceptions.check_errors_and_abort();
     if (compiler.output_file.last_error() != Error.None) {
-        builtin.print("Error: Could not write temporary IR file " + ll_file);
+        print("Error: Could not write temporary IR file " + ll_file);
         return 1;
     }
 
     if (cfg.dump_ir) {
         let f_ir -> file.File = file.open(ll_file)?;
         catch(err) {
-            builtin.print("Error: Could not reopen " + ll_file + " (error " + Int(err) + ")");
+            print("Error: Could not reopen " + ll_file + " (error " + Int(err) + ")");
             return 1;
         }
         let ir_content -> String = f_ir.read_all()?;
         catch(err) {
-            builtin.print("Error: Could not read " + ll_file + " (error " + Int(err) + ")");
+            print("Error: Could not read " + ll_file + " (error " + Int(err) + ")");
             return 1;
         }
         f_ir.close();
-        builtin.print(ir_content);
+        print(ir_content);
     }
 
     if (cfg.is_asm_only && cfg.is_emit_llvm) {
-        if (cfg.output_file != ll_file) { builtin.print("Generated: " + ll_file); }
+        if (cfg.output_file != ll_file) { print("Generated: " + ll_file); }
         return 0;
     }
 
@@ -341,9 +340,9 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         if (WhitelangUtils.file_exists(portable_clang)) {
             clang_cmd = portable_clang;
             has_clang = true;
-            if (cfg.verbose) { builtin.print("Using portable LLVM: " + portable_clang); }
+            if (cfg.verbose) { print("Using portable LLVM: " + portable_clang); }
         } else {
-            if (cfg.verbose) { builtin.print("Portable LLVM not found, falling back to system " + clang_cmd + "."); }
+            if (cfg.verbose) { print("Portable LLVM not found, falling back to system " + clang_cmd + "."); }
         }
     }
 
@@ -406,7 +405,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
                 clang_args.append(wl_path + "/runtime/wl_runtime.o");
             }
         } else {
-            builtin.print("Warning: WL_PATH environment variable is not set. Auto-linking of runtime skipped.");
+            print("Warning: WL_PATH environment variable is not set. Auto-linking of runtime skipped.");
         }
 
         let lib_idx -> Int = 0;
@@ -438,33 +437,33 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     }
 
     if (cfg.verbose) {
-        builtin.print("Program: " + clang_cmd);
+        print("Program: " + clang_cmd);
         let arg_idx -> Int = 0;
         while (arg_idx < clang_args.length()) {
-            builtin.print("  argv[" + arg_idx + "]: " + clang_args[arg_idx]);
+            print("  argv[" + arg_idx + "]: " + clang_args[arg_idx]);
             arg_idx += 1;
         }
     }
     let ret -> Int = process.run(clang_cmd, clang_args)?;
     catch(err) {
-        builtin.print("Build Failed: Could not start Clang (error " + Int(err) + ")");
+        print("Build Failed: Could not start Clang (error " + Int(err) + ")");
         return 1;
     }
 
     if (!cfg.keep_temps && cfg.output_file != ll_file) {
-        if (cfg.verbose) { builtin.print("Cleaning up: " + ll_file); }
+        if (cfg.verbose) { print("Cleaning up: " + ll_file); }
         file.remove(ll_file)?;
         catch(err) {
-            if (cfg.verbose) { builtin.print("Warning: Could not remove temporary file " + ll_file + "."); }
+            if (cfg.verbose) { print("Warning: Could not remove temporary file " + ll_file + "."); }
         }
         WhitelangExceptions.CLEAN_TMP_LL = "";
     }
 
     if (ret != 0) {
-        builtin.print("Build Failed (Clang exit code: " + ret + ")");
+        print("Build Failed (Clang exit code: " + ret + ")");
         return ret;
     }
 
-    builtin.print("Build success: " + cfg.output_file);
+    print("Build success: " + cfg.output_file);
     return 0;
 }

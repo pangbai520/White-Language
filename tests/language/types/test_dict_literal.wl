@@ -1,7 +1,6 @@
 // Test: DICT_LITERAL_ALL_TYPES
 // File: tests/language/types/test_dict_literal.wl
 // Focus: Generic boxing of primitives, composites, and closures via Map literal syntax sugar.
-import "builtin"
 import "dict"
 
 
@@ -64,10 +63,10 @@ func main() -> Int {
 
     // final integrity assertion
     if (prim_ok && comp_ok && clos_ok) {
-        builtin.print("PASS: Dictionary literal boxing and multi-type unboxing");
+        print("PASS: Dictionary literal boxing and multi-type unboxing");
     } else {
         // likely a variant type tagging error or dictionary storage corruption
-        builtin.print("FAIL: Type corruption detected during Dict literal unboxing");
+        print("FAIL: Type corruption detected during Dict literal unboxing");
         return 1;
     }
 

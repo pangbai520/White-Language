@@ -1,7 +1,6 @@
 // Test: GENERICS_SYSTEM
 // File: tests/language/types/test_generics.wl
 // Focus: Generic struct instantiation, type erasure via 'Struct' keyword, and higher-order functions.
-import "builtin"
 
 
 struct Dog(name -> String)
@@ -21,9 +20,9 @@ func main() -> Int {
     let result -> String = play_with(my_dog, bark);
 
     if (result == "Buddy says Woof!") {
-        builtin.print("PASS: Generics and functional arguments");
+        print("PASS: Generics and functional arguments");
     } else {
-        builtin.print("FAIL: Generic type resolution error");
+        print("FAIL: Generic type resolution error");
     }
     return 0;
 }

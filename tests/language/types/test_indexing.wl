@@ -1,7 +1,6 @@
 // Test: INDEXING_ACCESS
 // File: tests/language/types/test_indexing.wl
 // Focus: Array-style indexing ([]) for Vector read/write and String read-only access.
-import "builtin"
 
 
 func main() -> Int {
@@ -14,9 +13,9 @@ func main() -> Int {
     let first_byte -> Char = s[0];
 
     if (v[1] == 999 && first_byte == 'A') {
-        builtin.print("PASS: Vector and String indexing");
+        print("PASS: Vector and String indexing");
     } else {
-        builtin.print("FAIL: Indexing value mismatch");
+        print("FAIL: Indexing value mismatch");
     }
     return 0;
 }

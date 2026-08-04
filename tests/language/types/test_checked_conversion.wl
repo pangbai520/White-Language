@@ -2,7 +2,6 @@
 // File: tests/language/types/test_checked_conversion.wl
 // Focus: Range checks and catchable failures in explicit built-in conversions.
 
-import "builtin"
 import Error from "errors"
 
 func to_byte(value -> Int) -> Int {
@@ -45,6 +44,6 @@ func main() -> Int {
     if (!to_char(65) || !to_char(55296) || !to_char(1114112)) { return 3; }
     if (!to_bool(1) || !to_bool(2)) { return 4; }
 
-    builtin.print("PASS: checked explicit conversions");
+    print("PASS: checked explicit conversions");
     return 0;
 }

@@ -1,7 +1,6 @@
 // Test: PRIMITIVE_TYPES_AND_CASTS
 // File: tests/language/types/test_primitives.wl
 // Focus: Integer bit-width resolution, explicit cast semantics (trunc/ext), and pointer-integer roundtripping.
-import "builtin"
 import Error from "errors"
 
 func rejects_lossy_narrowing(value -> Int) -> Bool {
@@ -64,9 +63,9 @@ func main() -> Int {
                             (auto_u32 == 4294967295U);
 
     if (decl_ok && cast_a_ok && cast_b_ok && narrowing_ok && sext_ok && zext_ok && bool_ok && ptr_ok && suffix_ok) {
-        builtin.print("PASS: primitive declarations and checked conversion semantics");
+        print("PASS: primitive declarations and checked conversion semantics");
     } else {
-        builtin.print("FAIL: primitive declaration or conversion semantics");
+        print("FAIL: primitive declaration or conversion semantics");
         return 1;
     }
 

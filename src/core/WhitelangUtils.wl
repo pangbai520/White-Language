@@ -1,5 +1,4 @@
 // core/WhitelangUtils.wl
-import "builtin"
 import "sys"
 import "file"
 import Dict from "dict"
@@ -362,6 +361,28 @@ func register_import_namespaces(c -> Compiler, table -> Dict, pos -> Position) -
 func is_visible_namespace(c -> Compiler, name -> String) -> Bool {
     if (c.current_file_visible_prefixes.get(name) is !null) { return true; }
     return c.current_file_namespaces.get(name) is !null;
+}
+
+func erase_alias_prefix(table -> Dict, prefix -> String) -> Void {
+    let removed -> Vector(String) = [];
+    let i -> Int = 0;
+    while (i < table.capacity) {
+        if (table.hashes[i] >= 2 && table.keys[i].starts_with(prefix)) { removed.append(table.keys[i]); }
+        i += 1;
+    }
+    i = 0;
+    while (i < removed.length()) {
+        table.remove(removed[i]);
+        i += 1;
+    }
+}
+
+func unbind_namespace(c -> Compiler, name -> String) -> Void {
+    let prefix -> String = name + ".";
+    erase_alias_prefix(c.current_file_func_aliases, prefix);
+    erase_alias_prefix(c.current_file_type_aliases, prefix);
+    erase_alias_prefix(c.current_file_global_aliases, prefix);
+    c.current_file_namespaces.remove(name);
 }
 
 
