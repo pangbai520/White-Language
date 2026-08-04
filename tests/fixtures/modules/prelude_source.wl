@@ -1,6 +1,10 @@
 // Support: MODULE_PRELUDE_SOURCE
 // File: tests/fixtures/modules/prelude_source.wl
-// Focus: Using prelude symbols from an imported module without explicit imports.
+// Focus: Keeping prelude symbols visible when an imported module has its own imports.
+
+import "file"
+import "process"
+import Dict from "dict"
 
 func check_module_prelude() -> Bool {
     let values -> Dict = Dict(1);

@@ -555,7 +555,16 @@ func report_import_collision(c -> Compiler, pos -> Position, kind -> String, nam
     }
 }
 
-func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) -> Void {
+func is_direct_export(name -> String) -> Bool {
+    let i -> Int = 0;
+    while (i < name.length()) {
+        if (name[i] == '.') { return false; }
+        i += 1;
+    }
+    return true;
+}
+
+func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String, include_submodules -> Bool) -> Void {
     let symbols -> Vector(Struct) = node.symbols;
     let s_len -> Int = 0; if (symbols is !null) { s_len = symbols.length(); }
     let i -> Int = 0;
@@ -578,7 +587,7 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
                     let f_key -> String = c.func_table.keys[k];
                     if (f_key.starts_with(prefix)) {
                         let bare_name -> String = f_key.slice(p_len, f_key.length());
-                        if (!bare_name.starts_with("__")) {
+                        if (!bare_name.starts_with("__") && (include_submodules || is_direct_export(bare_name))) {
                             let existing_f -> String = c.current_file_func_aliases.get(bare_name);
                             if (existing_f is !null && existing_f != f_key) {
                                 report_import_collision(c, node.pos, "function", bare_name);
@@ -598,7 +607,7 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
                     let s_key -> String = c.struct_table.keys[k];
                     if (s_key.starts_with(prefix)) {
                         let bare_name -> String = s_key.slice(p_len, s_key.length());
-                        if (!bare_name.starts_with("__")) {
+                        if (!bare_name.starts_with("__") && (include_submodules || is_direct_export(bare_name))) {
                             let existing_s -> String = c.current_file_type_aliases.get(bare_name);
                             if (existing_s is !null && existing_s != s_key) {
                                 report_import_collision(c, node.pos, "type", bare_name);
@@ -618,7 +627,7 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
                     let g_key -> String = c.global_symbol_table.keys[k];
                     if (g_key.starts_with(prefix)) {
                         let bare_name -> String = g_key.slice(p_len, g_key.length());
-                        if (!bare_name.starts_with("__")) {
+                        if (!bare_name.starts_with("__") && (include_submodules || is_direct_export(bare_name))) {
                             let existing_g -> String = c.current_file_global_aliases.get(bare_name);
                             if (existing_g is !null && existing_g != g_key) {
                                 report_import_collision(c, node.pos, "global", bare_name);
@@ -638,7 +647,7 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
                     let f_key -> String = c.global_func_aliases.keys[k];
                     if (f_key.starts_with(prefix) && c.func_table.get(f_key) is null) {
                         let bare_name -> String = f_key.slice(p_len, f_key.length());
-                        if (!bare_name.starts_with("__")) {
+                        if (!bare_name.starts_with("__") && (include_submodules || is_direct_export(bare_name))) {
                             let existing_f -> String = c.current_file_func_aliases.get(bare_name);
                             let val -> String = c.global_func_aliases.get(f_key);
                             if (existing_f is !null && existing_f != val) {
@@ -659,7 +668,7 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
                     let s_key -> String = c.global_type_aliases.keys[k];
                     if (s_key.starts_with(prefix) && c.struct_table.get(s_key) is null) {
                         let bare_name -> String = s_key.slice(p_len, s_key.length());
-                        if (!bare_name.starts_with("__")) {
+                        if (!bare_name.starts_with("__") && (include_submodules || is_direct_export(bare_name))) {
                             let existing_s -> String = c.current_file_type_aliases.get(bare_name);
                             let val -> String = c.global_type_aliases.get(s_key);
                             if (existing_s is !null && existing_s != val) {
@@ -680,7 +689,7 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
                     let v_key -> String = c.global_var_aliases.keys[k];
                     if (v_key.starts_with(prefix) && c.global_symbol_table.get(v_key) is null) {
                         let bare_name -> String = v_key.slice(p_len, v_key.length());
-                        if (!bare_name.starts_with("__")) {
+                        if (!bare_name.starts_with("__") && (include_submodules || is_direct_export(bare_name))) {
                             let existing_v -> String = c.current_file_global_aliases.get(bare_name);
                             let val -> String = c.global_var_aliases.get(v_key);
                             if (existing_v is !null && existing_v != val) {
@@ -694,9 +703,11 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String) ->
                 k += 1;
             }
 
-            register_import_namespaces(c, c.current_file_func_aliases, node.pos);
-            register_import_namespaces(c, c.current_file_type_aliases, node.pos);
-            register_import_namespaces(c, c.current_file_global_aliases, node.pos);
+            if include_submodules {
+                register_import_namespaces(c, c.current_file_func_aliases, node.pos);
+                register_import_namespaces(c, c.current_file_type_aliases, node.pos);
+                register_import_namespaces(c, c.current_file_global_aliases, node.pos);
+            }
             i += 1;
             continue;
         }

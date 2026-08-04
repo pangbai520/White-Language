@@ -34,7 +34,7 @@ func emit_error_value(c -> Compiler, value -> CompileResult, pos -> Position) ->
         error_type = value.origin_type;
     }
     if (!is_error_type(c, error_type)) {
-        throw_type_error(pos, "cannot use " + get_type_name(c, value.type) + " as an error");
+        throw_type_error(pos, "Cannot use " + get_type_name(c, value.type) + " as an error");
         return void_result();
     }
 
@@ -838,7 +838,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         if (is_pointer_type(c, expected_type)) {
             return CompileResult(reg="null", type=expected_type, origin_type=expected_type);
         }
-        throw_type_error(pos, "nullptr can only be assigned to explicit pointer types.");
+        throw_type_error(pos, "'nullptr' can only be assigned to explicit pointer types.");
         return CompileResult(reg="0", type=expected_type, origin_type=expected_type);
     }
     if (val_res.type == TYPE_NULL) {
@@ -923,7 +923,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
     if ((val_res.type == TYPE_GENERIC_STRUCT || val_res.type == TYPE_GENERIC_CLASS) && expected_type >= 100) {
         if (c.struct_id_map.get("" + expected_type) is !null || c.vector_base_map.get("" + expected_type) is !null) {
             if (val_res.type == TYPE_GENERIC_CLASS && origin != 0 && origin != expected_type) {
-                throw_type_error(pos, "cannot restore " + get_type_name(c, val_res.type) + " as " + get_type_name(c, expected_type));
+                throw_type_error(pos, "Cannot restore " + get_type_name(c, val_res.type) + " as " + get_type_name(c, expected_type));
                 return CompileResult(reg="poison", type=TYPE_POISON);
             }
             if (val_res.type == TYPE_GENERIC_CLASS) { emit_erased_type_check(c, val_res.reg, expected_type, pos); }
@@ -984,7 +984,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
     if (val_res.type == TYPE_GENERIC_FUNCTION && expected_type >= 100) {
         if (c.func_ret_map.get("" + expected_type) is !null) {
             if (origin != 0 && origin != expected_type) {
-                throw_type_error(pos, "cannot restore Function as " + get_type_name(c, expected_type));
+                throw_type_error(pos, "Cannot restore Function as " + get_type_name(c, expected_type));
                 return CompileResult(reg="poison", type=TYPE_POISON);
             }
             emit_erased_type_check(c, val_res.reg, expected_type, pos);
@@ -994,7 +994,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
     if (val_res.type == TYPE_GENERIC_METHOD && expected_type >= 100) {
         if (c.method_ret_map.get("" + expected_type) is !null) {
             if (origin != 0 && origin != expected_type) {
-                throw_type_error(pos, "cannot restore Method as " + get_type_name(c, expected_type));
+                throw_type_error(pos, "Cannot restore Method as " + get_type_name(c, expected_type));
                 return CompileResult(reg="poison", type=TYPE_POISON);
             }
             emit_erased_type_check(c, val_res.reg, expected_type, pos);
@@ -1102,7 +1102,7 @@ func const_access_root(c -> Compiler, node -> Struct) -> String {
 func reject_const_write(c -> Compiler, node -> Struct, pos -> Position) -> Bool {
     let name -> String = const_access_root(c, node);
     if (name.length() == 0) { return false; }
-    throw_type_error(pos, "cannot modify value through const access '" + name + "'");
+    throw_type_error(pos, "Cannot modify value through const access '" + name + "'");
     return true;
 }
 
@@ -1142,7 +1142,7 @@ func check_duplicate_params(params -> Vector(Struct), owner -> String, pos -> Po
     while (params is !null && i < params.length()) {
         let param -> ParamNode = params[i];
         let name -> String = param.name_tok.value;
-        if (seen.contains_key(name)) { throw_name_error(param.pos, "duplicate parameter '" + name + "' in " + owner); return false; }
+        if (seen.contains_key(name)) { throw_name_error(param.pos, "Duplicate parameter '" + name + "' in " + owner); return false; }
         seen.put(name, StringConstant(id=0, value=name));
         i += 1;
     }
@@ -1170,7 +1170,7 @@ func lookup_interface(c -> Compiler, token -> Token) -> StructInfo {
 
 func add_interface(c -> Compiler, list -> Vector(Struct), token -> Token, pos -> Position) -> Bool {
     let info -> StructInfo = lookup_interface(c, token);
-    if (info is null) { throw_name_error(pos, "interface '" + token.value + "' is not defined"); return false; }
+    if (info is null) { throw_name_error(pos, "Interface '" + token.value + "' is not defined"); return false; }
     let i -> Int = 0;
     while (i < list.length()) { let item -> Token = list[i]; if (item.value == info.name) { return true; } i += 1; }
     list.append(Token(type=TOK_IDENTIFIER, value=info.name, line=token.line, col=token.col));
@@ -1205,7 +1205,7 @@ func is_unsuffix_int_literal(node -> Struct) -> Bool {
 func bind_call_args(args -> Vector(Struct), names -> Vector(String), skip -> Int, pos -> Position) -> Vector(Struct) {
     let expected -> Int = 0; if (names is !null) { expected = names.length() - skip; }
     let count -> Int = 0; if (args is !null) { count = args.length(); }
-    if (count != expected) { throw_type_error(pos, "expected " + expected + " arguments, got " + count); return null; }
+    if (count != expected) { throw_type_error(pos, "Expected " + expected + " arguments, got " + count); return null; }
     let ordered -> Vector(Struct) = [];
     let i -> Int = 0;
     while (i < expected) { ordered.append(null); i += 1; }
@@ -1216,22 +1216,22 @@ func bind_call_args(args -> Vector(Struct), names -> Vector(String), skip -> Int
         let arg -> ArgNode = args[i];
         let target -> Int = -1;
         if (arg.name is null || arg.name.length() == 0) {
-            if (saw_named) { throw_invalid_syntax(pos, "positional argument cannot follow a named argument"); return null; }
+            if (saw_named) { throw_invalid_syntax(pos, "Positional argument cannot follow a named argument"); return null; }
             target = next_positional;
             next_positional += 1;
         } else {
             saw_named = true;
             let name_index -> Int = skip;
             while (name_index < names.length()) { if (names[name_index] == arg.name) { target = name_index - skip; break; } name_index += 1; }
-            if (target < 0) { throw_name_error(pos, "unknown argument '" + arg.name + "'"); return null; }
+            if (target < 0) { throw_name_error(pos, "Unknown argument '" + arg.name + "'"); return null; }
         }
-        if (target < 0 || target >= expected) { throw_type_error(pos, "too many arguments"); return null; }
-        if (ordered[target] is !null) { let duplicate -> String = names[target + skip]; throw_name_error(pos, "argument '" + duplicate + "' is specified more than once"); return null; }
+        if (target < 0 || target >= expected) { throw_type_error(pos, "Too many arguments"); return null; }
+        if (ordered[target] is !null) { let duplicate -> String = names[target + skip]; throw_name_error(pos, "Argument '" + duplicate + "' is specified more than once"); return null; }
         ordered[target] = arg;
         i += 1;
     }
     i = 0;
-    while (i < expected) { if (ordered[i] is null) { throw_type_error(pos, "missing argument '" + names[i + skip] + "'"); return null; } i += 1; }
+    while (i < expected) { if (ordered[i] is null) { throw_type_error(pos, "Missing argument '" + names[i + skip] + "'"); return null; } i += 1; }
     return ordered;
 }
 
@@ -1239,7 +1239,7 @@ func reject_named_args(args -> Vector(Struct), pos -> Position, target -> String
     let i -> Int = 0;
     while (args is !null && i < args.length()) {
         let arg -> ArgNode = args[i];
-        if (arg.name is !null && arg.name.length() > 0) { throw_invalid_syntax(pos, "named arguments are not available when calling " + target); return true; }
+        if (arg.name is !null && arg.name.length() > 0) { throw_invalid_syntax(pos, "Named arguments are not available when calling " + target); return true; }
         i += 1;
     }
     return false;
@@ -1358,7 +1358,7 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                     return;
                 }
             }
-            if (c.struct_table.get(s_name) is !null) { throw_name_error(n.pos, "type '" + s_name + "' is already defined"); i += 1; continue; }
+            if (c.struct_table.get(s_name) is !null) { throw_name_error(n.pos, "Type '" + s_name + "' is already defined"); i += 1; continue; }
 
             // TODO: Generics monomorphization is blowing up the binary size.
             // We need to implement a recursion limit for instantiation depth, or 
@@ -1388,7 +1388,7 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             let c_node -> ClassDefNode = stmts[i];
             let raw_name -> String = c_node.name_tok.value;
             let c_name -> String = c.current_package_prefix + raw_name;
-            if (c.struct_table.get(c_name) is !null) { throw_name_error(c_node.pos, "type '" + c_name + "' is already defined"); i += 1; continue; }
+            if (c.struct_table.get(c_name) is !null) { throw_name_error(c_node.pos, "Type '" + c_name + "' is already defined"); i += 1; continue; }
             let sys_anns -> SystemAnnResult = consume_annotations(c_node.annotations, raw_name);
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
@@ -1415,7 +1415,7 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             let i_node -> InterfaceDefNode = stmts[i];
             let raw_name -> String = i_node.name_tok.value;
             let i_name -> String = c.current_package_prefix + raw_name;
-            if (c.struct_table.get(i_name) is !null) { throw_name_error(i_node.pos, "type '" + i_name + "' is already defined"); i += 1; continue; }
+            if (c.struct_table.get(i_name) is !null) { throw_name_error(i_node.pos, "Type '" + i_name + "' is already defined"); i += 1; continue; }
             let method_names -> Dict = Dict(8);
             let method_index -> Int = 0;
             while (i_node.methods is !null && method_index < i_node.methods.length()) {
@@ -1452,7 +1452,7 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             let e_node -> EnumDefNode = stmts[i];
             let raw_name -> String = e_node.name_tok.value;
             let e_name -> String = c.current_package_prefix + raw_name;
-            if (c.struct_table.get(e_name) is !null) { throw_name_error(e_node.pos, "type '" + e_name + "' is already defined"); i += 1; continue; }
+            if (c.struct_table.get(e_name) is !null) { throw_name_error(e_node.pos, "Type '" + e_name + "' is already defined"); i += 1; continue; }
             let sys_anns -> SystemAnnResult = consume_annotations(e_node.annotations, raw_name);
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
@@ -1500,7 +1500,7 @@ func pre_register_globals(c -> Compiler, node -> Struct) -> Void {
                 full_var_name = c.current_package_prefix + var_name;
             }
             if (c.global_symbol_table.get(full_var_name) is !null) {
-                throw_name_error(var_decl.pos, "global '" + full_var_name + "' is already defined");
+                throw_name_error(var_decl.pos, "Global '" + full_var_name + "' is already defined");
                 i += 1;
                 continue;
             }
@@ -1557,7 +1557,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                     let pointer_base -> SymbolInfo = c.ptr_base_map.get("" + second_arg.type);
                     if (first_arg.type == TYPE_INT && pointer_base is !null && pointer_base.type == TYPE_STRING) { valid_main = true; }
                 }
-                if (!valid_main) { throw_type_error(f_node.pos, "main must be func main() -> Int or func main(argc -> Int, ptr argv -> String) -> Int"); return; }
+                if (!valid_main) { throw_type_error(f_node.pos, "Main must be func main() -> Int. "); return; }
             }
 
             let sys_anns -> SystemAnnResult = consume_annotations(f_node.annotations, raw_name);
@@ -1611,7 +1611,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                         target_id = get_inner_fallible_type(c, target_id);
                     }
                     if (!is_conversion_target(target_id)) {
-                        throw_type_error(m_node.pos, "conversion target " + get_type_name(c, target_id) + " is not a built-in value type");
+                        throw_type_error(m_node.pos, "Conversion target " + get_type_name(c, target_id) + " is not a built-in value type");
                     }
                 }
                 let arg_types -> Vector(Struct) = [];
@@ -1646,7 +1646,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                         }
                         throw_name_error(m_node.pos, "class '" + c_name + "' already defines a conversion to " + get_type_name(c, target_id));
                     } else {
-                        throw_name_error(m_node.pos, "Method '" + m_key + "' is already defined.");
+                        throw_name_error(m_node.pos, "method '" + m_key + "' is already defined.");
                     }
                     return;
                 }
@@ -2702,7 +2702,7 @@ func bind_loaded_prelude(c -> Compiler, path -> String, pos -> Position) -> Void
     let star -> Token = Token(type=TOK_MUL, value="*", line=pos.ln, col=pos.col);
     let symbols -> Vector(Struct) = [ImportSymbolNode(name_tok=star, alias_tok=null)];
     let path_tok -> Token = Token(type=TOK_STR_LIT, value=path, line=pos.ln, col=pos.col);
-    bind_import_symbols(c, ImportNode(type=NODE_IMPORT, path_tok=path_tok, symbols=symbols, alias_tok=null, pos=pos), loaded.value);
+    bind_import_symbols(c, ImportNode(type=NODE_IMPORT, path_tok=path_tok, symbols=symbols, alias_tok=null, pos=pos), loaded.value, false);
 }
 
 func bind_module_prelude(c -> Compiler, pos -> Position) -> Void {
@@ -2759,7 +2759,7 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
 
     if (loaded_module is !null) {
         if (node.symbols is !null) {
-            bind_import_symbols(c, node, import_prefix);
+            bind_import_symbols(c, node, import_prefix, true);
             let s_len -> Int = node.symbols.length();
             let i -> Int = 0;
             let is_star -> Bool = false;
@@ -2832,7 +2832,7 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     c.current_dir = old_dir;
 
     if (node.symbols is !null) {
-        bind_import_symbols(c, node, import_prefix);
+        bind_import_symbols(c, node, import_prefix, true);
         let s_len -> Int = node.symbols.length();
         let i -> Int = 0;
         let is_star -> Bool = false;
@@ -2872,7 +2872,7 @@ func compile_ast_pass(c -> Compiler, p_mod -> ParsedModule) -> Void {
             if (final_path is !null && final_path.length() > 0) {
                 let loaded_module -> StringConstant = c.imported_modules.get(final_path);
                 if (loaded_module is !null) {
-                    bind_import_symbols(c, imp, loaded_module.value);
+                    bind_import_symbols(c, imp, loaded_module.value, true);
                 }
             }
         }
@@ -3046,7 +3046,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
     }
 
     if (is_fallible_type(c, target_type_id)) {
-        throw_type_error(node.pos, "fallible values cannot be stored; handle the call with '?'");
+        throw_type_error(node.pos, "Fallible values cannot be stored; handle the call with '?'");
         let curr_scope -> Scope = c.symbol_table;
         curr_scope.table.put(node.name_tok.value, SymbolInfo(reg="poison", type=TYPE_POISON, origin_type=TYPE_POISON, is_const=false));
         return void_result();
@@ -3225,7 +3225,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
 
     let local_scope -> Scope = c.symbol_table;
     if (local_scope.table.get(var_name) is !null) {
-        throw_name_error(node.pos, "variable '" + var_name + "' is already declared in this scope");
+        throw_name_error(node.pos, "Variable '" + var_name + "' is already declared in this scope");
         return CompileResult(reg="poison", type=TYPE_POISON);
     }
     let ptr_reg -> String = c.alloc_regs[node.alloc_id];
@@ -3683,7 +3683,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
                    get_inner_fallible_type(c, ret_type_id) == TYPE_VOID) {
             c.output_file.write(c.indent + "ret " + llvm_ret_type + " zeroinitializer\n");
         } else {
-            throw_type_error(node.pos, "missing return");
+            throw_type_error(node.pos, "Missing return. ");
             c.output_file.write(c.indent + "ret " + llvm_ret_type + " undef\n");
         }
     }
@@ -3781,7 +3781,7 @@ func compile_method_def(c -> Compiler, class_name -> String, node -> MethodDefNo
                    get_inner_fallible_type(c, ret_type_id) == TYPE_VOID) {
             c.output_file.write(c.indent + "ret " + llvm_ret_type + " zeroinitializer\n");
         } else {
-            throw_type_error(node.pos, "missing return");
+            throw_type_error(node.pos, "Missing return. ");
             c.output_file.write(c.indent + "ret " + llvm_ret_type + " undef\n");
         }
     }
@@ -3857,7 +3857,7 @@ func compile_class_method_call(c -> Compiler, s_info -> StructInfo, obj_res -> C
         return void_result();
     }
     if (obj_res.is_const_access && (s_info.is_interface || (f_info is !null && f_info.mutates_self))) {
-        throw_type_error(n_call.pos, "cannot call mutating method '" + method_name + "' through const value");
+        throw_type_error(n_call.pos, "Cannot call mutating method '" + method_name + "' through const value");
         return CompileResult(reg="poison", type=TYPE_POISON);
     }
     
@@ -4284,13 +4284,13 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
 
         if (res.type == TYPE_NULLPTR) {
             if (!is_pointer_type(c, c.current_ret_type)) {
-                throw_type_error(node.pos, "nullptr can only be returned for explicit pointer types.");
+                throw_type_error(node.pos, "'nullptr' can only be returned for explicit pointer types.");
                 return void_result();
             }
             res.type = c.current_ret_type;
         } else if (res.type == TYPE_NULL) {
             if (is_pointer_type(c, c.current_ret_type)) {
-                throw_type_error(node.pos, "null cannot be returned for explicit pointer types. Use 'nullptr'.");
+                throw_type_error(node.pos, "'null' cannot be returned for explicit pointer types. Use 'nullptr'.");
                 return void_result();
             }
             if (is_primitive_type(c.current_ret_type)) {
@@ -4398,7 +4398,7 @@ func compile_struct_def(c -> Compiler, node -> StructDefNode) -> CompileResult {
         field_names.put(f_name, StringConstant(id=0, value=f_name));
         let f_type_id -> Int = resolve_type(c, p.type_tok);
         if (f_type_id == TYPE_AUTO) {
-            throw_type_error(node.pos, "Struct fields cannot use 'Auto' because they lack initializers for static deduction.");
+            throw_type_error(node.pos, "struct fields cannot use 'Auto' because they lack initializers for static deduction.");
             return void_result();
         }
 
@@ -4486,11 +4486,11 @@ func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode
             target_f = find_field(s_info, arg_curr.name);
             if (target_f is null) { throw_name_error(n_call.pos, "struct '" + s_info.name + "' has no field '" + arg_curr.name + "'"); return CompileResult(reg="poison", type=TYPE_POISON); }
         } else {
-            if (saw_named) { throw_invalid_syntax(n_call.pos, "positional argument cannot follow a named argument"); return CompileResult(reg="poison", type=TYPE_POISON); }
+            if (saw_named) { throw_invalid_syntax(n_call.pos, "Positional argument cannot follow a named argument"); return CompileResult(reg="poison", type=TYPE_POISON); }
             target_f = get_field_by_index(s_info, arg_idx);
         }
-        if (target_f is null) { throw_type_error(n_call.pos, "too many arguments for struct '" + s_info.name + "'"); return CompileResult(reg="poison", type=TYPE_POISON); }
-        if (assigned_fields.contains_key(target_f.name)) { throw_name_error(n_call.pos, "field '" + target_f.name + "' is initialized more than once"); return CompileResult(reg="poison", type=TYPE_POISON); }
+        if (target_f is null) { throw_type_error(n_call.pos, "Too many arguments for struct '" + s_info.name + "'"); return CompileResult(reg="poison", type=TYPE_POISON); }
+        if (assigned_fields.contains_key(target_f.name)) { throw_name_error(n_call.pos, "Field '" + target_f.name + "' is initialized more than once"); return CompileResult(reg="poison", type=TYPE_POISON); }
         assigned_fields.put(target_f.name, StringConstant(id=0, value=target_f.name));
 
         if (target_f is !null) { c.expected_type = target_f.type; }
@@ -5633,11 +5633,7 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
 
         if (f_type_id == TYPE_AUTO) {
             if (p.value is null) {
-                throw_type_error(
-                    p.pos,
-                    "Field '" + f_name +
-                    "' needs an explicit type when it has no initializer."
-                );
+                throw_type_error(p.pos, "field '" + f_name + "' needs an explicit type when it has no initializer.");
                 return void_result();
             }
             f_type_id = get_expr_type(c, p.value);
@@ -5683,7 +5679,7 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
                 let p_func -> FuncInfo = vtable_vec[vt_i];
                 if (p_func.base_name == raw_m_name) {
                     if (!same_method_signature(p_func, f_info)) {
-                        throw_type_error(m_node.pos, "override of '" + raw_m_name + "' does not match the parent method signature");
+                        throw_type_error(m_node.pos, "Override of '" + raw_m_name + "' does not match the parent method signature");
                         return void_result();
                     }
                     vtable_vec[vt_i] = f_info;
@@ -5823,6 +5819,8 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
 
     let is_module -> Bool = false;
     let full_name -> String = "";
+    let owner_type -> StructInfo = null;
+    let owner_name -> String = "";
     
     let path_parts -> Vector(String) = [];
     let curr_obj -> Struct = node.obj;
@@ -5857,10 +5855,10 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
                         }
                     }
                     if (mapped_root is !null) {
+                        owner_type = c.struct_table.get(mapped_root);
+                        owner_name = root_name;
                         full_name = module_member_name(mapped_root + ".", path_parts, node.field_name);
-                        if (c.global_symbol_table.get(full_name) is !null) {
-                            is_module = true;
-                        }
+                        if (owner_type is !null || c.global_symbol_table.get(full_name) is !null) { is_module = true; }
                     }
                 }
             }
@@ -5905,9 +5903,15 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
             c.output_file.write(c.indent + val_reg + " = load " + llvm_ty_str + ", " + llvm_ty_str + "* " + g_info.reg + "\n");
             return CompileResult(reg=val_reg, type=g_info.type, origin_type=g_info.origin_type);
         } else {
+            if (owner_type is !null) {
+                let owner_kind -> String = "Type";
+                if (owner_type.is_enum) { owner_kind = "Enum"; }
+                throw_name_error(node.pos, owner_kind + " '" + owner_name + "' has no member '" + node.field_name + "'.");
+                return CompileResult(reg="poison", type=TYPE_POISON);
+            }
             let mod_name -> String = format_ast_path(node.obj);
             throw_name_error(node.pos, "Undefined field, function or enum variant '" + node.field_name + "' in module '" + mod_name + "'.");
-            return void_result();
+            return CompileResult(reg="poison", type=TYPE_POISON);
         }
     }
 
@@ -6035,7 +6039,7 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
         while (method_index < method_count) { let candidate -> MethodDefNode = methods[method_index]; if (candidate.name_tok.value == node.field_name) { method_node = candidate; break; } method_index += 1; }
         if (method_node is !null) {
             if (obj_res.is_const_access) {
-                throw_type_error(node.pos, "cannot bind a method through const value");
+                throw_type_error(node.pos, "Cannot bind a method through const value");
                 return CompileResult(reg="poison", type=TYPE_POISON);
             }
             let object_ptr -> String = next_reg(c);
@@ -6452,7 +6456,7 @@ func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallN
     let args -> Vector(Struct) = call_node.args;
     let a_len -> Int = 0;
     if (args is !null) { a_len = args.length(); }
-    if (a_len != 1) { throw_type_error(call_node.pos, "append expects exactly 1 argument."); return void_result(); }
+    if (a_len != 1) { throw_type_error(call_node.pos, "'append' expects exactly 1 argument."); return void_result(); }
     let append_names -> Vector(String) = ["value"];
     args = bind_call_args(args, append_names, 0, call_node.pos);
     if (args is null) { return CompileResult(reg="poison", type=TYPE_POISON); }
@@ -6462,7 +6466,7 @@ func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallN
     if (vec_res is !null && vec_res.type == TYPE_POISON) { return CompileResult(reg="poison", type=TYPE_POISON); }
 
     let v_info -> SymbolInfo = c.vector_base_map.get("" + vec_res.type);
-    if (v_info is null) { throw_type_error(call_node.pos, "append is only for Vectors."); return void_result(); }
+    if (v_info is null) { throw_type_error(call_node.pos, "'append' is only for Vectors."); return void_result(); }
     
     let elem_type -> Int = v_info.type;
 
@@ -6574,7 +6578,7 @@ func compile_vector_drop(c -> Compiler, vec_node -> Struct, call_node -> CallNod
     let args -> Vector(Struct) = call_node.args;
     let a_len -> Int = 0;
     if (args is !null) { a_len = args.length(); }
-    if (a_len > 0) { throw_type_error(call_node.pos, "drop expects 0 arguments."); return void_result(); }
+    if (a_len > 0) { throw_type_error(call_node.pos, "'drop' expects 0 arguments."); return void_result(); }
     
     let vec_res -> CompileResult = compile_node(c, vec_node);
     if (vec_res is !null && vec_res.type == TYPE_POISON) { return CompileResult(reg="poison", type=TYPE_POISON); }
@@ -7321,12 +7325,12 @@ func compile_enum_def(c -> Compiler, node -> EnumDefNode) -> CompileResult {
         
         let field_name -> String = f_node.name_tok.value;
         if (member_names.contains_key(field_name)) {
-            throw_name_error(f_node.pos, "member '" + field_name + "' is already defined in " + enum_name);
+            throw_name_error(f_node.pos, "Member '" + field_name + "' is already defined in " + enum_name);
             return void_result();
         }
         member_names.put(field_name, StringConstant(id=0, value=field_name));
         if (current_val < -2147483648L || current_val > 2147483647L) {
-            throw_overflow_error(f_node.pos, "value for '" + field_name + "' is outside the Int range");
+            throw_overflow_error(f_node.pos, "Value for '" + field_name + "' is outside the Int range");
             return void_result();
         }
         let global_name -> String = "@" + enum_name + "." + field_name;
@@ -7357,7 +7361,7 @@ func compile_try_unwrap(c -> Compiler, node -> TryUnwrapNode) -> CompileResult {
                 let callee -> VarAccessNode = call.callee;
                 let target_type -> Int = get_builtin_cast_target(callee.name_tok.value);
                 if (target_type != 0) {
-                    throw_invalid_syntax(node.pos, "conversion to " + get_type_name(c, target_type) + " cannot fail; remove '?'");
+                    throw_invalid_syntax(node.pos, "Conversion to " + get_type_name(c, target_type) + " cannot fail; remove '?'");
                     return void_result();
                 }
             }
@@ -7450,13 +7454,14 @@ func compile_catch(c -> Compiler, node -> CatchNode) -> CompileResult {
 
 func compile_throw(c -> Compiler, node -> ThrowNode) -> CompileResult {
     let res -> CompileResult = compile_node(c, node.value);
+    if (res is null || res.type == TYPE_POISON) { return CompileResult(reg="poison", type=TYPE_POISON); }
 
     let error_type -> Int = res.type;
     if (!is_error_type(c, error_type) && is_error_type(c, res.origin_type)) {
         error_type = res.origin_type;
     }
     if (!is_error_type(c, error_type)) {
-        throw_type_error(node.pos, "cannot throw " + get_type_name(c, res.type) + "; expected an error value");
+        throw_type_error(node.pos, "Cannot throw " + get_type_name(c, res.type) + ", expected an error value");
         return void_result();
     }
 
@@ -7819,13 +7824,13 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
 
     if (left.type == TYPE_ANY_ERROR || right.type == TYPE_ANY_ERROR) {
         if (op_type != TOK_EE && op_type != TOK_NE) {
-            throw_type_error(node.pos, "operator '" + node.op_tok.value + "' is not defined for error values");
+            throw_type_error(node.pos, "Operator '" + node.op_tok.value + "' is not defined for error values");
             return void_result();
         }
         if (!is_error_type(c, left.type) || !is_error_type(c, right.type)) {
             let other_type -> Int = right.type;
             if (left.type != TYPE_ANY_ERROR) { other_type = left.type; }
-            throw_type_error(node.pos, "cannot compare an error value with " + get_type_name(c, other_type));
+            throw_type_error(node.pos, "Cannot compare an error value with " + get_type_name(c, other_type));
             return void_result();
         }
 
@@ -7863,7 +7868,7 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
             let right_stringable -> Bool = right.type == TYPE_STRING || right.type == TYPE_NULL || is_primitive_type(right.type);
             if (!left_stringable || !right_stringable) {
                 let invalid_type -> Int = left.type; if (left_stringable) { invalid_type = right.type; }
-                throw_type_error(node.pos, "cannot concatenate String and " + get_type_name(c, invalid_type));
+                throw_type_error(node.pos, "Cannot concatenate String and " + get_type_name(c, invalid_type));
                 return CompileResult(reg="poison", type=TYPE_POISON);
             }
             // convert type
@@ -7917,7 +7922,7 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         let left_numeric -> Bool = is_integer_type(left.type) || left.type == TYPE_FLOAT || left.type == TYPE_FLOAT32;
         let right_numeric -> Bool = is_integer_type(right.type) || right.type == TYPE_FLOAT || right.type == TYPE_FLOAT32;
         if (!left_numeric || !right_numeric) {
-            throw_type_error(node.pos, "operator '**' requires numeric operands");
+            throw_type_error(node.pos, "Operator '**' requires numeric operands");
             return CompileResult(reg="poison", type=TYPE_POISON);
         }
         left = promote_to_float(c, left);
@@ -8040,7 +8045,7 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         } else if (is_unsuffix_int_literal(node.right)) {
             right = compile_type_cast(c, right, left.type, node.pos);
         } else {
-            throw_type_error(node.pos, "cannot mix signed and unsigned integers without an explicit conversion");
+            throw_type_error(node.pos, "Cannot mix signed and unsigned integers without an explicit conversion");
             return CompileResult(reg="poison", type=TYPE_POISON);
         }
     }
@@ -8165,7 +8170,7 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         if (is_unsuffix_int_literal(node.right)) {
             let amount -> Long = eval_const_long(c, node.right, node.pos);
             if (amount < 0L || amount >= Long(shift_bits)) {
-                throw_overflow_error(node.pos, "shift count must be between 0 and " + (shift_bits - 1));
+                throw_overflow_error(node.pos, "Shift count must be between 0 and " + (shift_bits - 1));
                 return CompileResult(reg="poison", type=TYPE_POISON);
             }
         } else {
@@ -8700,7 +8705,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 if (expected_types is !null) { expected_arg_count = expected_types.length() - 1; }
                 
                 if (a_len != expected_arg_count) {
-                    throw_type_error(n_call.pos, "super." + target_m_name + " expects " + expected_arg_count + " arguments, got " + a_len + ".");
+                    throw_type_error(n_call.pos, "'super.'" + target_m_name + " expects " + expected_arg_count + " arguments, got " + a_len + ".");
                     return void_result();
                 }
                 args = bind_call_args(args, f_info.arg_names, 1, n_call.pos);
@@ -9625,7 +9630,7 @@ func validate_explicit_literal_cast(node -> Struct, target_type -> Int, pos -> P
             }
         }
         if (!valid) {
-            throw_overflow_error(pos, "constant " + literal_text + " overflows " + target_name);
+            throw_overflow_error(pos, "Constant " + literal_text + " overflows " + target_name);
             return false;
         }
         return true;
@@ -9633,7 +9638,7 @@ func validate_explicit_literal_cast(node -> Struct, target_type -> Int, pos -> P
 
     if (target_type == TYPE_BOOL) {
         if (negative || magnitude > UInt128(1)) {
-            throw_type_error(pos, "cannot convert constant " + literal_text + " to Bool; expected 0 or 1");
+            throw_type_error(pos, "Cannot convert constant " + literal_text + " to Bool; expected 0 or 1");
             return false;
         }
         return true;
@@ -9641,7 +9646,7 @@ func validate_explicit_literal_cast(node -> Struct, target_type -> Int, pos -> P
     if (target_type == TYPE_CHAR) {
         if (negative || magnitude > UInt128(1114111) ||
             (magnitude >= UInt128(55296) && magnitude <= UInt128(57343))) {
-            throw_overflow_error(pos, "constant " + literal_text + " is not a valid Unicode scalar value");
+            throw_overflow_error(pos, "Constant " + literal_text + " is not a valid Unicode scalar value");
             return false;
         }
         return true;
@@ -9651,19 +9656,19 @@ func validate_explicit_literal_cast(node -> Struct, target_type -> Int, pos -> P
     if (!negative) {
         let max_value -> UInt128 = positive_integer_limit(target_type);
         if (max_value != UInt128(0) && magnitude > max_value) {
-            throw_overflow_error(pos, "constant " + literal_text + " overflows " + target_name);
+            throw_overflow_error(pos, "Constant " + literal_text + " overflows " + target_name);
             return false;
         }
         return true;
     }
 
     if (is_unsigned_integer(target_type)) {
-        throw_overflow_error(pos, "constant " + literal_text + " overflows " + target_name);
+        throw_overflow_error(pos, "Constant " + literal_text + " overflows " + target_name);
         return false;
     }
     let limit -> UInt128 = signed_negative_limit(target_type);
     if (limit != UInt128(0) && magnitude > limit) {
-        throw_overflow_error(pos, "constant " + literal_text + " overflows " + target_name);
+        throw_overflow_error(pos, "Constant " + literal_text + " overflows " + target_name);
         return false;
     }
     return true;
@@ -10030,7 +10035,7 @@ func compile_type_cast(c -> Compiler, val_res -> CompileResult, target_type -> I
 func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position, origin_id -> Int) -> Void {
     if (type_id == TYPE_POISON) { return; }
     if (is_fallible_type(c, type_id)) {
-        throw_type_error(pos, "fallible value must be handled with '?' before printing");
+        throw_type_error(pos, "Fallible value must be handled with '?' before printing");
         return;
     }
 
@@ -10725,9 +10730,24 @@ func compile(c -> Compiler, node -> Struct) -> Void {
 
     precompile_ast(c, node, "<main>", "", c.current_dir);
 
+    let mod_i -> Int = 0;
+    while (mod_i < c.all_modules.length()) {
+        let p_mod -> ParsedModule = c.all_modules[mod_i];
+        c.current_file_visible_prefixes = p_mod.visible;
+        c.current_file_namespaces       = p_mod.namespaces;
+        c.current_file_type_aliases     = p_mod.types;
+        c.current_file_func_aliases     = p_mod.funcs;
+        c.current_file_global_aliases   = p_mod.globals;
+        c.current_package_prefix        = p_mod.prefix;
+        c.current_module_is_package     = p_mod.is_package;
+        c.current_dir                   = p_mod.dir;
+        bind_module_prelude(c, Position(idx=0, ln=0, col=0, text="", fn=p_mod.path));
+        mod_i += 1;
+    }
+
     c.is_precompile_phase = false;
 
-    let mod_i -> Int = 0;
+    mod_i = 0;
     while (mod_i < c.all_modules.length()) {
         let p_mod -> ParsedModule = c.all_modules[mod_i];
         compile_ast_pass(c, p_mod);
