@@ -64,7 +64,8 @@ struct CompileResult(
     reg  -> String,
     type -> Int,
     origin_type -> Int,
-    owns_ref -> Bool
+    owns_ref -> Bool,
+    is_const_access -> Bool
 )
 
 struct SystemAnnResult(
@@ -92,6 +93,7 @@ struct SymbolInfo(
     type -> Int,
     origin_type -> Int, // for generic type
     is_const -> Bool, // const
+    is_const_access -> Bool,
     func_arg_types -> Vector(Struct)
 )
 
@@ -100,17 +102,20 @@ struct FuncInfo(
     base_name  -> String,
     ret_type -> Int, 
     arg_types -> Vector(Struct),
+    arg_names -> Vector(String),
     is_varargs -> Bool,
     ann_flags  -> Int,
     compiler_link_name -> String,
-    abi_name -> String
+    abi_name -> String,
+    mutates_self -> Bool
 )
 
 struct FieldInfo(
     name      -> String,
     type      -> Int,
     llvm_type -> String,
-    offset    -> Int   // for getelementptr
+    offset    -> Int,   // for getelementptr
+    is_const  -> Bool
 )
 struct StructInfo(
     name        -> String,
@@ -285,7 +290,6 @@ func new_compiler(out_path -> String, is_shared -> Bool, emit_source_context -> 
         global_var_aliases = Dict(32),
         compiler_link = Dict(16),
         current_package_prefix = "",
-        current_dir = ".",
         curr_func = null,
         expected_type = 0,
         hoist_scope = null,

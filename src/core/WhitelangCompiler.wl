@@ -61,7 +61,6 @@ func is_os_expr(c -> Compiler, node -> Struct) -> Bool {
 }
 func fold_os_cond(c -> Compiler, node -> Struct) -> Int {
 // return -1 when the condition cannot be folded for this target
-
     if (node is null) { return -1; }
     let base -> BaseNode = node;
 
@@ -114,7 +113,6 @@ func fold_os_cond(c -> Compiler, node -> Struct) -> Int {
     if equal { return 0; }
     return 1;
 }
-
 
 
 func promote_to_float(c -> Compiler, res -> CompileResult) -> CompileResult {
@@ -194,6 +192,21 @@ func promote_to_int(c -> Compiler, res -> CompileResult) -> CompileResult {
     }
     
     return CompileResult(reg=ext_reg, type=TYPE_INT);
+}
+
+func widen_int(c -> Compiler, value -> CompileResult, target -> Int) -> CompileResult {
+    if (!is_integer_type(value.type) || !is_integer_type(target)) { return value; }
+    let source_bits -> Int = get_type_bitwidth(value.type);
+    let target_bits -> Int = get_type_bitwidth(target);
+    if (source_bits >= target_bits) { return value; }
+    if (is_signed_integer(value.type) && is_unsigned_integer(target)) { return value; }
+    let source_type -> String = get_llvm_type_str(c, value.type);
+    let target_type -> String = get_llvm_type_str(c, target);
+    let result -> String = next_reg(c);
+    let op -> String = "zext";
+    if (is_signed_integer(value.type)) { op = "sext"; }
+    c.output_file.write(c.indent + result + " = " + op + " " + source_type + " " + value.reg + " to " + target_type + "\n");
+    return CompileResult(reg=result, type=target, origin_type=value.type, owns_ref=value.owns_ref);
 }
 
 func combine_i128_words(c -> Compiler, low -> String, high -> String) -> String {
@@ -844,21 +857,18 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
         return CompileResult(reg="null", type=expected_type, origin_type=expected_type);
     }
 
-    if (expected_type == TYPE_INT && val_res.type == TYPE_BYTE) { return promote_to_int(c, val_res); }
+    if (is_integer_type(expected_type) && is_integer_type(val_res.type)) {
+        let widened_int -> CompileResult = widen_int(c, val_res, expected_type);
+        if (widened_int.type == expected_type) { return widened_int; }
+    }
     if (expected_type == TYPE_CHAR && val_res.type == TYPE_BYTE) {
         let char_reg -> String = next_reg(c);
         c.output_file.write(c.indent + char_reg + " = zext i8 " + val_res.reg + " to i32\n");
         return CompileResult(reg=char_reg, type=TYPE_CHAR, origin_type=TYPE_BYTE);
     }
-    if (expected_type == TYPE_LONG && val_res.type == TYPE_INT) { return promote_to_long(c, val_res); }
     if (expected_type == TYPE_FLOAT && val_res.type == TYPE_INT) { return promote_to_float(c, val_res); }
     if (expected_type == TYPE_FLOAT && val_res.type == TYPE_LONG) { return promote_to_float(c, val_res); }
-
-    if (expected_type == TYPE_INT && val_res.type == TYPE_BOOL) {
-        let zext_reg -> String = next_reg(c);
-        c.output_file.write(c.indent + zext_reg + " = zext i1 " + val_res.reg + " to i32\n");
-        return CompileResult(reg=zext_reg, type=TYPE_INT, origin_type=origin);
-    }
+    if (expected_type == TYPE_FLOAT && val_res.type == TYPE_FLOAT32) { return promote_to_float(c, val_res); }
 
     if (expected_type == TYPE_GENERIC_ENUM) {
         if (val_res.type >= 100) {
@@ -880,6 +890,10 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
 
     if (ex_info is !null && ex_info.is_interface) {
         if (val_info is !null && val_info.is_class) {
+            if (!class_has_interface(c, val_info, ex_info)) {
+                throw_type_error(pos, "class '" + val_info.name + "' does not implement interface '" + ex_info.name + "'");
+                return CompileResult(reg="poison", type=TYPE_POISON);
+            }
             let itable_name -> String = "@itable." + val_info.name + "." + ex_info.name;
             let itable_len -> Int = 0; if (ex_info.vtable is !null) { itable_len = ex_info.vtable.length(); }
             let obj_cast -> String = next_reg(c);
@@ -894,7 +908,7 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
             } else {
                 c.output_file.write(c.indent + s2 + " = insertvalue { i8*, i8* } " + s1 + ", i8* null, 1\n");
             }
-            return CompileResult(reg=s2, type=expected_type, origin_type=val_res.type, owns_ref=val_res.owns_ref);
+            return CompileResult(reg=s2, type=expected_type, origin_type=val_res.type, owns_ref=val_res.owns_ref, is_const_access=val_res.is_const_access);
         }
     }
 
@@ -903,15 +917,20 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
             let cast_reg -> String = next_reg(c);
             let src_ty -> String = get_llvm_type_str(c, val_res.type);
             c.output_file.write(c.indent + cast_reg + " = bitcast " + src_ty + " " + val_res.reg + " to i8*\n");
-            return CompileResult(reg=cast_reg, type=expected_type, origin_type=val_res.type, owns_ref=val_res.owns_ref);
+            return CompileResult(reg=cast_reg, type=expected_type, origin_type=val_res.type, owns_ref=val_res.owns_ref, is_const_access=val_res.is_const_access);
         }
     }
     if ((val_res.type == TYPE_GENERIC_STRUCT || val_res.type == TYPE_GENERIC_CLASS) && expected_type >= 100) {
         if (c.struct_id_map.get("" + expected_type) is !null || c.vector_base_map.get("" + expected_type) is !null) {
+            if (val_res.type == TYPE_GENERIC_CLASS && origin != 0 && origin != expected_type) {
+                throw_type_error(pos, "cannot restore " + get_type_name(c, val_res.type) + " as " + get_type_name(c, expected_type));
+                return CompileResult(reg="poison", type=TYPE_POISON);
+            }
+            if (val_res.type == TYPE_GENERIC_CLASS) { emit_erased_type_check(c, val_res.reg, expected_type, pos); }
             let cast_reg -> String = next_reg(c);
             let dest_ty -> String = get_llvm_type_str(c, expected_type);
             c.output_file.write(c.indent + cast_reg + " = bitcast i8* " + val_res.reg + " to " + dest_ty + "\n");
-            return CompileResult(reg=cast_reg, type=expected_type, origin_type=origin, owns_ref=val_res.owns_ref);
+            return CompileResult(reg=cast_reg, type=expected_type, origin_type=origin, owns_ref=val_res.owns_ref, is_const_access=val_res.is_const_access);
         }
     }
 
@@ -964,11 +983,21 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
     }
     if (val_res.type == TYPE_GENERIC_FUNCTION && expected_type >= 100) {
         if (c.func_ret_map.get("" + expected_type) is !null) {
+            if (origin != 0 && origin != expected_type) {
+                throw_type_error(pos, "cannot restore Function as " + get_type_name(c, expected_type));
+                return CompileResult(reg="poison", type=TYPE_POISON);
+            }
+            emit_erased_type_check(c, val_res.reg, expected_type, pos);
             return CompileResult(reg=val_res.reg, type=expected_type, origin_type=origin, owns_ref=val_res.owns_ref);
         }
     }
     if (val_res.type == TYPE_GENERIC_METHOD && expected_type >= 100) {
         if (c.method_ret_map.get("" + expected_type) is !null) {
+            if (origin != 0 && origin != expected_type) {
+                throw_type_error(pos, "cannot restore Method as " + get_type_name(c, expected_type));
+                return CompileResult(reg="poison", type=TYPE_POISON);
+            }
+            emit_erased_type_check(c, val_res.reg, expected_type, pos);
             return CompileResult(reg=val_res.reg, type=expected_type, origin_type=origin, owns_ref=val_res.owns_ref);
         }
     }
@@ -1049,6 +1078,171 @@ func get_string_ptr(s_id -> Int, s_val -> String) -> String {
 
 func get_string_object_ptr(s_id -> Int) -> String {
     return "getelementptr inbounds ({ i32, i32, %struct.$String }, { i32, i32, %struct.$String }* @.str." + s_id + ", i32 0, i32 2)";
+}
+
+func expr_root_name(node -> Struct) -> String {
+    if (node is null) { return ""; }
+    let base -> BaseNode = node;
+    if (base.type == NODE_VAR_ACCESS) { let value -> VarAccessNode = node; return value.name_tok.value; }
+    if (base.type == NODE_FIELD_ACCESS) { let value -> FieldAccessNode = node; return expr_root_name(value.obj); }
+    if (base.type == NODE_INDEX_ACCESS) { let value -> IndexAccessNode = node; return expr_root_name(value.target); }
+    if (base.type == NODE_SLICE_ACCESS) { let value -> SliceAccessNode = node; return expr_root_name(value.target); }
+    if (base.type == NODE_DEREF) { let value -> DerefNode = node; return expr_root_name(value.node); }
+    return "";
+}
+
+func const_access_root(c -> Compiler, node -> Struct) -> String {
+    let name -> String = expr_root_name(node);
+    if (name.length() == 0) { return ""; }
+    let info -> SymbolInfo = find_symbol(c, name);
+    if (info is !null && (info.is_const || info.is_const_access)) { return name; }
+    return "";
+}
+
+func reject_const_write(c -> Compiler, node -> Struct, pos -> Position) -> Bool {
+    let name -> String = const_access_root(c, node);
+    if (name.length() == 0) { return false; }
+    throw_type_error(pos, "cannot modify value through const access '" + name + "'");
+    return true;
+}
+
+func method_mutates_self(node -> Struct) -> Bool {
+    if (node is null) { return false; }
+    let base -> BaseNode = node;
+    if (base.type == NODE_FIELD_ASSIGN) { let value -> FieldAssignNode = node; return expr_root_name(value.obj) == "self" || expr_root_name(value.value) == "self"; }
+    if (base.type == NODE_INDEX_ASSIGN) { let value -> IndexAssignNode = node; return expr_root_name(value.target) == "self" || expr_root_name(value.value) == "self"; }
+    if (base.type == NODE_PTR_ASSIGN) { let value -> PtrAssignNode = node; return expr_root_name(value.pointer) == "self" || expr_root_name(value.value) == "self"; }
+    if (base.type == NODE_POSTFIX) { let value -> PostfixOpNode = node; return expr_root_name(value.node) == "self"; }
+    if (base.type == NODE_REF) { let value -> RefNode = node; return expr_root_name(value.node) == "self"; }
+    if (base.type == NODE_VAR_DECL) { let value -> VarDeclareNode = node; return expr_root_name(value.value) == "self"; }
+    if (base.type == NODE_VAR_ASSIGN) { let value -> VarAssignNode = node; return expr_root_name(value.value) == "self"; }
+    if (base.type == NODE_CALL) {
+        let call -> CallNode = node;
+        let callee -> BaseNode = call.callee;
+        if (callee is !null && callee.type == NODE_FIELD_ACCESS) { let field -> FieldAccessNode = call.callee; if (expr_root_name(field.obj) == "self") { return true; } }
+        let i -> Int = 0;
+        while (call.args is !null && i < call.args.length()) { let arg -> ArgNode = call.args[i]; if (expr_root_name(arg.val) == "self") { return true; } i += 1; }
+    }
+    if (base.type == NODE_FUNC_DEF) { let value -> FunctionDefNode = node; return method_mutates_self(value.body); }
+    if (base.type == NODE_BLOCK) {
+        let block -> BlockNode = node;
+        let i -> Int = 0;
+        while (block.stmts is !null && i < block.stmts.length()) { if (method_mutates_self(block.stmts[i])) { return true; } i += 1; }
+    }
+    if (base.type == NODE_IF) { let value -> IfNode = node; return method_mutates_self(value.body) || method_mutates_self(value.else_body); }
+    if (base.type == NODE_WHILE) { let value -> WhileNode = node; return method_mutates_self(value.body); }
+    if (base.type == NODE_FOR) { let value -> ForNode = node; return method_mutates_self(value.init) || method_mutates_self(value.step) || method_mutates_self(value.body); }
+    if (base.type == NODE_CATCH) { let value -> CatchNode = node; return method_mutates_self(value.stmt) || method_mutates_self(value.body); }
+    return false;
+}
+
+func check_duplicate_params(params -> Vector(Struct), owner -> String, pos -> Position) -> Bool {
+    let seen -> Dict = Dict(8);
+    let i -> Int = 0;
+    while (params is !null && i < params.length()) {
+        let param -> ParamNode = params[i];
+        let name -> String = param.name_tok.value;
+        if (seen.contains_key(name)) { throw_name_error(param.pos, "duplicate parameter '" + name + "' in " + owner); return false; }
+        seen.put(name, StringConstant(id=0, value=name));
+        i += 1;
+    }
+    return true;
+}
+
+func same_method_signature(parent -> FuncInfo, child -> FuncInfo) -> Bool {
+    if (parent is null || child is null || parent.ret_type != child.ret_type) { return false; }
+    let parent_len -> Int = 0; if (parent.arg_types is !null) { parent_len = parent.arg_types.length(); }
+    let child_len -> Int = 0; if (child.arg_types is !null) { child_len = child.arg_types.length(); }
+    if (parent_len != child_len) { return false; }
+    let i -> Int = 1;
+    while (i < parent_len) { let a -> TypeListNode = parent.arg_types[i]; let b -> TypeListNode = child.arg_types[i]; if (a.type != b.type) { return false; } i += 1; }
+    return true;
+}
+
+func lookup_interface(c -> Compiler, token -> Token) -> StructInfo {
+    if (token is null) { return null; }
+    let info -> StructInfo = c.struct_table.get(token.value);
+    if (info is null && c.current_package_prefix.length() > 0) { info = c.struct_table.get(c.current_package_prefix + token.value); }
+    if (info is null) { let alias -> String = c.current_file_type_aliases.get(token.value); if (alias is !null) { info = c.struct_table.get(alias); } }
+    if (info is !null && info.is_interface) { return info; }
+    return null;
+}
+
+func add_interface(c -> Compiler, list -> Vector(Struct), token -> Token, pos -> Position) -> Bool {
+    let info -> StructInfo = lookup_interface(c, token);
+    if (info is null) { throw_name_error(pos, "interface '" + token.value + "' is not defined"); return false; }
+    let i -> Int = 0;
+    while (i < list.length()) { let item -> Token = list[i]; if (item.value == info.name) { return true; } i += 1; }
+    list.append(Token(type=TOK_IDENTIFIER, value=info.name, line=token.line, col=token.col));
+    return true;
+}
+
+func class_has_interface(c -> Compiler, class_info -> StructInfo, target -> StructInfo) -> Bool {
+    let current -> StructInfo = class_info;
+    while (current is !null) {
+        let i -> Int = 0;
+        while (current.interfaces is !null && i < current.interfaces.length()) {
+            let token -> Token = current.interfaces[i];
+            let info -> StructInfo = lookup_interface(c, token);
+            if (info is !null && info.type_id == target.type_id) { return true; }
+            i += 1;
+        }
+        if (current.parent_id == 0) { break; }
+        current = c.struct_id_map.get("" + current.parent_id);
+    }
+    return false;
+}
+
+func is_unsuffix_int_literal(node -> Struct) -> Bool {
+    if (node is null) { return false; }
+    let base -> BaseNode = node;
+    if (base.type != NODE_INT) { return false; }
+    let value -> IntNode = node;
+    let text -> String = value.tok.value;
+    return !text.ends_with("u") && !text.ends_with("U") && !text.ends_with("ul") && !text.ends_with("UL") && !text.ends_with("ull") && !text.ends_with("ULL");
+}
+
+func bind_call_args(args -> Vector(Struct), names -> Vector(String), skip -> Int, pos -> Position) -> Vector(Struct) {
+    let expected -> Int = 0; if (names is !null) { expected = names.length() - skip; }
+    let count -> Int = 0; if (args is !null) { count = args.length(); }
+    if (count != expected) { throw_type_error(pos, "expected " + expected + " arguments, got " + count); return null; }
+    let ordered -> Vector(Struct) = [];
+    let i -> Int = 0;
+    while (i < expected) { ordered.append(null); i += 1; }
+    let next_positional -> Int = 0;
+    let saw_named -> Bool = false;
+    i = 0;
+    while (i < count) {
+        let arg -> ArgNode = args[i];
+        let target -> Int = -1;
+        if (arg.name is null || arg.name.length() == 0) {
+            if (saw_named) { throw_invalid_syntax(pos, "positional argument cannot follow a named argument"); return null; }
+            target = next_positional;
+            next_positional += 1;
+        } else {
+            saw_named = true;
+            let name_index -> Int = skip;
+            while (name_index < names.length()) { if (names[name_index] == arg.name) { target = name_index - skip; break; } name_index += 1; }
+            if (target < 0) { throw_name_error(pos, "unknown argument '" + arg.name + "'"); return null; }
+        }
+        if (target < 0 || target >= expected) { throw_type_error(pos, "too many arguments"); return null; }
+        if (ordered[target] is !null) { let duplicate -> String = names[target + skip]; throw_name_error(pos, "argument '" + duplicate + "' is specified more than once"); return null; }
+        ordered[target] = arg;
+        i += 1;
+    }
+    i = 0;
+    while (i < expected) { if (ordered[i] is null) { throw_type_error(pos, "missing argument '" + names[i + skip] + "'"); return null; } i += 1; }
+    return ordered;
+}
+
+func reject_named_args(args -> Vector(Struct), pos -> Position, target -> String) -> Bool {
+    let i -> Int = 0;
+    while (args is !null && i < args.length()) {
+        let arg -> ArgNode = args[i];
+        if (arg.name is !null && arg.name.length() > 0) { throw_invalid_syntax(pos, "named arguments are not available when calling " + target); return true; }
+        i += 1;
+    }
+    return false;
 }
 
 func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
@@ -1164,6 +1358,7 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
                     return;
                 }
             }
+            if (c.struct_table.get(s_name) is !null) { throw_name_error(n.pos, "type '" + s_name + "' is already defined"); i += 1; continue; }
 
             // TODO: Generics monomorphization is blowing up the binary size.
             // We need to implement a recursion limit for instantiation depth, or 
@@ -1193,6 +1388,7 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             let c_node -> ClassDefNode = stmts[i];
             let raw_name -> String = c_node.name_tok.value;
             let c_name -> String = c.current_package_prefix + raw_name;
+            if (c.struct_table.get(c_name) is !null) { throw_name_error(c_node.pos, "type '" + c_name + "' is already defined"); i += 1; continue; }
             let sys_anns -> SystemAnnResult = consume_annotations(c_node.annotations, raw_name);
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
@@ -1219,6 +1415,17 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             let i_node -> InterfaceDefNode = stmts[i];
             let raw_name -> String = i_node.name_tok.value;
             let i_name -> String = c.current_package_prefix + raw_name;
+            if (c.struct_table.get(i_name) is !null) { throw_name_error(i_node.pos, "type '" + i_name + "' is already defined"); i += 1; continue; }
+            let method_names -> Dict = Dict(8);
+            let method_index -> Int = 0;
+            while (i_node.methods is !null && method_index < i_node.methods.length()) {
+                let iface_method -> MethodDefNode = i_node.methods[method_index];
+                let method_name -> String = iface_method.name_tok.value;
+                if (method_names.contains_key(method_name)) { throw_name_error(iface_method.pos, "method '" + method_name + "' is already declared in interface '" + i_name + "'"); break; }
+                method_names.put(method_name, StringConstant(id=0, value=method_name));
+                check_duplicate_params(iface_method.params, "interface method '" + method_name + "'", iface_method.pos);
+                method_index += 1;
+            }
             let sys_anns -> SystemAnnResult = consume_annotations(null, raw_name);
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
@@ -1245,6 +1452,7 @@ func pre_register_structs(c -> Compiler, node -> Struct) -> Void {
             let e_node -> EnumDefNode = stmts[i];
             let raw_name -> String = e_node.name_tok.value;
             let e_name -> String = c.current_package_prefix + raw_name;
+            if (c.struct_table.get(e_name) is !null) { throw_name_error(e_node.pos, "type '" + e_name + "' is already defined"); i += 1; continue; }
             let sys_anns -> SystemAnnResult = consume_annotations(e_node.annotations, raw_name);
             let new_id -> Int = c.type_counter;
             c.type_counter += 1;
@@ -1291,6 +1499,11 @@ func pre_register_globals(c -> Compiler, node -> Struct) -> Void {
             if (c.current_package_prefix != "") {
                 full_var_name = c.current_package_prefix + var_name;
             }
+            if (c.global_symbol_table.get(full_var_name) is !null) {
+                throw_name_error(var_decl.pos, "global '" + full_var_name + "' is already defined");
+                i += 1;
+                continue;
+            }
             // keep the declared type visible while module imports are bound
             let declared_type -> Int = resolve_type(c, var_decl.type_node);
             c.global_symbol_table.put(full_var_name, SymbolInfo(reg="poison", type=declared_type, origin_type=declared_type, is_const=var_decl.is_const));
@@ -1317,8 +1530,10 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                 return;
             }
             let arg_types -> Vector(Struct) = [];
+            let arg_names -> Vector(String) = [];
             
             let params -> Vector(Struct) = f_node.params;
+            if (!check_duplicate_params(params, "function '" + raw_name + "'", f_node.pos)) { return; }
             let p_len -> Int = 0; if (params is !null) { p_len = params.length(); }
             let p_idx -> Int = 0;
             
@@ -1330,7 +1545,19 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                     return;
                 }
                 arg_types.append(TypeListNode(type=p_id));
+                arg_names.append(p.name_tok.value);
                 p_idx += 1;
+            }
+
+            if (raw_name == "main") {
+                let valid_main -> Bool = ret_type_id == TYPE_INT && p_len == 0;
+                if (ret_type_id == TYPE_INT && p_len == 2) {
+                    let first_arg -> TypeListNode = arg_types[0];
+                    let second_arg -> TypeListNode = arg_types[1];
+                    let pointer_base -> SymbolInfo = c.ptr_base_map.get("" + second_arg.type);
+                    if (first_arg.type == TYPE_INT && pointer_base is !null && pointer_base.type == TYPE_STRING) { valid_main = true; }
+                }
+                if (!valid_main) { throw_type_error(f_node.pos, "main must be func main() -> Int or func main(argc -> Int, ptr argv -> String) -> Int"); return; }
             }
 
             let sys_anns -> SystemAnnResult = consume_annotations(f_node.annotations, raw_name);
@@ -1351,7 +1578,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                 return;
             }
 
-            let f_info -> FuncInfo = FuncInfo(name=llvm_func_name, base_name=raw_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=false, ann_flags=sys_anns.ann_flags, compiler_link_name=sys_anns.compiler_link_name);
+            let f_info -> FuncInfo = FuncInfo(name=llvm_func_name, base_name=raw_name, ret_type=ret_type_id, arg_types=arg_types, arg_names=arg_names, is_varargs=false, ann_flags=sys_anns.ann_flags, compiler_link_name=sys_anns.compiler_link_name, mutates_self=false);
             c.func_table.put(func_key, f_info);
 
             if ((sys_anns.ann_flags & FLAG_ANN_COMP_LINK) != 0) {
@@ -1388,10 +1615,12 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                     }
                 }
                 let arg_types -> Vector(Struct) = [];
+                let arg_names -> Vector(String) = ["self"];
 
                 arg_types.append(TypeListNode(type=class_type_id));
                 
                 let p_vec -> Vector(Struct) = m_node.params;
+                if (!check_duplicate_params(p_vec, "method '" + m_raw_name + "'", m_node.pos)) { return; }
                 let p_len -> Int = 0; if (p_vec is !null) { p_len = p_vec.length(); }
                 let p_idx -> Int = 0;
                 while (p_idx < p_len) {
@@ -1402,6 +1631,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                         return; 
                     }
                     arg_types.append(TypeListNode(type=p_type));
+                    arg_names.append(p.name_tok.value);
                     p_idx += 1;
                 }
 
@@ -1421,7 +1651,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                     return;
                 }
 
-                let f_info -> FuncInfo = FuncInfo(name=m_llvm_name, base_name=m_raw_name, ret_type=ret_id, arg_types=arg_types, is_varargs=false);
+                let f_info -> FuncInfo = FuncInfo(name=m_llvm_name, base_name=m_raw_name, ret_type=ret_id, arg_types=arg_types, arg_names=arg_names, is_varargs=false, mutates_self=method_mutates_self(m_node.body));
                 c.func_table.put(m_key, f_info);
                 m_idx += 1;
             }
@@ -1619,9 +1849,7 @@ func emit_alloc_obj(c -> Compiler, payload_size_reg -> String, type_id_str -> St
     c.output_file.write(c.indent + type_ptr_i8 + " = getelementptr inbounds i8, i8* " + header_mem + ", i32 4\n");
     let type_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + type_ptr + " = bitcast i8* " + type_ptr_i8 + " to i32*\n");
-    let header_tag -> String = type_id_str;
-    if (header_size == 16) { header_tag = "-2"; }
-    c.output_file.write(c.indent + "store i32 " + header_tag + ", i32* " + type_ptr + "\n");
+    c.output_file.write(c.indent + "store i32 " + type_id_str + ", i32* " + type_ptr + "\n");
     
     let payload_i8 -> String = next_reg(c);
     c.output_file.write(c.indent + payload_i8 + " = getelementptr inbounds i8, i8* " + header_mem + ", i32 8\n");
@@ -1633,6 +1861,48 @@ func emit_alloc_obj(c -> Compiler, payload_size_reg -> String, type_id_str -> St
     let final_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + final_ptr + " = bitcast i8* " + payload_i8 + " to " + dest_llvm_type + "\n");
     return final_ptr;
+}
+
+func emit_alloc_closure(c -> Compiler, type_id -> Int) -> String {
+    let closure -> String = emit_alloc_obj(c, "16", "" + TYPE_GENERIC_FUNCTION, "i8*");
+    let tag_bytes -> String = next_reg(c);
+    let tag_slot -> String = next_reg(c);
+    c.output_file.write(c.indent + tag_bytes + " = getelementptr inbounds i8, i8* " + closure + ", i32 -4\n");
+    c.output_file.write(c.indent + tag_slot + " = bitcast i8* " + tag_bytes + " to i32*\n");
+    c.output_file.write(c.indent + "store i32 " + type_id + ", i32* " + tag_slot + "\n");
+    return closure;
+}
+
+func emit_erased_type_check(c -> Compiler, value -> String, expected -> Int, pos -> Position) -> Void {
+    let tag_bytes -> String = next_reg(c);
+    let tag_slot -> String = next_reg(c);
+    let tag -> String = next_reg(c);
+    let matches -> String = next_reg(c);
+    let success -> String = next_label(c);
+    let failure -> String = next_label(c);
+    c.output_file.write(c.indent + tag_bytes + " = getelementptr inbounds i8, i8* " + value + ", i32 -4\n");
+    c.output_file.write(c.indent + tag_slot + " = bitcast i8* " + tag_bytes + " to i32*\n");
+    c.output_file.write(c.indent + tag + " = load i32, i32* " + tag_slot + "\n");
+    c.output_file.write(c.indent + matches + " = icmp eq i32 " + tag + ", " + expected + "\n");
+    let accepted -> String = matches;
+    let expected_info -> StructInfo = c.struct_id_map.get("" + expected);
+    if (expected_info is !null && expected_info.is_class) {
+        let candidate -> Int = 100;
+        while (candidate < c.type_counter) {
+            if (candidate != expected && is_subclass(c, candidate, expected)) {
+                let candidate_match -> String = next_reg(c);
+                let combined -> String = next_reg(c);
+                c.output_file.write(c.indent + candidate_match + " = icmp eq i32 " + tag + ", " + candidate + "\n");
+                c.output_file.write(c.indent + combined + " = or i1 " + accepted + ", " + candidate_match + "\n");
+                accepted = combined;
+            }
+            candidate += 1;
+        }
+    }
+    c.output_file.write(c.indent + "br i1 " + accepted + ", label %" + success + ", label %" + failure + "\n");
+    c.output_file.write("\n" + failure + ":\n");
+    emit_runtime_error(c, pos, "Erased value has the wrong concrete type");
+    c.output_file.write("\n" + success + ":\n");
 }
 
 func hoist_allocas(c -> Compiler, node -> Struct) -> Void {
@@ -2312,7 +2582,7 @@ func compile_arc_hooks(c -> Compiler) -> Void {
     c.output_file.write("  %tag.addr = getelementptr inbounds i8, i8* %base, i32 4\n");
     c.output_file.write("  %tag.ptr = bitcast i8* %tag.addr to i32*\n");
     c.output_file.write("  %tag = load i32, i32* %tag.ptr\n");
-    c.output_file.write("  %is.dynamic = icmp eq i32 %tag, -2\n");
+    c.output_file.write("  %is.dynamic = icmp ne i32 %tag, " + TYPE_STRING + "\n");
     c.output_file.write("  br i1 %is.dynamic, label %destroy.dynamic, label %destroy.legacy\n");
     c.output_file.write("destroy.dynamic:\n");
     c.output_file.write("  %raw = getelementptr inbounds i8, i8* %base, i32 -8\n");
@@ -2675,7 +2945,15 @@ func must_terminate(c -> Compiler, node -> Struct) -> Bool {
         let condition -> BaseNode = loop.condition;
         if (condition is !null && condition.type == NODE_BOOL) {
             let boolean -> BooleanNode = loop.condition;
-            return boolean.value == 1 && !loop_body_has_break(loop.body);
+            return boolean.value == 1 && !has_loop_break(loop.body);
+        }
+    }
+    if (base.type == NODE_FOR) {
+        let loop -> ForNode = node;
+        if (loop.cond is null && !has_loop_break(loop.body)) { return true; }
+        if (loop.cond is !null) {
+            let condition -> BaseNode = loop.cond;
+            if (condition.type == NODE_BOOL) { let boolean -> BooleanNode = loop.cond; if (boolean.value == 1 && !has_loop_break(loop.body)) { return true; } }
         }
     }
     return false;
@@ -2749,6 +3027,7 @@ func compile_block(c -> Compiler, node -> BlockNode) -> CompileResult {
 
 func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
     let target_type_id -> Int = resolve_type(c, node.type_node);
+    let const_access -> Bool = node.is_const;
 
     if (target_type_id == TYPE_AUTO) {
         target_type_id = get_expr_type(c, node.value);
@@ -2944,6 +3223,11 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         return void_result();
     }
 
+    let local_scope -> Scope = c.symbol_table;
+    if (local_scope.table.get(var_name) is !null) {
+        throw_name_error(node.pos, "variable '" + var_name + "' is already declared in this scope");
+        return CompileResult(reg="poison", type=TYPE_POISON);
+    }
     let ptr_reg -> String = c.alloc_regs[node.alloc_id];
     let origin_id -> Int = target_type_id;
 
@@ -3008,6 +3292,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
             c.expected_type = 0;
 
             val_res = emit_implicit_cast(c, val_res, target_type_id, node.pos);
+            if (val_res.is_const_access) { const_access = true; }
             if (target_type_id == TYPE_GENERIC_STRUCT || target_type_id == TYPE_GENERIC_CLASS) {
                 if (val_res.origin_type >= 100) { origin_id = val_res.origin_type; }
             } else if (target_type_id == TYPE_GENERIC_FUNCTION || target_type_id == TYPE_GENERIC_METHOD) {
@@ -3023,7 +3308,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
     }
 
     let curr_scope -> Scope = c.symbol_table;
-    curr_scope.table.put(var_name, SymbolInfo(reg=ptr_reg, type=target_type_id, origin_type=origin_id, is_const=node.is_const));
+    curr_scope.table.put(var_name, SymbolInfo(reg=ptr_reg, type=target_type_id, origin_type=origin_id, is_const=node.is_const, is_const_access=const_access));
 
     if (c.scope_depth > 0) {
         if (needs_drop(c, target_type_id)) {
@@ -3057,6 +3342,7 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
     c.expected_type = 0;
 
     val_res = emit_implicit_cast(c, val_res, info.type, node.pos);
+    info.is_const_access = val_res.is_const_access;
 
     if (result_owns_value(c, info.type)) {
         if (!val_res.owns_ref) { emit_retain_value(c, val_res.reg, info.type); }
@@ -3162,6 +3448,7 @@ func compile_while(c -> Compiler, node -> WhileNode) -> CompileResult {
 }
 
 func compile_for(c -> Compiler, node -> ForNode) -> CompileResult {
+    enter_scope(c);
     if (node.init is !null) {
         let init_res -> CompileResult = compile_node(c, node.init);
         discard_statement_result(c, node.init, init_res);
@@ -3200,12 +3487,15 @@ func compile_for(c -> Compiler, node -> ForNode) -> CompileResult {
     c.output_file.write(c.indent + "br label %" + label_cond + "\n");
     c.output_file.write("\n" + label_end + ":\n");
     c.loop_stack = current_scope.parent;
+    exit_scope(c);
+    if (must_terminate(c, node)) { c.output_file.write(c.indent + "unreachable\n"); }
     
     return void_result();
 }
 
 func compile_ptr_assign(c -> Compiler, node -> PtrAssignNode) -> CompileResult {
     let d_node -> DerefNode = node.pointer;
+    if (reject_const_write(c, d_node.node, node.pos)) { return CompileResult(reg="poison", type=TYPE_POISON); }
     let ptr_res -> CompileResult = compile_node(c, d_node.node);
 
     let i -> Int = 0;
@@ -3270,7 +3560,7 @@ func compile_ptr_assign(c -> Compiler, node -> PtrAssignNode) -> CompileResult {
     return val_res;
 }
 
-func loop_body_has_break(node -> Struct) -> Bool {
+func has_loop_break(node -> Struct) -> Bool {
     if (node is null) { return false; }
     let base -> BaseNode = node;
     if (base.type == NODE_BREAK) { return true; }
@@ -3279,20 +3569,20 @@ func loop_body_has_break(node -> Struct) -> Bool {
         let block -> BlockNode = node;
         let i -> Int = 0;
         while (block.stmts is !null && i < block.stmts.length()) {
-            if (loop_body_has_break(block.stmts[i])) { return true; }
+            if (has_loop_break(block.stmts[i])) { return true; }
             i += 1;
         }
         return false;
     }
     if (base.type == NODE_IF) {
         let branch -> IfNode = node;
-        return loop_body_has_break(branch.body) ||
-               loop_body_has_break(branch.else_body);
+        return has_loop_break(branch.body) ||
+               has_loop_break(branch.else_body);
     }
     if (base.type == NODE_CATCH) {
         let caught -> CatchNode = node;
-        return loop_body_has_break(caught.stmt) ||
-               loop_body_has_break(caught.body);
+        return has_loop_break(caught.stmt) ||
+               has_loop_break(caught.body);
     }
     return false;
 }
@@ -3566,6 +3856,10 @@ func compile_class_method_call(c -> Compiler, s_info -> StructInfo, obj_res -> C
         throw_name_error(n_call.pos, "Method '" + method_name + "' not found in '" + s_info.name + "'.");
         return void_result();
     }
+    if (obj_res.is_const_access && (s_info.is_interface || (f_info is !null && f_info.mutates_self))) {
+        throw_type_error(n_call.pos, "cannot call mutating method '" + method_name + "' through const value");
+        return CompileResult(reg="poison", type=TYPE_POISON);
+    }
     
     let func_ptr -> String = "";
     let sig -> String = "";
@@ -3654,6 +3948,16 @@ func compile_class_method_call(c -> Compiler, s_info -> StructInfo, obj_res -> C
         throw_type_error(n_call.pos, "Argument count mismatch in method call. Expected " + exp_len + ", got " + a_len);
         return CompileResult(reg="0", type=ret_type, origin_type=0);
     }
+    if (!s_info.is_interface && f_info is !null) {
+        args = bind_call_args(args, f_info.arg_names, 1, n_call.pos);
+        if (args is null && exp_len > 0) { return CompileResult(reg="poison", type=TYPE_POISON); }
+    } else if (s_info.is_interface) {
+        let interface_names -> Vector(String) = [];
+        let name_index -> Int = 0;
+        while (m_node.params is !null && name_index < m_node.params.length()) { let param -> ParamNode = m_node.params[name_index]; interface_names.append(param.name_tok.value); name_index += 1; }
+        args = bind_call_args(args, interface_names, 0, n_call.pos);
+        if (args is null && exp_len > 0) { return CompileResult(reg="poison", type=TYPE_POISON); }
+    }
 
     let arg_idx -> Int = 0;
     while (arg_idx < a_len) {
@@ -3691,7 +3995,7 @@ func compile_class_method_call(c -> Compiler, s_info -> StructInfo, obj_res -> C
         c.output_file.write(c.indent + call_res + " = call " + llvm_ret_type + " " + func_ptr + "(" + args_str + ")\n");
         emit_release_owned_args(c, owned_args);
         emit_release_owned(c, obj_res);
-        return CompileResult(reg=call_res, type=ret_type, origin_type=0, owns_ref=result_owns_value(c, ret_type));
+        return CompileResult(reg=call_res, type=ret_type, origin_type=0, owns_ref=result_owns_value(c, ret_type), is_const_access=obj_res.is_const_access);
     }
 }
 
@@ -3705,6 +4009,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
         scope.local_vars.put(p_node.name_tok.value, TypeListNode(type=1));
         p_i += 1;
     }
+    if (func_def.name_tok.value.length() > 0) { scope.local_vars.put(func_def.name_tok.value, TypeListNode(type=1)); }
 
     analyze_captures(func_def.body, scope);
     
@@ -3848,6 +4153,25 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     c.reg_count = 1;
     c.current_ret_type = ret_type_id;
 
+    if (func_def.name_tok.value.length() > 0) {
+        let self_storage -> String = next_reg(c);
+        let self_function_slot -> String = next_reg(c);
+        let self_environment_slot -> String = next_reg(c);
+        let self_function -> String = next_reg(c);
+        let self_closure -> String = next_reg(c);
+        let self_address -> String = next_reg(c);
+        c.output_file.write("  " + self_storage + " = alloca [2 x i8*]\n");
+        c.output_file.write("  " + self_function_slot + " = getelementptr inbounds [2 x i8*], [2 x i8*]* " + self_storage + ", i32 0, i32 0\n");
+        c.output_file.write("  " + self_environment_slot + " = getelementptr inbounds [2 x i8*], [2 x i8*]* " + self_storage + ", i32 0, i32 1\n");
+        c.output_file.write("  " + self_function + " = bitcast " + ret_ty_str + " (" + sig_ty + ")* @" + lambda_name + " to i8*\n");
+        c.output_file.write("  store i8* " + self_function + ", i8** " + self_function_slot + "\n");
+        c.output_file.write("  store i8* %raw_env, i8** " + self_environment_slot + "\n");
+        c.output_file.write("  " + self_closure + " = bitcast [2 x i8*]* " + self_storage + " to i8*\n");
+        c.output_file.write("  " + self_address + " = alloca i8*\n");
+        c.output_file.write("  store i8* " + self_closure + ", i8** " + self_address + "\n");
+        c.symbol_table.table.put(func_def.name_tok.value, SymbolInfo(reg=self_address, type=specific_type_id, origin_type=ret_type_id, is_const=true));
+    }
+
     let lambda_env_ptr -> String = "%lambda_env_ptr";
     c.output_file.write("  " + lambda_env_ptr + " = bitcast i8* %raw_env to " + llvm_env_name + "*\n");
 
@@ -3926,7 +4250,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
 
     c.global_buffer = c.global_buffer + lambda_ir;
 
-    let clo_payload -> String = emit_alloc_obj(c, "16", "8", "i8*");
+    let clo_payload -> String = emit_alloc_closure(c, specific_type_id);
 
     let clo_func_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + clo_func_ptr + " = bitcast i8* " + clo_payload + " to i8**\n");
@@ -3957,9 +4281,6 @@ func compile_return(c -> Compiler, node -> ReturnNode) -> CompileResult {
         c.expected_type = c.current_ret_type;
         let res -> CompileResult = compile_node(c, node.value);
         c.expected_type = 0;
-
-        let ret_val_reg -> String = res.reg;
-        let target_ty -> String = get_llvm_type_str(c, c.current_ret_type);
 
         if (res.type == TYPE_NULLPTR) {
             if (!is_pointer_type(c, c.current_ret_type)) {
@@ -4068,10 +4389,13 @@ func compile_struct_def(c -> Compiler, node -> StructDefNode) -> CompileResult {
     let fields -> Vector(Struct) = node.fields;
     let f_len -> Int = 0; if (fields is !null) { f_len = fields.length(); }
     let idx -> Int = 0;
+    let field_names -> Dict = Dict(8);
     
     while (idx < f_len) {
         let p -> ParamNode = fields[idx];
         let f_name -> String = p.name_tok.value;
+        if (field_names.contains_key(f_name)) { throw_name_error(p.pos, "field '" + f_name + "' is already defined in struct '" + struct_name + "'"); return void_result(); }
+        field_names.put(f_name, StringConstant(id=0, value=f_name));
         let f_type_id -> Int = resolve_type(c, p.type_tok);
         if (f_type_id == TYPE_AUTO) {
             throw_type_error(node.pos, "Struct fields cannot use 'Auto' because they lack initializers for static deduction.");
@@ -4082,7 +4406,7 @@ func compile_struct_def(c -> Compiler, node -> StructDefNode) -> CompileResult {
         if (idx > 0) { llvm_body = llvm_body + ", "; }
         llvm_body += f_llvm_type;
         
-        fields_vec.append(FieldInfo(name=f_name, type=f_type_id, llvm_type=f_llvm_type, offset=idx));
+        fields_vec.append(FieldInfo(name=f_name, type=f_type_id, llvm_type=f_llvm_type, offset=idx, is_const=false));
         idx += 1;
     }
 
@@ -4145,14 +4469,29 @@ func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode
     let args -> Vector(Struct) = n_call.args;
     let a_len -> Int = 0;
     if (args is !null) { a_len = args.length(); }
+    if (a_len > f_len) {
+        throw_type_error(n_call.pos, "struct '" + s_info.name + "' accepts at most " + f_len + " arguments, got " + a_len);
+        return CompileResult(reg="poison", type=TYPE_POISON);
+    }
     let arg_idx -> Int = 0;
+    let assigned_fields -> Dict = Dict(8);
+    let saw_named -> Bool = false;
     
     while (arg_idx < a_len) {
         let arg_curr -> ArgNode = args[arg_idx];
 
         let target_f -> FieldInfo = null;
-        if (arg_curr.name is !null) { target_f = find_field(s_info, arg_curr.name); } 
-        else { target_f = get_field_by_index(s_info, arg_idx); }
+        if (arg_curr.name is !null) {
+            saw_named = true;
+            target_f = find_field(s_info, arg_curr.name);
+            if (target_f is null) { throw_name_error(n_call.pos, "struct '" + s_info.name + "' has no field '" + arg_curr.name + "'"); return CompileResult(reg="poison", type=TYPE_POISON); }
+        } else {
+            if (saw_named) { throw_invalid_syntax(n_call.pos, "positional argument cannot follow a named argument"); return CompileResult(reg="poison", type=TYPE_POISON); }
+            target_f = get_field_by_index(s_info, arg_idx);
+        }
+        if (target_f is null) { throw_type_error(n_call.pos, "too many arguments for struct '" + s_info.name + "'"); return CompileResult(reg="poison", type=TYPE_POISON); }
+        if (assigned_fields.contains_key(target_f.name)) { throw_name_error(n_call.pos, "field '" + target_f.name + "' is initialized more than once"); return CompileResult(reg="poison", type=TYPE_POISON); }
+        assigned_fields.put(target_f.name, StringConstant(id=0, value=target_f.name));
 
         if (target_f is !null) { c.expected_type = target_f.type; }
         let val_res -> CompileResult = compile_node(c, arg_curr.val);
@@ -5164,6 +5503,9 @@ func compile_class_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode)
             return void_result();
         }
 
+        args = bind_call_args(args, init_func.arg_names, 1, n_call.pos);
+        if (args is null && expected_arg_count > 0) { return CompileResult(reg="poison", type=TYPE_POISON); }
+
         while (arg_idx < a_len) {
             let arg_node_curr -> ArgNode = args[arg_idx];
             let type_node_curr -> TypeListNode = arg_types[arg_idx + 1]; // +1 skip self
@@ -5226,6 +5568,23 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
         info.parent_id = parent_info.type_id;
     }
 
+    let effective_interfaces -> Vector(Struct) = [];
+    if (parent_info is !null) {
+        let inherited_idx -> Int = 0;
+        while (parent_info.interfaces is !null && inherited_idx < parent_info.interfaces.length()) {
+            let inherited -> Token = parent_info.interfaces[inherited_idx];
+            if (!add_interface(c, effective_interfaces, inherited, node.pos)) { return void_result(); }
+            inherited_idx += 1;
+        }
+    }
+    let declared_idx -> Int = 0;
+    while (node.interfaces is !null && declared_idx < node.interfaces.length()) {
+        let declared -> Token = node.interfaces[declared_idx];
+        if (!add_interface(c, effective_interfaces, declared, node.pos)) { return void_result(); }
+        declared_idx += 1;
+    }
+    info.interfaces = effective_interfaces;
+
     check_class_initialization(c, class_name, node, parent_info);
 
     let llvm_body -> String = "";
@@ -5239,7 +5598,7 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
         let pf_i -> Int = 0;
         while (pf_i < pf_len) {
             let pf -> FieldInfo = p_fields[pf_i];
-            fields_vec.append(FieldInfo(name=pf.name, type=pf.type, llvm_type=pf.llvm_type, offset=pf.offset));
+            fields_vec.append(FieldInfo(name=pf.name, type=pf.type, llvm_type=pf.llvm_type, offset=pf.offset, is_const=pf.is_const));
             if (pf_i > 0) { llvm_body += ", "; }
             llvm_body += pf.llvm_type;
             current_offset += 1;
@@ -5254,7 +5613,7 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
             pvt_i += 1;
         }
     } else {
-        fields_vec.append(FieldInfo(name="_vptr", type=TYPE_VOID, llvm_type="i8*", offset=0));
+        fields_vec.append(FieldInfo(name="_vptr", type=TYPE_VOID, llvm_type="i8*", offset=0, is_const=true));
         llvm_body = "i8*";
         current_offset = 1;
     }
@@ -5262,9 +5621,14 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
     let my_fields -> Vector(Struct) = node.fields;
     let mf_len -> Int = 0; if (my_fields is !null) { mf_len = my_fields.length(); }
     let mf_idx -> Int = 0;
+    let class_field_names -> Dict = Dict(8);
+    let inherited_field_idx -> Int = 0;
+    while (inherited_field_idx < fields_vec.length()) { let inherited_field -> FieldInfo = fields_vec[inherited_field_idx]; class_field_names.put(inherited_field.name, StringConstant(id=0, value=inherited_field.name)); inherited_field_idx += 1; }
     while (mf_idx < mf_len) {
         let p -> VarDeclareNode = my_fields[mf_idx];
         let f_name -> String = p.name_tok.value;
+        if (class_field_names.contains_key(f_name)) { throw_name_error(p.pos, "field '" + f_name + "' is already defined in class '" + class_name + "'"); return void_result(); }
+        class_field_names.put(f_name, StringConstant(id=0, value=f_name));
         let f_type_id -> Int = resolve_type(c, p.type_node);
 
         if (f_type_id == TYPE_AUTO) {
@@ -5287,7 +5651,7 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
         
         if (current_offset > 0) { llvm_body += ", "; }
         llvm_body += f_llvm_type;
-        fields_vec.append(FieldInfo(name=f_name, type=f_type_id, llvm_type=f_llvm_type, offset=current_offset));
+        fields_vec.append(FieldInfo(name=f_name, type=f_type_id, llvm_type=f_llvm_type, offset=current_offset, is_const=p.is_const));
         current_offset += 1;
         mf_idx += 1;
     }
@@ -5318,6 +5682,10 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
             while (vt_i < vt_len) {
                 let p_func -> FuncInfo = vtable_vec[vt_i];
                 if (p_func.base_name == raw_m_name) {
+                    if (!same_method_signature(p_func, f_info)) {
+                        throw_type_error(m_node.pos, "override of '" + raw_m_name + "' does not match the parent method signature");
+                        return void_result();
+                    }
                     vtable_vec[vt_i] = f_info;
                     is_override = true;
                     break;
@@ -5357,12 +5725,12 @@ func compile_class_def(c -> Compiler, node -> ClassDefNode) -> CompileResult {
         while (i_idx < i_len) {
             let i_tok -> Token = info.interfaces[i_idx];
             let raw_i_name -> String = i_tok.value;
-            let i_name -> String = c.current_package_prefix + raw_i_name;
-            let i_info -> StructInfo = c.struct_table.get(i_name);
+            let i_info -> StructInfo = lookup_interface(c, i_tok);
             if (i_info is null || !i_info.is_interface) {
                 throw_name_error(node.pos, "Interface '" + raw_i_name + "' is not defined or is not an interface.");
                 return void_result();
             }
+            let i_name -> String = i_info.name;
             
             let im_methods -> Vector(Struct) = i_info.vtable;
             let im_len -> Int = 0; if (im_methods is !null) { im_len = im_methods.length(); }
@@ -5581,7 +5949,15 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
 
     let is_null -> String = next_reg(c);
     let obj_llvm_ty -> String = get_llvm_type_str(c, obj_res.type);
-    c.output_file.write(c.indent + is_null + " = icmp eq " + obj_llvm_ty + " " + obj_reg + ", null\n");
+    let null_check_reg -> String = obj_reg;
+    let null_check_type -> String = obj_llvm_ty;
+    let null_info -> StructInfo = c.struct_id_map.get("" + obj_res.type);
+    if (null_info is !null && null_info.is_interface) {
+        null_check_reg = next_reg(c);
+        null_check_type = "i8*";
+        c.output_file.write(c.indent + null_check_reg + " = extractvalue { i8*, i8* } " + obj_reg + ", 0\n");
+    }
+    c.output_file.write(c.indent + is_null + " = icmp eq " + null_check_type + " " + null_check_reg + ", null\n");
     let label_ok -> String = "access_ok_" + c.reg_count;
     let label_fail -> String = "access_fail_" + c.reg_count;
     c.reg_count += 1;
@@ -5642,13 +6018,65 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
         let arr_check -> ArrayInfo = c.array_info_map.get("" + field.type);
         if (arr_check is !null) {
             if (arr_check.size != -1) {
-                return CompileResult(reg=f_ptr, type=field.type);
+                return CompileResult(reg=f_ptr, type=field.type, is_const_access=obj_res.is_const_access);
             }
         }
 
         let val_reg -> String = next_reg(c);
         c.output_file.write(c.indent + val_reg + " = load " + field.llvm_type + ", " + field.llvm_type + "* " + f_ptr + "\n");
-        return CompileResult(reg=val_reg, type=field.type);
+        return CompileResult(reg=val_reg, type=field.type, is_const_access=obj_res.is_const_access);
+    }
+
+    if (s_info.is_interface) {
+        let methods -> Vector(Struct) = s_info.vtable;
+        let method_count -> Int = 0; if (methods is !null) { method_count = methods.length(); }
+        let method_index -> Int = 0;
+        let method_node -> MethodDefNode = null;
+        while (method_index < method_count) { let candidate -> MethodDefNode = methods[method_index]; if (candidate.name_tok.value == node.field_name) { method_node = candidate; break; } method_index += 1; }
+        if (method_node is !null) {
+            if (obj_res.is_const_access) {
+                throw_type_error(node.pos, "cannot bind a method through const value");
+                return CompileResult(reg="poison", type=TYPE_POISON);
+            }
+            let object_ptr -> String = next_reg(c);
+            let table_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + object_ptr + " = extractvalue { i8*, i8* } " + obj_reg + ", 0\n");
+            c.output_file.write(c.indent + table_ptr + " = extractvalue { i8*, i8* } " + obj_reg + ", 1\n");
+
+            let table_type -> String = "[ " + method_count + " x i8* ]";
+            let typed_table -> String = next_reg(c);
+            c.output_file.write(c.indent + typed_table + " = bitcast i8* " + table_ptr + " to " + table_type + "*\n");
+
+            let method_addr -> String = next_reg(c);
+            let method_ptr -> String = next_reg(c);
+            c.output_file.write(c.indent + method_addr + " = getelementptr inbounds " + table_type + ", " + table_type + "* " + typed_table + ", i32 0, i32 " + method_index + "\n");
+            c.output_file.write(c.indent + method_ptr + " = load i8*, i8** " + method_addr + "\n");
+
+            let bound_args -> Vector(Struct) = [];
+            let param_index -> Int = 0;
+            while (method_node.params is !null && param_index < method_node.params.length()) {
+                let param -> ParamNode = method_node.params[param_index];
+                bound_args.append(TypeListNode(type=resolve_type(c, param.type_tok)));
+                param_index += 1;
+            }
+            let return_type -> Int = resolve_type(c, method_node.return_type);
+            let specific_type_id -> Int = get_method_type_id(c, bound_args, return_type);
+            let closure -> String = emit_alloc_closure(c, specific_type_id);
+            let function_slot -> String = next_reg(c);
+            c.output_file.write(c.indent + function_slot + " = bitcast i8* " + closure + " to i8**\n");
+            c.output_file.write(c.indent + "store i8* " + method_ptr + ", i8** " + function_slot + "\n");
+
+            let environment_bytes -> String = next_reg(c);
+            let environment_slot -> String = next_reg(c);
+            c.output_file.write(c.indent + environment_bytes + " = getelementptr inbounds i8, i8* " + closure + ", i32 8\n");
+            c.output_file.write(c.indent + environment_slot + " = bitcast i8* " + environment_bytes + " to i8**\n");
+            c.output_file.write(c.indent + "store i8* " + object_ptr + ", i8** " + environment_slot + "\n");
+
+            emit_retain(c, obj_reg, type_id);
+            emit_retain(c, closure, specific_type_id);
+
+            return CompileResult(reg=closure, type=specific_type_id, origin_type=return_type);
+        }
     }
 
     if (s_info.is_class) {
@@ -5667,6 +6095,10 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
         }
         
         if (target_func is !null) {
+            if (obj_res.is_const_access) {
+                throw_type_error(node.pos, "Cannot bind a method through const value");
+                return CompileResult(reg="poison", type=TYPE_POISON);
+            }
             let class_llvm_ty -> String = s_info.llvm_name;
             let vptr_addr -> String = next_reg(c);
             c.output_file.write(c.indent + vptr_addr + " = getelementptr inbounds " + class_llvm_ty + ", " + class_llvm_ty + "* " + obj_reg + ", i32 0, i32 0\n");
@@ -5686,8 +6118,7 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
                 ba_idx += 1;
             }
             let specific_type_id -> Int = get_method_type_id(c, bound_args, target_func.ret_type);
-            // 8 is TYPE_GENERIC_FUNCTION
-            let clo_payload -> String = emit_alloc_obj(c, "16", "8", "i8*");
+            let clo_payload -> String = emit_alloc_closure(c, specific_type_id);
             
             let clo_func_ptr -> String = next_reg(c);
             c.output_file.write(c.indent + clo_func_ptr + " = bitcast i8* " + clo_payload + " to i8**\n");
@@ -5712,6 +6143,9 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
 }
 
 func compile_field_assign(c -> Compiler, node -> FieldAssignNode) -> CompileResult {
+    if (reject_const_write(c, node.obj, node.pos)) {
+        return CompileResult(reg="poison", type=TYPE_POISON);
+    }
     let obj_base -> BaseNode = node.obj;
 
     let is_module -> Bool = false;
@@ -5899,7 +6333,11 @@ func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult
     }
 
     let arg_types -> Vector(Struct) = [];
+    let arg_names -> Vector(String) = [];
     let params -> Vector(Struct) = node.params;
+    if (!check_duplicate_params(params, "extern function '" + func_name + "'", node.pos)) {
+        return void_result();
+    }
     let p_len -> Int = 0; if (params is !null) { p_len = params.length(); }
     let p_idx -> Int = 0;
     let params_str -> String = "";
@@ -5913,6 +6351,7 @@ func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult
         }
 
         arg_types.append(TypeListNode(type=p_id));
+        arg_names.append(p.name_tok.value);
         if (p_idx > 0) { params_str += ", "; }
         params_str += get_llvm_type_str(c, p_id);
         p_idx += 1;
@@ -5944,7 +6383,7 @@ func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult
         return void_result();
     }
 
-    c.func_table.put(full_func_name, FuncInfo(name=func_name, base_name=func_name, ret_type=ret_type_id, arg_types=arg_types, is_varargs=node.is_varargs, abi_name=abi_name));
+    c.func_table.put(full_func_name, FuncInfo(name=func_name, base_name=func_name, ret_type=ret_type_id, arg_types=arg_types, arg_names=arg_names, is_varargs=node.is_varargs, abi_name=abi_name, mutates_self=false));
     register_extern_library(c, node.link_name, node.pos);
     return void_result();
 }
@@ -6009,10 +6448,14 @@ func compile_array_literal(c -> Compiler, lit_node -> VectorLitNode, target_arr_
 }
 
 func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallNode) -> CompileResult {
+    if (reject_const_write(c, vec_node, call_node.pos)) { return CompileResult(reg="poison", type=TYPE_POISON); }
     let args -> Vector(Struct) = call_node.args;
     let a_len -> Int = 0;
     if (args is !null) { a_len = args.length(); }
     if (a_len != 1) { throw_type_error(call_node.pos, "append expects exactly 1 argument."); return void_result(); }
+    let append_names -> Vector(String) = ["value"];
+    args = bind_call_args(args, append_names, 0, call_node.pos);
+    if (args is null) { return CompileResult(reg="poison", type=TYPE_POISON); }
     
     let arg_node -> ArgNode = args[0];
     let vec_res -> CompileResult = compile_node(c, vec_node);
@@ -6127,6 +6570,7 @@ func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallN
     return void_result();
 }
 func compile_vector_drop(c -> Compiler, vec_node -> Struct, call_node -> CallNode) -> CompileResult {
+    if (reject_const_write(c, vec_node, call_node.pos)) { return CompileResult(reg="poison", type=TYPE_POISON); }
     let args -> Vector(Struct) = call_node.args;
     let a_len -> Int = 0;
     if (args is !null) { a_len = args.length(); }
@@ -6452,12 +6896,12 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
         c.output_file.write(c.indent + ptr_reg + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i32 " + idx_i32 + "\n");
 
         if (c.array_info_map.get("" + elem_type) is !null) {
-            return CompileResult(reg=ptr_reg, type=elem_type, origin_type=elem_type);
+            return CompileResult(reg=ptr_reg, type=elem_type, origin_type=elem_type, is_const_access=target_res.is_const_access);
         }
         
         let val_reg -> String = next_reg(c);
         c.output_file.write(c.indent + val_reg + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + ptr_reg + "\n");
-        return CompileResult(reg=val_reg, type=elem_type, origin_type=elem_type);
+        return CompileResult(reg=val_reg, type=elem_type, origin_type=elem_type, is_const_access=target_res.is_const_access);
     }
     
     // Vector access
@@ -6491,7 +6935,7 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
         let val_reg -> String = next_reg(c);
         c.output_file.write(c.indent + val_reg + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot_ptr + "\n");
         
-        return CompileResult(reg=val_reg, type=elem_type);
+        return CompileResult(reg=val_reg, type=elem_type, is_const_access=target_res.is_const_access);
     }
 
     throw_type_error(node.pos, "Type " + get_type_name(c, target_res.type) + " is not indexable.");
@@ -6499,6 +6943,7 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
 }
 
 func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResult {
+    if (reject_const_write(c, node.target, node.pos)) { return CompileResult(reg="poison", type=TYPE_POISON); }
     check_out_index(c, node.target, node.index_node, node.pos);
     let target_res -> CompileResult = compile_node(c, node.target);
     if (target_res is !null && target_res.type == TYPE_POISON) { return CompileResult(reg="poison", type=TYPE_POISON); }
@@ -6865,6 +7310,7 @@ func compile_enum_def(c -> Compiler, node -> EnumDefNode) -> CompileResult {
     let i -> Int = 0;
     
     let current_val -> Long = 0L;
+    let member_names -> Dict = Dict(8);
 
     while (i < len) {
         let f_node -> EnumFieldNode = fields[i];
@@ -6874,6 +7320,15 @@ func compile_enum_def(c -> Compiler, node -> EnumDefNode) -> CompileResult {
         }
         
         let field_name -> String = f_node.name_tok.value;
+        if (member_names.contains_key(field_name)) {
+            throw_name_error(f_node.pos, "member '" + field_name + "' is already defined in " + enum_name);
+            return void_result();
+        }
+        member_names.put(field_name, StringConstant(id=0, value=field_name));
+        if (current_val < -2147483648L || current_val > 2147483647L) {
+            throw_overflow_error(f_node.pos, "value for '" + field_name + "' is outside the Int range");
+            return void_result();
+        }
         let global_name -> String = "@" + enum_name + "." + field_name;
         
         c.output_file.write(global_name + " = global " + llvm_ty_str + " " + current_val + "\n");
@@ -7056,7 +7511,7 @@ func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> Compi
             let cast_reg -> String = next_reg(c);
             c.output_file.write(c.indent + cast_reg + " = bitcast " + sig + " " + func_ptr + " to i8*\n");
 
-            let clo_payload -> String = emit_alloc_obj(c, "16", "8", "i8*");
+            let clo_payload -> String = emit_alloc_closure(c, specific_type_id);
             let clo_func_ptr -> String = next_reg(c);
             c.output_file.write(c.indent + clo_func_ptr + " = bitcast i8* " + clo_payload + " to i8**\n");
             c.output_file.write(c.indent + "store i8* " + cast_reg + ", i8** " + clo_func_ptr + "\n");
@@ -7239,7 +7694,7 @@ func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> Compi
                     let cast_reg -> String = next_reg(c);
                     c.output_file.write(c.indent + cast_reg + " = bitcast i8* " + method_i8ptr + " to i8*\n");
 
-                    let clo_payload -> String = emit_alloc_obj(c, "16", "8", "i8*");
+                    let clo_payload -> String = emit_alloc_closure(c, specific_type_id);
                     let clo_func_ptr -> String = next_reg(c);
                     c.output_file.write(c.indent + clo_func_ptr + " = bitcast i8* " + clo_payload + " to i8**\n");
                     c.output_file.write(c.indent + "store i8* " + cast_reg + ", i8** " + clo_func_ptr + "\n");
@@ -7404,6 +7859,13 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
     // String
     if (left.type == TYPE_STRING || right.type == TYPE_STRING) {
         if (op_type == TOK_PLUS) {
+            let left_stringable -> Bool = left.type == TYPE_STRING || left.type == TYPE_NULL || is_primitive_type(left.type);
+            let right_stringable -> Bool = right.type == TYPE_STRING || right.type == TYPE_NULL || is_primitive_type(right.type);
+            if (!left_stringable || !right_stringable) {
+                let invalid_type -> Int = left.type; if (left_stringable) { invalid_type = right.type; }
+                throw_type_error(node.pos, "cannot concatenate String and " + get_type_name(c, invalid_type));
+                return CompileResult(reg="poison", type=TYPE_POISON);
+            }
             // convert type
             if (left.type != TYPE_STRING) {
                 left = convert_to_string(c, left);
@@ -7452,6 +7914,12 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
     }
 
     if (op_type == TOK_POW) {
+        let left_numeric -> Bool = is_integer_type(left.type) || left.type == TYPE_FLOAT || left.type == TYPE_FLOAT32;
+        let right_numeric -> Bool = is_integer_type(right.type) || right.type == TYPE_FLOAT || right.type == TYPE_FLOAT32;
+        if (!left_numeric || !right_numeric) {
+            throw_type_error(node.pos, "operator '**' requires numeric operands");
+            return CompileResult(reg="poison", type=TYPE_POISON);
+        }
         left = promote_to_float(c, left);
         right = promote_to_float(c, right);
         let res_reg -> String = next_reg(c);
@@ -7560,6 +8028,23 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
         return void_result();
     }
 
+
+    if (is_integer_type(left.type) && is_integer_type(right.type) &&
+        is_signed_integer(left.type) != is_signed_integer(right.type)) {
+        let safe_widening -> Bool = false;
+        if (is_signed_integer(left.type) && get_type_bitwidth(left.type) > get_type_bitwidth(right.type)) { safe_widening = true; }
+        if (is_signed_integer(right.type) && get_type_bitwidth(right.type) > get_type_bitwidth(left.type)) { safe_widening = true; }
+        if safe_widening {
+        } else if (is_unsuffix_int_literal(node.left)) {
+            left = compile_type_cast(c, left, right.type, node.pos);
+        } else if (is_unsuffix_int_literal(node.right)) {
+            right = compile_type_cast(c, right, left.type, node.pos);
+        } else {
+            throw_type_error(node.pos, "cannot mix signed and unsigned integers without an explicit conversion");
+            return CompileResult(reg="poison", type=TYPE_POISON);
+        }
+    }
+
     let target_type -> Int = left.type;
     if (left.type == TYPE_FLOAT || right.type == TYPE_FLOAT) {
         target_type = TYPE_FLOAT;
@@ -7590,7 +8075,7 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
     if is_cmp {
         if (target_type == TYPE_FLOAT || target_type == TYPE_FLOAT32) {
             if (op_type == TOK_EE) { op_code = "fcmp oeq"; }
-            else if (op_type == TOK_NE) { op_code = "fcmp one"; }
+            else if (op_type == TOK_NE) { op_code = "fcmp une"; }
             else if (op_type == TOK_GT) { op_code = "fcmp ogt"; }
             else if (op_type == TOK_LT) { op_code = "fcmp olt"; }
             else if (op_type == TOK_GTE) { op_code = "fcmp oge"; }
@@ -7671,6 +8156,36 @@ func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
                 emit_runtime_error(c, node.pos, "Signed division overflow");
                 c.output_file.write("\n" + arithmetic_label + ":\n");
             }
+        }
+    }
+
+
+    if (op_type == TOK_LSHIFT || op_type == TOK_RSHIFT) {
+        let shift_bits -> Int = get_type_bitwidth(target_type);
+        if (is_unsuffix_int_literal(node.right)) {
+            let amount -> Long = eval_const_long(c, node.right, node.pos);
+            if (amount < 0L || amount >= Long(shift_bits)) {
+                throw_overflow_error(node.pos, "shift count must be between 0 and " + (shift_bits - 1));
+                return CompileResult(reg="poison", type=TYPE_POISON);
+            }
+        } else {
+            let too_large -> String = next_reg(c);
+            let invalid -> String = too_large;
+            c.output_file.write(c.indent + too_large + " = icmp uge " + type_str + " " + right.reg + ", " + shift_bits + "\n");
+            if (is_signed_integer(target_type)) {
+                let negative -> String = next_reg(c);
+                let combined -> String = next_reg(c);
+                c.output_file.write(c.indent + negative + " = icmp slt " + type_str + " " + right.reg + ", 0\n");
+                c.output_file.write(c.indent + combined + " = or i1 " + negative + ", " + too_large + "\n");
+                invalid = combined;
+            }
+            let error_label -> String = "shift_error_" + c.type_counter;
+            let shift_label -> String = "shift_ok_" + c.type_counter;
+            c.type_counter += 1;
+            c.output_file.write(c.indent + "br i1 " + invalid + ", label %" + error_label + ", label %" + shift_label + "\n");
+            c.output_file.write("\n" + error_label + ":\n");
+            emit_runtime_error(c, node.pos, "Invalid shift count");
+            c.output_file.write("\n" + shift_label + ":\n");
         }
     }
 
@@ -7785,6 +8300,8 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     if (base.type == NODE_REF) {
         let r_node -> RefNode = node;
 
+        if (reject_const_write(c, r_node.node, r_node.pos)) { return CompileResult(reg="poison", type=TYPE_POISON); }
+
         let ref_base -> BaseNode = r_node.node;
         if (ref_base.type == NODE_SLICE_ACCESS) {
             let slice_node -> SliceAccessNode = r_node.node;
@@ -7835,7 +8352,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             curr_type = next_type;
             i += 1;
         }
-        return CompileResult(reg=curr_reg, type=curr_type);
+        return CompileResult(reg=curr_reg, type=curr_type, is_const_access=res.is_const_access);
     }
 
     if (base.type == NODE_IMPORT) { 
@@ -7875,23 +8392,38 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             throw_type_error(b_node.pos, "Cannot use 'nullptr' with non-pointer types.");
             return void_result();
         }
-        if (is_primitive_type(lhs_res.type)) {
-            throw_type_error(b_node.pos, "Operator 'is' cannot be used with primitive types.");
+        if ((is_primitive_type(lhs_res.type) && lhs_res.type != TYPE_NULL && lhs_res.type != TYPE_NULLPTR) ||
+            (is_primitive_type(rhs_res.type) && rhs_res.type != TYPE_NULL && rhs_res.type != TYPE_NULLPTR)) {
+            throw_type_error(b_node.pos, "Operator 'is' requires reference or pointer operands");
             return void_result();
         }
         
         // convert to i8* for address comparison
         if (lhs_res.type != TYPE_STRING && lhs_res.type != TYPE_NULL && lhs_res.type != TYPE_NULLPTR) {
-            let cast_l -> String = next_reg(c);
-            let ty_l -> String = get_llvm_type_str(c, lhs_res.type);
-            c.output_file.write(c.indent + cast_l + " = bitcast " + ty_l + " " + l_reg + " to i8*\n");
-            l_reg = cast_l;
+            let lhs_info -> StructInfo = c.struct_id_map.get("" + lhs_res.type);
+            if (lhs_info is !null && lhs_info.is_interface) {
+                let object_l -> String = next_reg(c);
+                c.output_file.write(c.indent + object_l + " = extractvalue { i8*, i8* } " + l_reg + ", 0\n");
+                l_reg = object_l;
+            } else {
+                let cast_l -> String = next_reg(c);
+                let ty_l -> String = get_llvm_type_str(c, lhs_res.type);
+                c.output_file.write(c.indent + cast_l + " = bitcast " + ty_l + " " + l_reg + " to i8*\n");
+                l_reg = cast_l;
+            }
         }
         if (rhs_res.type != TYPE_STRING && rhs_res.type != TYPE_NULL && rhs_res.type != TYPE_NULLPTR) {
-            let cast_r -> String = next_reg(c);
-            let ty_r -> String = get_llvm_type_str(c, rhs_res.type);
-            c.output_file.write(c.indent + cast_r + " = bitcast " + ty_r + " " + r_reg + " to i8*\n");
-            r_reg = cast_r;
+            let rhs_info -> StructInfo = c.struct_id_map.get("" + rhs_res.type);
+            if (rhs_info is !null && rhs_info.is_interface) {
+                let object_r -> String = next_reg(c);
+                c.output_file.write(c.indent + object_r + " = extractvalue { i8*, i8* } " + r_reg + ", 0\n");
+                r_reg = object_r;
+            } else {
+                let cast_r -> String = next_reg(c);
+                let ty_r -> String = get_llvm_type_str(c, rhs_res.type);
+                c.output_file.write(c.indent + cast_r + " = bitcast " + ty_r + " " + r_reg + " to i8*\n");
+                r_reg = cast_r;
+            }
         }
 
         let cmp_reg -> String = next_reg(c);
@@ -7920,13 +8452,13 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             t_id = TYPE_INT128;
         } else if (raw_val.ends_with("UL") || raw_val.ends_with("ul")) {
             suffix_len = 2;
-            if (t_id == 0) { t_id = TYPE_UINT64; }
+            if (t_id == 0 || !is_integer_type(t_id)) { t_id = TYPE_UINT64; }
         } else if (raw_val.ends_with("U") || raw_val.ends_with("u")) {
             suffix_len = 1;
-            if (t_id == 0) { t_id = TYPE_UINT32; }
+            if (t_id == 0 || !is_integer_type(t_id)) { t_id = TYPE_UINT32; }
         } else if (raw_val.ends_with("L") || raw_val.ends_with("l")) {
             suffix_len = 1;
-            if (t_id == 0) { t_id = TYPE_LONG; }
+            if (t_id == 0 || !is_integer_type(t_id)) { t_id = TYPE_LONG; }
         }
 
         if (exceeds_64bit_range(raw_val)) {
@@ -8064,7 +8596,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 
                 let cast_reg -> String = next_reg(c);
                 c.output_file.write(c.indent + cast_reg + " = bitcast " + sig + " " + func_ptr + " to i8*\n");
-                let clo_payload -> String = emit_alloc_obj(c, "16", "" + TYPE_GENERIC_FUNCTION, "i8*");
+                let clo_payload -> String = emit_alloc_closure(c, specific_type_id);
                 let clo_func_ptr_i8 -> String = clo_payload;
                 let clo_func_ptr -> String = next_reg(c);
                 c.output_file.write(c.indent + clo_func_ptr + " = bitcast i8* " + clo_func_ptr_i8 + " to i8**\n");
@@ -8099,13 +8631,13 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         let arr_check -> ArrayInfo = c.array_info_map.get("" + info.type);
         if (arr_check is !null) {
             if (arr_check.size != -1) {
-                return CompileResult(reg=info.reg, type=info.type, origin_type=info.origin_type);
+                return CompileResult(reg=info.reg, type=info.type, origin_type=info.origin_type, is_const_access=info.is_const || info.is_const_access);
             }
         }
         
         let val_reg -> String = next_reg(c);
         c.output_file.write(c.indent + val_reg + " = load " + llvm_ty_str + ", " + llvm_ty_str + "* " + info.reg + "\n");
-        return CompileResult(reg=val_reg, type=info.type, origin_type=info.origin_type);
+        return CompileResult(reg=val_reg, type=info.type, origin_type=info.origin_type, is_const_access=info.is_const || info.is_const_access);
     }
 
     if (base.type == NODE_VAR_ASSIGN) {
@@ -8171,6 +8703,8 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                     throw_type_error(n_call.pos, "super." + target_m_name + " expects " + expected_arg_count + " arguments, got " + a_len + ".");
                     return void_result();
                 }
+                args = bind_call_args(args, f_info.arg_names, 1, n_call.pos);
+                if (args is null && expected_arg_count > 0) { return CompileResult(reg="poison", type=TYPE_POISON); }
 
                 while (arg_idx < a_len) {
                     let arg_node_curr -> ArgNode = args[arg_idx];
@@ -8284,6 +8818,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             if is_cast {
                 let args -> Vector(Struct) = n_call.args;
                 let a_len -> Int = 0; if (args is !null) { a_len = args.length(); }
+                if (reject_named_args(args, n_call.pos, "a type conversion")) { return CompileResult(reg="poison", type=TYPE_POISON); }
                 if (a_len != 1) {
                     throw_type_error(n_call.pos, "Type cast expects exactly 1 argument.");
                     return void_result();
@@ -8393,6 +8928,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 let args -> Vector(Struct) = n_call.args;
                 let a_len -> Int = 0;
                 if (args is !null) { a_len = args.length(); }
+                if (reject_named_args(args, n_call.pos, "print")) { return CompileResult(reg="poison", type=TYPE_POISON); }
 
                 let print_hook -> String = get_mangled_symbol(c, "print_bytes", null);
                 if (print_hook is null) {
@@ -8449,6 +8985,12 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             let arg_types -> Vector(Struct) = func_info.arg_types;
             let type_len -> Int = 0; 
             if (arg_types is !null) { type_len = arg_types.length(); }
+            if (!func_info.is_varargs) {
+                args = bind_call_args(args, func_info.arg_names, 0, n_call.pos);
+                if (args is null && type_len > 0) { return CompileResult(reg="poison", type=TYPE_POISON); }
+            } else if (reject_named_args(args, n_call.pos, "a variadic function")) {
+                return CompileResult(reg="poison", type=TYPE_POISON);
+            }
             
             let is_first -> Bool = true;
             
@@ -8634,6 +9176,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
 
                 let args -> Vector(Struct) = n_call.args;
                 let a_len -> Int = 0; if (args is !null) { a_len = args.length(); }
+                if (reject_named_args(args, n_call.pos, "a Function or Method value")) { return CompileResult(reg="poison", type=TYPE_POISON); }
                 
                 let expected_args -> Vector(Struct) = null;
                 if (ptr_type != TYPE_GENERIC_FUNCTION && ptr_type != TYPE_GENERIC_METHOD) {
@@ -8808,6 +9351,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         }
         else if (var_node.type == NODE_FIELD_ACCESS) {
             let f_acc -> FieldAccessNode = u.node;
+            if (reject_const_write(c, f_acc.obj, u.pos)) { return CompileResult(reg="poison", type=TYPE_POISON); }
             let obj_res -> CompileResult = compile_node(c, f_acc.obj);
             if (obj_res is !null && obj_res.type == TYPE_POISON) { return CompileResult(reg="poison", type=TYPE_POISON); }
             
@@ -10019,6 +10563,10 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
     }
 
     let f_info -> FuncInfo = c.func_table.get(real_func_name);
+    if (f_info is null) {
+        throw_internal_compiler_error(call_node.pos, "Missing function metadata for CompilerLink '" + target_func + "'.");
+        return CompileResult(reg="poison", type=TYPE_POISON);
+    }
     if (!validate_fallible_call(c, f_info.ret_type, call_node.preserve_fallible, method_name, call_node.pos)) {
         return CompileResult(reg="poison", type=TYPE_POISON);
     }
@@ -10030,19 +10578,19 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
     let args -> Vector(Struct) = call_node.args;
     let a_len -> Int = 0;
     if (args is !null) { a_len = args.length(); }
+    args = bind_call_args(args, f_info.arg_names, 1, call_node.pos);
+    if (args is null) { return CompileResult(reg="poison", type=TYPE_POISON); }
     let a_idx -> Int = 0;
     let owned_args -> Vector(Struct) = [];
     
     while (a_idx < a_len) {
         args_str = args_str + ", ";
         let curr_arg -> ArgNode = args[a_idx];
+        let expected_node -> TypeListNode = f_info.arg_types[a_idx + 1];
+        c.expected_type = expected_node.type;
         let arg_res -> CompileResult = compile_node(c, curr_arg.val);
-        if (arg_res.type == TYPE_BYTE) { arg_res = promote_to_int(c, arg_res); }
-        if (arg_res.type == TYPE_BOOL) { 
-            let zext_reg -> String = next_reg(c);
-            c.output_file.write(c.indent + zext_reg + " = zext i1 " + arg_res.reg + " to i32\n");
-            arg_res = CompileResult(reg=zext_reg, type=TYPE_INT);
-        }
+        c.expected_type = 0;
+        arg_res = emit_implicit_cast(c, arg_res, expected_node.type, call_node.pos);
         
         args_str = args_str + get_llvm_type_str(c, arg_res.type) + " " + arg_res.reg;
         if (arg_res.owns_ref) { owned_args.append(arg_res); }

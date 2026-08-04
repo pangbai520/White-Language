@@ -2,20 +2,20 @@
 // File: tests/e2e/projects/test_e2e_omega.wl
 // Focus: FFI ABI stability, function pointer "fire propagation", and complex generic container recursion.
 
+import "sys"
 
-extern "C" {
-    func malloc(size -> Long) -> ptr Byte;
-    func free(ptr p -> Byte) -> Void;
-}
+extern "system" { func GetCurrentProcessId() -> Int; }
+extern "C" { func getpid() -> Int; }
 
 struct Payload(id -> Long, tag -> String)
 struct Node(val -> Int, data -> Payload, next -> Node)
 func compute_sum(a -> Int, b -> Int) -> Int { return a + b; }
 
 func main() -> Int {
-    // FFI and raw memory
-    let ptr raw_ptr -> Byte = malloc(16);
-    free(raw_ptr);
+    // native FFI without introducing a Windows CRT dependency
+    let process_id -> Int = 0;
+    if (sys.OS == "WINDOWS") { process_id = GetCurrentProcessId(); }
+    else { process_id = getpid(); }
 
     // recursive Vector/Struct mix
     let v_test -> Vector(Int) = [100, 200, 300];
@@ -27,7 +27,7 @@ func main() -> Int {
     let calc_res -> Int = fn_ptr(50, 50);
 
     // final integrity assertion
-    if (calc_res == 100 && v_test.length() == 3 && head.next.val == 2) {
+    if (process_id > 0 && calc_res == 100 && v_test.length() == 3 && head.next.val == 2) {
         print("PASS: Omega system integration");
     } else {
         print("FAIL: Omega system logic collapse");
