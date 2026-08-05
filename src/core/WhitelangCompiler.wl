@@ -2638,6 +2638,7 @@ func precompile_ast(c -> Compiler, node -> Struct, final_path -> String, import_
         i += 1;
     }
 
+    bind_module_prelude(c, Position(idx=0, ln=0, col=0, text="", fn=final_path));
     pre_register_structs(c, node);
     pre_register_funcs(c, node);
     pre_register_globals(c, node);
@@ -2702,7 +2703,7 @@ func bind_loaded_prelude(c -> Compiler, path -> String, pos -> Position) -> Void
     let star -> Token = Token(type=TOK_MUL, value="*", line=pos.ln, col=pos.col);
     let symbols -> Vector(Struct) = [ImportSymbolNode(name_tok=star, alias_tok=null)];
     let path_tok -> Token = Token(type=TOK_STR_LIT, value=path, line=pos.ln, col=pos.col);
-    bind_import_symbols(c, ImportNode(type=NODE_IMPORT, path_tok=path_tok, symbols=symbols, alias_tok=null, pos=pos), loaded.value, false);
+    bind_import_symbols(c, ImportNode(type=NODE_IMPORT, path_tok=path_tok, symbols=symbols, alias_tok=null, pos=pos), loaded.value, false, true);
 }
 
 func bind_module_prelude(c -> Compiler, pos -> Position) -> Void {
@@ -2759,7 +2760,7 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
 
     if (loaded_module is !null) {
         if (node.symbols is !null) {
-            bind_import_symbols(c, node, import_prefix, true);
+            bind_import_symbols(c, node, import_prefix, true, false);
             let s_len -> Int = node.symbols.length();
             let i -> Int = 0;
             let is_star -> Bool = false;
@@ -2813,8 +2814,6 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     c.current_file_type_aliases     = Dict(32);
     c.current_file_func_aliases     = Dict(32);
     c.current_file_global_aliases   = Dict(32);
-    bind_module_prelude(c, node.pos);
-
     let lexer -> Lexer = new_lexer(final_path, source);
     let parser -> Parser = Parser(lexer=lexer, current_tok=get_next_token(lexer), nesting=0);
     let mod_ast -> Struct = parse(parser);
@@ -2832,7 +2831,7 @@ func compile_import(c -> Compiler, node -> ImportNode) -> Void {
     c.current_dir = old_dir;
 
     if (node.symbols is !null) {
-        bind_import_symbols(c, node, import_prefix, true);
+        bind_import_symbols(c, node, import_prefix, true, false);
         let s_len -> Int = node.symbols.length();
         let i -> Int = 0;
         let is_star -> Bool = false;
@@ -2872,7 +2871,7 @@ func compile_ast_pass(c -> Compiler, p_mod -> ParsedModule) -> Void {
             if (final_path is !null && final_path.length() > 0) {
                 let loaded_module -> StringConstant = c.imported_modules.get(final_path);
                 if (loaded_module is !null) {
-                    bind_import_symbols(c, imp, loaded_module.value, true);
+                    bind_import_symbols(c, imp, loaded_module.value, true, false);
                 }
             }
         }
@@ -5847,12 +5846,12 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
                     is_module = true;
                 }
                 if (!is_module) {
-                    let mapped_root -> String = c.current_file_type_aliases.get(root_name);
-                    if (mapped_root is null) {
-                        let local_type_name -> String = c.current_package_prefix + root_name;
-                        if (c.struct_table.get(local_type_name) is !null) {
-                            mapped_root = local_type_name;
-                        }
+                    let mapped_root -> String = null;
+                    let local_type_name -> String = c.current_package_prefix + root_name;
+                    if (c.struct_table.get(local_type_name) is !null) {
+                        mapped_root = local_type_name;
+                    } else {
+                        mapped_root = c.current_file_type_aliases.get(root_name);
                     }
                     if (mapped_root is !null) {
                         owner_type = c.struct_table.get(mapped_root);

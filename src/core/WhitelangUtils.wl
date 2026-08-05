@@ -564,7 +564,7 @@ func is_direct_export(name -> String) -> Bool {
     return true;
 }
 
-func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String, include_submodules -> Bool) -> Void {
+func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String, include_submodules -> Bool, keep_existing -> Bool) -> Void {
     let symbols -> Vector(Struct) = node.symbols;
     let s_len -> Int = 0; if (symbols is !null) { s_len = symbols.length(); }
     let i -> Int = 0;
@@ -589,7 +589,8 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String, in
                         let bare_name -> String = f_key.slice(p_len, f_key.length());
                         if (!bare_name.starts_with("__") && (include_submodules || is_direct_export(bare_name))) {
                             let existing_f -> String = c.current_file_func_aliases.get(bare_name);
-                            if (existing_f is !null && existing_f != f_key) {
+                            if (existing_f is !null && keep_existing) {
+                            } else if (existing_f is !null && existing_f != f_key) {
                                 report_import_collision(c, node.pos, "function", bare_name);
                             } else {
                                 c.current_file_func_aliases.put(bare_name, f_key);
@@ -609,7 +610,8 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String, in
                         let bare_name -> String = s_key.slice(p_len, s_key.length());
                         if (!bare_name.starts_with("__") && (include_submodules || is_direct_export(bare_name))) {
                             let existing_s -> String = c.current_file_type_aliases.get(bare_name);
-                            if (existing_s is !null && existing_s != s_key) {
+                            if (existing_s is !null && keep_existing) {
+                            } else if (existing_s is !null && existing_s != s_key) {
                                 report_import_collision(c, node.pos, "type", bare_name);
                             } else {
                                 c.current_file_type_aliases.put(bare_name, s_key);
@@ -629,7 +631,8 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String, in
                         let bare_name -> String = g_key.slice(p_len, g_key.length());
                         if (!bare_name.starts_with("__") && (include_submodules || is_direct_export(bare_name))) {
                             let existing_g -> String = c.current_file_global_aliases.get(bare_name);
-                            if (existing_g is !null && existing_g != g_key) {
+                            if (existing_g is !null && keep_existing) {
+                            } else if (existing_g is !null && existing_g != g_key) {
                                 report_import_collision(c, node.pos, "global", bare_name);
                             } else {
                                 c.current_file_global_aliases.put(bare_name, g_key);
@@ -650,7 +653,8 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String, in
                         if (!bare_name.starts_with("__") && (include_submodules || is_direct_export(bare_name))) {
                             let existing_f -> String = c.current_file_func_aliases.get(bare_name);
                             let val -> String = c.global_func_aliases.get(f_key);
-                            if (existing_f is !null && existing_f != val) {
+                            if (existing_f is !null && keep_existing) {
+                            } else if (existing_f is !null && existing_f != val) {
                                 report_import_collision(c, node.pos, "function", bare_name);
                             } else {
                                 c.current_file_func_aliases.put(bare_name, val);
@@ -671,7 +675,8 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String, in
                         if (!bare_name.starts_with("__") && (include_submodules || is_direct_export(bare_name))) {
                             let existing_s -> String = c.current_file_type_aliases.get(bare_name);
                             let val -> String = c.global_type_aliases.get(s_key);
-                            if (existing_s is !null && existing_s != val) {
+                            if (existing_s is !null && keep_existing) {
+                            } else if (existing_s is !null && existing_s != val) {
                                 report_import_collision(c, node.pos, "type", bare_name);
                             } else {
                                 c.current_file_type_aliases.put(bare_name, val);
@@ -692,7 +697,8 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String, in
                         if (!bare_name.starts_with("__") && (include_submodules || is_direct_export(bare_name))) {
                             let existing_v -> String = c.current_file_global_aliases.get(bare_name);
                             let val -> String = c.global_var_aliases.get(v_key);
-                            if (existing_v is !null && existing_v != val) {
+                            if (existing_v is !null && keep_existing) {
+                            } else if (existing_v is !null && existing_v != val) {
                                 report_import_collision(c, node.pos, "global", bare_name);
                             } else {
                                 c.current_file_global_aliases.put(bare_name, val);
@@ -731,37 +737,43 @@ func bind_import_symbols(c -> Compiler, node -> ImportNode, prefix -> String, in
 
         if (c.func_table.get(lookup_name) is !null) {
             let existing_f -> String = c.current_file_func_aliases.get(target_name);
-            if (existing_f is !null && existing_f != lookup_name) { report_import_collision(c, node.pos, "function", target_name); }
+            if (existing_f is !null && keep_existing) { }
+            else if (existing_f is !null && existing_f != lookup_name) { report_import_collision(c, node.pos, "function", target_name); }
             else { c.current_file_func_aliases.put(target_name, lookup_name); }
             found = true;
         } else if (c.global_func_aliases.get(lookup_name) is !null) {
             let real_name -> String = c.global_func_aliases.get(lookup_name);
             let existing_f -> String = c.current_file_func_aliases.get(target_name);
-            if (existing_f is !null && existing_f != real_name) { report_import_collision(c, node.pos, "function", target_name); }
+            if (existing_f is !null && keep_existing) { }
+            else if (existing_f is !null && existing_f != real_name) { report_import_collision(c, node.pos, "function", target_name); }
             else { c.current_file_func_aliases.put(target_name, real_name); }
             found = true;
         }
         if (c.struct_table.get(lookup_name) is !null) {
             let existing_s -> String = c.current_file_type_aliases.get(target_name);
-            if (existing_s is !null && existing_s != lookup_name) { report_import_collision(c, node.pos, "type", target_name); }
+            if (existing_s is !null && keep_existing) { }
+            else if (existing_s is !null && existing_s != lookup_name) { report_import_collision(c, node.pos, "type", target_name); }
             else { c.current_file_type_aliases.put(target_name, lookup_name); }
             found = true;
         } else if (c.global_type_aliases.get(lookup_name) is !null) {
             let real_name -> String = c.global_type_aliases.get(lookup_name);
             let existing_s -> String = c.current_file_type_aliases.get(target_name);
-            if (existing_s is !null && existing_s != real_name) { report_import_collision(c, node.pos, "type", target_name); }
+            if (existing_s is !null && keep_existing) { }
+            else if (existing_s is !null && existing_s != real_name) { report_import_collision(c, node.pos, "type", target_name); }
             else { c.current_file_type_aliases.put(target_name, real_name); }
             found = true;
         }
         if (c.global_symbol_table.get(lookup_name) is !null) {
             let existing_g -> String = c.current_file_global_aliases.get(target_name);
-            if (existing_g is !null && existing_g != lookup_name) { report_import_collision(c, node.pos, "global", target_name); }
+            if (existing_g is !null && keep_existing) { }
+            else if (existing_g is !null && existing_g != lookup_name) { report_import_collision(c, node.pos, "global", target_name); }
             else { c.current_file_global_aliases.put(target_name, lookup_name); }
             found = true;
         } else if (c.global_var_aliases.get(lookup_name) is !null) {
             let real_name -> String = c.global_var_aliases.get(lookup_name);
             let existing_g -> String = c.current_file_global_aliases.get(target_name);
-            if (existing_g is !null && existing_g != real_name) { report_import_collision(c, node.pos, "global", target_name); }
+            if (existing_g is !null && keep_existing) { }
+            else if (existing_g is !null && existing_g != real_name) { report_import_collision(c, node.pos, "global", target_name); }
             else { c.current_file_global_aliases.put(target_name, real_name); }
             found = true;
         }
