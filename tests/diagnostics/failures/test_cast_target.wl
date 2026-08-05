@@ -1,7 +1,7 @@
 // Test: CAST_TARGET
 // File: tests/diagnostics/failures/test_cast_target.wl
 // Focus: Class conversion targets are restricted to built-in value types.
-// Expected Error: "TypeError: conversion target Other is not a built-in value type"
+// Expected Error: "TypeError: Conversion target Other is not a built-in value type"
 
 class Other {
 }

@@ -1,7 +1,7 @@
 // Test: CONST_ELEMENT_WRITE
 // File: tests/diagnostics/failures/test_const_element.wl
 // Focus: Propagating const access when an object is copied into another binding.
-// Expected Error: "TypeError: cannot modify value through const access 'item'"
+// Expected Error: "TypeError: Cannot modify value through const access 'item'"
 
 class Box { let value -> Int = 0; }
 

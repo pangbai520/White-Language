@@ -49,7 +49,6 @@ const TOK_FOR           -> Int = 41;
 const TOK_COMMA         -> Int = 42;
 const TOK_FUNC          -> Int = 43; // func
 const TOK_RETURN        -> Int = 44; // return
-// These things are fucking insane, absolutely have to make enum [TODO]
 const TOK_STR_LIT       -> Int = 45;
 
 const TOK_PLUS_ASSIGN   -> Int = 46; // +=

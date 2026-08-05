@@ -34,7 +34,7 @@ struct CompilerConfig(
 )
 
 func print_usage() -> Void {
-    print("White Language Compiler (v0.2.15)");
+    print("White Language Compiler (v0.3)");
     print("Usage: wlc <source.wl> [extra_files...] [options]");
     print("");
     print("Arguments:");
@@ -72,6 +72,14 @@ func get_base_name(path -> String) -> String {
         return path.slice(0, len - 3);
     }
     return path;
+}
+
+func windows_implib_path(output -> String) -> String {
+    let len -> Int = output.length();
+    if (len >= 4 && output[len - 4] == '.' && (output[len - 3] == 'd' || output[len - 3] == 'D') && (output[len - 2] == 'l' || output[len - 2] == 'L') && (output[len - 1] == 'l' || output[len - 1] == 'L')) {
+        return output.slice(0, len - 4) + ".lib";
+    }
+    return output + ".lib";
 }
 
 func split_link_flags(value -> String) -> Vector(String) {
@@ -326,6 +334,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     }
 
     let has_clang -> Bool = false;
+    let using_portable_clang -> Bool = false;
 
     let wl_path -> String = sys.env.get_env("WL_PATH");
     if (wl_path is !null) {
@@ -339,6 +348,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         if (WhitelangUtils.file_exists(portable_clang)) {
             clang_cmd = portable_clang;
             has_clang = true;
+            using_portable_clang = true;
             if (cfg.verbose) { print("Using portable LLVM: " + portable_clang); }
         } else {
             if (cfg.verbose) { print("Portable LLVM not found, falling back to system " + clang_cmd + "."); }
@@ -346,6 +356,18 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     }
 
     if (!has_clang) { has_clang = true; }
+
+    let import_lib -> String = "";
+    if (cfg.is_shared && sys.OS == "WINDOWS") {
+        import_lib = windows_implib_path(cfg.output_file);
+        if (WhitelangUtils.file_exists(import_lib)) {
+            file.remove(import_lib)?;
+            catch(err) {
+                print("Build Failed: Could not replace import library " + import_lib + ".");
+                return 1;
+            }
+        }
+    }
     
     let clang_args -> Vector(String) = [];
     if (cfg.debug_info) { clang_args.append("-g"); }
@@ -377,6 +399,10 @@ func main(argc -> Int, ptr argv -> String) -> Int {
                 clang_args.append("-dynamiclib");
             } else {
                 clang_args.append("-shared");
+            }
+            if (sys.OS == "WINDOWS" && using_portable_clang) {
+                clang_args.append("-Xlinker");
+                clang_args.append("--out-implib=" + import_lib);
             }
             if (sys.OS != "WINDOWS") { clang_args.append("-fPIC"); }
         }
@@ -449,6 +475,16 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         return 1;
     }
 
+    if (ret == 0 && import_lib.length() > 0 && !using_portable_clang && !WhitelangUtils.file_exists(import_lib)) {
+        clang_args.append("-Xlinker");
+        clang_args.append("--out-implib=" + import_lib);
+        ret = process.run(clang_cmd, clang_args)?;
+        catch(err) {
+            print("Build Failed: Could not restart Clang to create import library (error " + Int(err) + ")");
+            return 1;
+        }
+    }
+
     if (!cfg.keep_temps && cfg.output_file != ll_file) {
         if (cfg.verbose) { print("Cleaning up: " + ll_file); }
         file.remove(ll_file)?;
@@ -461,6 +497,11 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     if (ret != 0) {
         print("Build Failed (Clang exit code: " + ret + ")");
         return ret;
+    }
+
+    if (import_lib.length() > 0 && !WhitelangUtils.file_exists(import_lib)) {
+        print("Build Failed: Clang did not create import library " + import_lib + ".");
+        return 1;
     }
 
     print("Build success: " + cfg.output_file);

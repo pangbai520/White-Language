@@ -1,5 +1,4 @@
 // core/WhitelangExceptions.wl
-import * from "builtin"
 import "file"
 import "process"
 import Dict from "dict"

@@ -1,7 +1,7 @@
 // Test: CONST_METHOD_BIND
 // File: tests/diagnostics/failures/test_const_bind.wl
 // Focus: Preventing a method value from bypassing a const receiver.
-// Expected Error: "TypeError: cannot bind a method through const value"
+// Expected Error: "TypeError: Cannot bind a method through const value"
 
 class Box { method set() -> Void { } }
 

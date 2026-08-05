@@ -1,7 +1,7 @@
 // Test: CONST_RECEIVER_ESCAPE
 // File: tests/diagnostics/failures/test_const_escape.wl
 // Focus: Treating methods that pass self to mutable code as mutating.
-// Expected Error: "TypeError: cannot call mutating method 'touch' through const value"
+// Expected Error: "TypeError: Cannot call mutating method 'touch' through const value"
 
 class Box {
     let value -> Int = 0;

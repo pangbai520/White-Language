@@ -2534,12 +2534,13 @@ func to_normpath(path -> String) -> String {
 }
 
 func import_security_path(path -> String) -> String {
-    if (sys.OS != "WINDOWS") { return path; }
     let result -> String = "";
     let i -> Int = 0;
     while (i < path.length()) {
         let ch -> Char = path[i];
-        if (ch >= 'A' && ch <= 'Z') {
+        if (ch == '\\') {
+            ch = '/';
+        } else if (ch >= 'A' && ch <= 'Z') {
             ch = Char(Int(ch) + 32);
         }
         result += ch;
@@ -2582,7 +2583,7 @@ func resolve_import_path(c -> Compiler, raw_path -> String, pos -> Position) -> 
     let importer -> String = import_security_path(to_normpath(c.current_dir));
     let importer_is_std -> Bool = importer == std_root || importer.starts_with(std_root + "/");
     let checked_raw_path -> String = import_security_path(raw_path);
-    if ((checked_raw_path == "internal" || checked_raw_path.starts_with("internal/") || checked_raw_path.starts_with("internal\\")) && !importer_is_std) {
+    if ((checked_raw_path == "internal" || checked_raw_path.starts_with("internal/")) && !importer_is_std) {
         throw_import_error(pos, "Module '" + raw_path + "' is internal to the standard library.");
         return "";
     }

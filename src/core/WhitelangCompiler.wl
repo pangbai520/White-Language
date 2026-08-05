@@ -1557,7 +1557,7 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
                     let pointer_base -> SymbolInfo = c.ptr_base_map.get("" + second_arg.type);
                     if (first_arg.type == TYPE_INT && pointer_base is !null && pointer_base.type == TYPE_STRING) { valid_main = true; }
                 }
-                if (!valid_main) { throw_type_error(f_node.pos, "Main must be func main() -> Int. "); return; }
+                if (!valid_main) { throw_type_error(f_node.pos, "function 'main' must be 'func main() -> Int' or 'func main(argc -> Int, ptr argv -> String) -> Int'"); return; }
             }
 
             let sys_anns -> SystemAnnResult = consume_annotations(f_node.annotations, raw_name);
