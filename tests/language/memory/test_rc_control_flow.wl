@@ -4,7 +4,7 @@
 
 
 func fail_func() -> Int? {
-    throw Error.Unknown;
+    throw Error.InvalidArgument;
 }
 
 func test_loop_break() -> Void {

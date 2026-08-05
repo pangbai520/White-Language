@@ -6,7 +6,19 @@ import "internal/platform/posix"
 import "internal/platform/errors" as platform_errors
 import "internal/runtime"
 import "internal/runtime/string" as runtime_string
-import Error from "errors"
+import Error as CoreError from "errors"
+
+error Error {
+    Unknown,
+    NotFound,
+    PermissionDenied,
+    InvalidExecutable,
+    ResourceBusy,
+    Interrupted,
+    TimedOut,
+    Cancelled,
+    Unsupported,
+}
 
 func __repeat_char(ch -> Char, count -> Int) -> String {
     let result -> String = "";
@@ -70,18 +82,28 @@ func __windows_command_line(program -> String, args -> Vector(String)) -> String
     return result;
 }
 
+func __from_platform(kind -> platform_errors.Kind) -> Error {
+    if (kind == platform_errors.Kind.NotFound) { return Error.NotFound; }
+    if (kind == platform_errors.Kind.PermissionDenied) { return Error.PermissionDenied; }
+    if (kind == platform_errors.Kind.ResourceBusy || kind == platform_errors.Kind.WouldBlock || kind == platform_errors.Kind.InProgress) { return Error.ResourceBusy; }
+    if (kind == platform_errors.Kind.Interrupted) { return Error.Interrupted; }
+    if (kind == platform_errors.Kind.TimedOut) { return Error.TimedOut; }
+    if (kind == platform_errors.Kind.Cancelled) { return Error.Cancelled; }
+    if (kind == platform_errors.Kind.Unsupported) { return Error.Unsupported; }
+    if (kind == platform_errors.Kind.InvalidArgument) { return Error.InvalidExecutable; }
+    return Error.Unknown;
+}
+
 func __last_error() -> Error {
-    let err -> Error = platform_errors.last();
-    if (err == Error.None) { return Error.Unknown; }
-    return err;
+    return __from_platform(platform_errors.last());
 }
 
 func run(program -> String, args -> Vector(String)) -> Int? {
-    if (!runtime_string.is_native_text(program) || program.length() == 0) { throw Error.InvalidArgument; }
+    if (!runtime_string.is_native_text(program) || program.length() == 0) { throw CoreError.InvalidArgument; }
     let count -> Int = 0; if (args is !null) { count = args.length(); }
     let arg_index -> Int = 0;
     while (arg_index < count) {
-        if (!runtime_string.is_native_text(args[arg_index])) { throw Error.InvalidArgument; }
+        if (!runtime_string.is_native_text(args[arg_index])) { throw CoreError.InvalidArgument; }
         arg_index += 1;
     }
 
@@ -89,8 +111,7 @@ func run(program -> String, args -> Vector(String)) -> Int? {
         let command_line -> String = __windows_command_line(program, args);
         let wide_command -> AnyPtr = windows.utf8_to_utf16(command_line);
         if (wide_command is nullptr) {
-            windows.free_utf16(wide_command);
-            throw __last_error();
+            throw CoreError.OutOfMemory;
         }
 
         let startup_size -> Int = windows.wl_startup_info_size();
@@ -101,7 +122,7 @@ func run(program -> String, args -> Vector(String)) -> Int? {
             runtime.mem_dealloc(startup);
             runtime.mem_dealloc(info);
             windows.free_utf16(wide_command);
-            throw Error.OutOfMemory;
+            throw CoreError.OutOfMemory;
         }
         let ptr startup_header -> Int = startup;
         startup_header[0] = startup_size;
@@ -147,7 +168,7 @@ func run(program -> String, args -> Vector(String)) -> Int? {
 
     let bytes -> Long = Long(count + 2) * runtime.pointer_size();
     let raw_argv -> AnyPtr = runtime.mem_alloc_zeroed(bytes);
-    if (raw_argv is nullptr) { throw Error.OutOfMemory; }
+    if (raw_argv is nullptr) { throw CoreError.OutOfMemory; }
 
     let ptr native_argv -> AnyPtr = raw_argv;
     native_argv[0] = runtime_string.data(program);

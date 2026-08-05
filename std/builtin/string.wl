@@ -20,7 +20,7 @@ func string_at(self -> String, idx -> Int) -> Byte {
 
 @CompilerLink
 func string_byte_at(self -> String, idx -> Int) -> Byte? {
-    if (self is null || idx < 0 || idx >= self.length()) { throw Error.OutOfBounds; }
+    if (self is null || idx < 0 || idx >= self.length()) { throw Error.IndexOutOfBounds; }
     let ptr bytes -> Byte = runtime_string.data(self);
     return bytes[idx];
 }
@@ -136,7 +136,7 @@ func string_char_count(self -> String) -> Int? {
 
 @CompilerLink
 func string_char_at(self -> String, index -> Int) -> Char? {
-    if (self is null || index < 0) { throw Error.OutOfBounds; }
+    if (self is null || index < 0) { throw Error.IndexOutOfBounds; }
     let current -> Int = 0;
     let offset -> Int = 0;
     while (offset < self.length()) {
@@ -146,7 +146,7 @@ func string_char_at(self -> String, index -> Int) -> Char? {
         current += 1;
         offset += decoded.width;
     }
-    throw Error.OutOfBounds;
+    throw Error.IndexOutOfBounds;
     return '\0';
 }
 

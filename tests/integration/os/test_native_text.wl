@@ -11,7 +11,7 @@ func rejects_file_path() -> Bool {
     let visible -> String = "tests-native-text.tmp";
     let disguised -> String = visible + '\0' + ".ignored";
     let handle -> file.File = file.create(disguised)?;
-    catch(err) { return err == Error.InvalidArgument; }
+    catch(err) { return err == file.Error.InvalidPath; }
     handle.close();
     if (file.exists(visible)) {
         file.remove(visible)?;
@@ -23,7 +23,7 @@ func rejects_file_path() -> Bool {
 func rejects_invalid_file_path() -> Bool {
     let invalid -> String = "中"[0:1];
     let handle -> file.File = file.File(invalid, "rb");
-    return !handle.is_open() && handle.last_error() == Error.InvalidArgument;
+    return !handle.is_open() && handle.last_error() == file.Error.InvalidPath;
 }
 
 func rejects_process_argument() -> Bool {
@@ -42,14 +42,14 @@ func rejects_invalid_process_argument() -> Bool {
 
 func rejects_environment_name() -> Bool {
     let value -> String = sys.env.get("PATH" + '\0' + "IGNORED")?;
-    catch(err) { return err == Error.InvalidArgument; }
+    catch(err) { return err == sys.env.Error.InvalidName; }
     return false;
 }
 
 func rejects_invalid_environment_name() -> Bool {
     let invalid -> String = "中"[0:1];
     let value -> String = sys.env.get(invalid)?;
-    catch(err) { return err == Error.InvalidArgument; }
+    catch(err) { return err == sys.env.Error.InvalidName; }
     return false;
 }
 

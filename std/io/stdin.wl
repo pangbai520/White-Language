@@ -2,7 +2,8 @@
 
 import "internal/io" as standard_io
 import "internal/runtime/string" as runtime_string
-import Error from "errors"
+import Error as CoreError from "errors"
+import Error from "errors.wl"
 
 const __BUFFER_SIZE -> Int = 8192;
 
@@ -14,7 +15,7 @@ let __reached_eof -> Bool = false;
 func __ensure_buffer() -> Void? {
     if (__input_buffer is !null) { return; }
     __input_buffer = runtime_string.alloc(Long(__BUFFER_SIZE));
-    if (__input_buffer is null) { throw Error.OutOfMemory; }
+    if (__input_buffer is null) { throw CoreError.OutOfMemory; }
     runtime_string.set_length(__input_buffer, 0);
     return;
 }
@@ -53,7 +54,7 @@ func __copy_available(target -> AnyPtr, target_offset -> Int, count -> Int) -> I
 
 func __join(chunks -> Vector(String), total_length -> Int) -> String? {
     let result -> String = runtime_string.alloc(Long(total_length));
-    if (result is null) { throw Error.OutOfMemory; }
+    if (result is null) { throw CoreError.OutOfMemory; }
     let ptr output -> Byte = runtime_string.data(result);
 
     let offset -> Int = 0;
@@ -74,17 +75,17 @@ func __join(chunks -> Vector(String), total_length -> Int) -> String? {
 
 func read_bytes(max_bytes -> Int) -> String? {
 // read up to max_bytes, an empty string marks end of input
-    if (max_bytes < 0) { throw Error.InvalidArgument; }
+    if (max_bytes < 0) { throw CoreError.InvalidArgument; }
     if (max_bytes == 0) {
         let empty -> String = runtime_string.alloc(0L);
-        if (empty is null) { throw Error.OutOfMemory; }
+        if (empty is null) { throw CoreError.OutOfMemory; }
         return empty;
     }
     if (__buffer_start == __buffer_end) {
         let count -> Int = __fill_buffer()?;
         if (count == 0) {
             let empty -> String = runtime_string.alloc(0L);
-            if (empty is null) { throw Error.OutOfMemory; }
+            if (empty is null) { throw CoreError.OutOfMemory; }
             return empty;
         }
     }
@@ -92,16 +93,16 @@ func read_bytes(max_bytes -> Int) -> String? {
     let count -> Int = __buffer_end - __buffer_start;
     if (count > max_bytes) { count = max_bytes; }
     let result -> String = runtime_string.alloc(Long(count));
-    if (result is null) { throw Error.OutOfMemory; }
+    if (result is null) { throw CoreError.OutOfMemory; }
     __copy_available(runtime_string.data(result), 0, count);
     return result;
 }
 
 func read_full(byte_count -> Int) -> String? {
 // read exactly byte_count bytes, a short final read reports EndOfFile
-    if (byte_count < 0) { throw Error.InvalidArgument; }
+    if (byte_count < 0) { throw CoreError.InvalidArgument; }
     let result -> String = runtime_string.alloc(Long(byte_count));
-    if (result is null) { throw Error.OutOfMemory; }
+    if (result is null) { throw CoreError.OutOfMemory; }
 
     let offset -> Int = 0;
     while (offset < byte_count) {
@@ -136,7 +137,7 @@ func read_until(delimiter -> Char) -> String? {
         if found_delimiter { end += 1; }
 
         let chunk -> String = __input_buffer.slice(__buffer_start, end);
-        if (total_length > 2147483647 - chunk.length()) { throw Error.Overflow; }
+        if (total_length > 2147483647 - chunk.length()) { throw CoreError.Overflow; }
         chunks.append(chunk);
         total_length += chunk.length();
         __buffer_start = end;
@@ -168,7 +169,7 @@ func read_all() -> String? {
             let result -> String = __join(chunks, total_length)?;
             return result;
         }
-        if (total_length > 2147483647 - chunk.length()) { throw Error.Overflow; }
+        if (total_length > 2147483647 - chunk.length()) { throw CoreError.Overflow; }
         chunks.append(chunk);
         total_length += chunk.length();
     }
@@ -176,7 +177,7 @@ func read_all() -> String? {
 
 func skip_bytes(byte_count -> Int) -> Int? {
 // skip up to byte_count bytes and return the number consumed
-    if (byte_count < 0) { throw Error.InvalidArgument; }
+    if (byte_count < 0) { throw CoreError.InvalidArgument; }
     let skipped -> Int = 0;
     while (skipped < byte_count) {
         let chunk -> String = read_bytes(byte_count - skipped)?;

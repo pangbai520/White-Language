@@ -5,11 +5,69 @@ import "internal/platform/windows"
 import "internal/platform/posix"
 import "internal/platform/errors" as platform_errors
 import "internal/runtime/string" as runtime_string
-import Error from "errors"
+
+error Error {
+    None,
+    Unknown,
+    InvalidPath,
+    InvalidMode,
+    InvalidState,
+    OutOfMemory,
+    NotFound,
+    PermissionDenied,
+    AlreadyExists,
+    ResourceBusy,
+    Interrupted,
+    WouldBlock,
+    TimedOut,
+    Cancelled,
+    ReadOnlyFilesystem,
+    BrokenPipe,
+    StorageFull,
+    QuotaExceeded,
+    FileTooLarge,
+    TooManyOpenFiles,
+    NotSeekable,
+    NotADirectory,
+    IsADirectory,
+    DirectoryNotEmpty,
+    NameTooLong,
+    CrossDevice,
+}
 
 const SEEK_SET -> Int = 0;
 const SEEK_CUR -> Int = 1;
 const SEEK_END -> Int = 2;
+
+func __from_platform(kind -> platform_errors.Kind) -> Error {
+    if (kind == platform_errors.Kind.None) { return Error.None; }
+    if (kind == platform_errors.Kind.NotFound) { return Error.NotFound; }
+    if (kind == platform_errors.Kind.PermissionDenied) { return Error.PermissionDenied; }
+    if (kind == platform_errors.Kind.AlreadyExists) { return Error.AlreadyExists; }
+    if (kind == platform_errors.Kind.OutOfMemory) { return Error.OutOfMemory; }
+    if (kind == platform_errors.Kind.ResourceBusy) { return Error.ResourceBusy; }
+    if (kind == platform_errors.Kind.Interrupted) { return Error.Interrupted; }
+    if (kind == platform_errors.Kind.WouldBlock) { return Error.WouldBlock; }
+    if (kind == platform_errors.Kind.TimedOut) { return Error.TimedOut; }
+    if (kind == platform_errors.Kind.Cancelled) { return Error.Cancelled; }
+    if (kind == platform_errors.Kind.ReadOnlyFilesystem) { return Error.ReadOnlyFilesystem; }
+    if (kind == platform_errors.Kind.BrokenPipe) { return Error.BrokenPipe; }
+    if (kind == platform_errors.Kind.StorageFull) { return Error.StorageFull; }
+    if (kind == platform_errors.Kind.QuotaExceeded) { return Error.QuotaExceeded; }
+    if (kind == platform_errors.Kind.FileTooLarge) { return Error.FileTooLarge; }
+    if (kind == platform_errors.Kind.TooManyOpenFiles) { return Error.TooManyOpenFiles; }
+    if (kind == platform_errors.Kind.NotSeekable) { return Error.NotSeekable; }
+    if (kind == platform_errors.Kind.NotADirectory) { return Error.NotADirectory; }
+    if (kind == platform_errors.Kind.IsADirectory) { return Error.IsADirectory; }
+    if (kind == platform_errors.Kind.DirectoryNotEmpty) { return Error.DirectoryNotEmpty; }
+    if (kind == platform_errors.Kind.NameTooLong) { return Error.NameTooLong; }
+    if (kind == platform_errors.Kind.CrossDevice) { return Error.CrossDevice; }
+    return Error.Unknown;
+}
+
+func __last_error() -> Error {
+    return __from_platform(platform_errors.last());
+}
 
 class File {
     let handle -> AnyPtr = nullptr;
@@ -21,7 +79,7 @@ class File {
     init(file_path -> String, mode -> String) {
         self.path = file_path;
         if (!runtime_string.is_native_text(file_path) || !runtime_string.is_native_text(mode)) {
-            self.last_error = Error.InvalidArgument;
+            self.last_error = Error.InvalidPath;
             return;
         }
         if (sys.OS == "WINDOWS") {
@@ -37,7 +95,7 @@ class File {
                 disposition = windows.OPEN_ALWAYS;
                 append_mode = true;
             } else if (!mode.starts_with("r")) {
-                self.last_error = Error.InvalidArgument;
+                self.last_error = Error.InvalidMode;
                 return;
             }
 
@@ -45,7 +103,7 @@ class File {
 
             let wide_path -> AnyPtr = windows.utf8_to_utf16(file_path);
             if (wide_path is nullptr) {
-                self.last_error = platform_errors.last();
+                self.last_error = __last_error();
                 return;
             }
             let raw_handle -> AnyPtr = windows.CreateFileW(
@@ -62,7 +120,7 @@ class File {
                 self.handle = raw_handle;
                 if (append_mode) { windows.SetFilePointerEx(self.handle, 0L, nullptr, windows.FILE_END); }
             } else {
-                self.last_error = platform_errors.last();
+                self.last_error = __last_error();
             }
             return;
         }
@@ -71,7 +129,7 @@ class File {
         if (raw_handle is !nullptr) {
             self.handle = raw_handle;
         } else {
-            self.last_error = platform_errors.last();
+            self.last_error = __last_error();
         }
     }
 
@@ -82,7 +140,7 @@ class File {
     method __flush_write_buffer() -> Bool {
         if (self.write_buffer_len == 0) { return true; }
         if (self.handle is nullptr) {
-            self.last_error = Error.IllegalState;
+            self.last_error = Error.InvalidState;
             return false;
         }
         if (sys.OS != "WINDOWS") {
@@ -92,11 +150,11 @@ class File {
 
         let bytes_written -> Int = 0;
         if (windows.WriteFile(self.handle, runtime_string.data(self.write_buffer), self.write_buffer_len, ref bytes_written, nullptr) == 0) {
-            self.last_error = platform_errors.last();
+            self.last_error = __last_error();
             return false;
         }
         if (bytes_written != self.write_buffer_len) {
-            self.last_error = Error.DiskFull;
+            self.last_error = Error.StorageFull;
             return false;
         }
 
@@ -106,15 +164,15 @@ class File {
 
     method read_all() -> String? {
         if (self.handle is nullptr) {
-            if (self.last_error == Error.None) { throw Error.IllegalState; }
+            if (self.last_error == Error.None) { throw Error.InvalidState; }
             throw self.last_error;
         }
 
         if (sys.OS == "WINDOWS") {
             let size -> Long = 0L;
             if (windows.GetFileSizeEx(self.handle, ref size) == 0 || size < 0L || size > 2147483647L) {
-                if (size > 2147483647L) { throw Error.Overflow; }
-                self.last_error = platform_errors.last();
+                if (size > 2147483647L) { throw Error.FileTooLarge; }
+                self.last_error = __last_error();
                 throw self.last_error;
             }
 
@@ -125,7 +183,7 @@ class File {
             }
             let bytes_read -> Int = 0;
             if (size > 0L && windows.ReadFile(self.handle, runtime_string.data(buffer), Int(size), ref bytes_read, nullptr) == 0) {
-                self.last_error = platform_errors.last();
+                self.last_error = __last_error();
                 throw self.last_error;
             }
             runtime_string.set_length(buffer, bytes_read);
@@ -134,13 +192,13 @@ class File {
         }
 
         if (posix.fseek(self.handle, 0L, SEEK_END) != 0) {
-            self.last_error = platform_errors.last();
+            self.last_error = __last_error();
             throw self.last_error;
         }
         let size -> Long = posix.ftell(self.handle);
         if (size < 0L || size > 2147483647L) {
-            if (size > 2147483647L) { throw Error.Overflow; }
-            self.last_error = platform_errors.last();
+            if (size > 2147483647L) { throw Error.FileTooLarge; }
+            self.last_error = __last_error();
             throw self.last_error;
         }
         posix.rewind(self.handle);
@@ -152,7 +210,7 @@ class File {
         }
         let read_count -> Long = posix.wl_fread(buffer, 1L, size, self.handle);
         if (read_count != size) {
-            self.last_error = platform_errors.last();
+            self.last_error = __last_error();
             throw self.last_error;
         }
         self.last_error = Error.None;
@@ -161,7 +219,7 @@ class File {
 
     method write_all(content -> String) -> Int? {
         if (self.handle is nullptr) {
-            if (self.last_error == Error.None) { throw Error.IllegalState; }
+            if (self.last_error == Error.None) { throw Error.InvalidState; }
             throw self.last_error;
         }
         if (!self.__flush_write_buffer()) { throw self.last_error; }
@@ -169,11 +227,11 @@ class File {
         if (sys.OS == "WINDOWS") {
             let bytes_written -> Int = 0;
             if (length > 0L && windows.WriteFile(self.handle, runtime_string.data(content), Int(length), ref bytes_written, nullptr) == 0) {
-                self.last_error = platform_errors.last();
+                self.last_error = __last_error();
                 throw self.last_error;
             }
             if (Long(bytes_written) != length) {
-                self.last_error = Error.DiskFull;
+                self.last_error = Error.StorageFull;
                 throw self.last_error;
             }
             self.last_error = Error.None;
@@ -181,7 +239,7 @@ class File {
         }
         let written -> Long = posix.wl_fwrite(content, 1L, length, self.handle);
         if (written != length) {
-            self.last_error = platform_errors.last();
+            self.last_error = __last_error();
             throw self.last_error;
         }
         self.last_error = Error.None;
@@ -223,7 +281,7 @@ class File {
             return;
         }
         if (posix.wl_fwrite(content, 1L, length, self.handle) != length) {
-            self.last_error = platform_errors.last();
+            self.last_error = __last_error();
         }
     }
 
@@ -242,7 +300,7 @@ class File {
             else { closed = posix.fclose(self.handle) == 0; }
             self.handle = nullptr;
             if (!closed && pending_error == Error.None) {
-                self.last_error = platform_errors.last();
+                self.last_error = __last_error();
                 pending_error = self.last_error;
             }
         }
@@ -303,15 +361,15 @@ func exists(path -> String) -> Bool {
 }
 
 func remove(path -> String) -> Void? {
-    if (!runtime_string.is_native_text(path)) { throw Error.InvalidArgument; }
+    if (!runtime_string.is_native_text(path)) { throw Error.InvalidPath; }
     if (sys.OS == "WINDOWS") {
         let wide_path -> AnyPtr = windows.utf8_to_utf16(path);
-        if (wide_path is nullptr) { throw platform_errors.last(); }
+        if (wide_path is nullptr) { throw __last_error(); }
         let removed -> Bool = windows.DeleteFileW(wide_path) != 0;
         windows.free_utf16(wide_path);
-        if (!removed) { throw platform_errors.last(); }
+        if (!removed) { throw __last_error(); }
         return;
     }
-    if (posix.wl_remove(path) != 0) { throw platform_errors.last(); }
+    if (posix.wl_remove(path) != 0) { throw __last_error(); }
     return;
 }

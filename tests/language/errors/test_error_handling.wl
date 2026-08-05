@@ -5,7 +5,7 @@
 import Error from "errors"
 
 func may_fail(x -> Int) -> Int? {
-    if (x < 0) { throw Error.PermissionDenied; }
+    if (x < 0) { throw Error.InvalidArgument; }
     if (x == 0) { throw Error.DivisionByZero; }
     return x * 2;
 }

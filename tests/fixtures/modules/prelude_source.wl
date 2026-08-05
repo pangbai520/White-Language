@@ -10,5 +10,5 @@ func check_module_prelude() -> Bool {
     let values -> Dict = Dict(1);
     values.put("ready", true);
     print("PASS: imported module prelude");
-    return values.contains_key("ready") && Error.InvalidArgument != Error.None;
+    return values.contains_key("ready") && Error.InvalidArgument != Error.Overflow;
 }

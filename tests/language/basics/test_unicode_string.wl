@@ -14,7 +14,7 @@ func rejects_invalid_utf8(value -> String) -> Bool {
 func rejects_missing_byte(value -> String) -> Bool {
     let byte -> Byte = value.byte_at(value.length())?;
     catch(err) {
-        return err == Error.OutOfBounds;
+        return err == Error.IndexOutOfBounds;
     }
     return byte == 0;
 }

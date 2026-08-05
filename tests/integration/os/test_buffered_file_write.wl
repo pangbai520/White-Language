@@ -15,7 +15,7 @@ func main() -> Int {
     let i -> Int = 0;
     while (i < 7000) {
         output.write("0123456789");
-        if (output.last_error() != Error.None) {
+        if (output.last_error() != file.Error.None) {
             print("FAIL: Buffered write failed");
             return 1;
         }
