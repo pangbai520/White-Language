@@ -29,14 +29,14 @@ func main() -> Int {
     let moved -> String = "....."[:];
     memmove(string_data(moved), string_data(value), 5L);
     if (moved != "BCDEF") {
-        print("FAIL: Runtime memmove returned corrupted data");
+        print("FAIL: Backend memmove returned corrupted data");
         return 1;
     }
 
     let filled -> String = "...."[:];
     memset(string_data(filled), Int('x'), 4L);
     if (filled != "xxxx") {
-        print("FAIL: Runtime memset returned corrupted data");
+        print("FAIL: Backend memset returned corrupted data");
         return 1;
     }
 

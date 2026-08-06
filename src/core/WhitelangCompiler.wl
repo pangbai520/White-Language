@@ -1842,58 +1842,6 @@ func emit_release_owned_args(c -> Compiler, values -> Vector(Struct)) -> Void {
     }
 }
 
-func emit_windows_entrypoint(c -> Compiler) -> Void {
-    if (sys.OS != "WINDOWS") { return; }
-    if (c.is_shared) {
-        c.output_file.write("define i32 @DllMainCRTStartup(i8* %instance, i32 %reason, i8* %reserved) {\n");
-        c.output_file.write("entry:\n");
-        c.output_file.write("  ret i32 1\n");
-        c.output_file.write("}\n\n");
-        return;
-    }
-
-    let main_info -> FuncInfo = c.func_table.get("main");
-    let exit_key -> String = c.compiler_link.get("process_exit");
-    let exit_info -> FuncInfo = c.func_table.get(exit_key);
-    if (main_info is null || exit_info is null) {
-        throw_internal_compiler_error(null, "Missing compiler runtime hooks required by the native entry point.");
-        return;
-    }
-
-    let argc -> Int = 0;
-    if (main_info.arg_types is !null) { argc = main_info.arg_types.length(); }
-    c.output_file.write("define void @mainCRTStartup() {\n");
-    c.output_file.write("entry:\n");
-    if (argc == 0) {
-        c.output_file.write("  %status = call i32 @main()\n");
-    } else {
-        let args_key -> String = c.compiler_link.get("startup_args");
-        let free_key -> String = c.compiler_link.get("startup_args_free");
-        let args_info -> FuncInfo = c.func_table.get(args_key);
-        let free_info -> FuncInfo = c.func_table.get(free_key);
-        if (args_info is null || free_info is null) {
-            throw_internal_compiler_error(null, "Missing compiler runtime hooks required by the Windows entry point.");
-            return;
-        }
-        c.output_file.write("  %argc.addr = alloca i32\n");
-        c.output_file.write("  store i32 0, i32* %argc.addr\n");
-        c.output_file.write("  %argv.raw = call i8* @" + args_info.name + "(i32* %argc.addr)\n");
-        c.output_file.write("  %argv.missing = icmp eq i8* %argv.raw, null\n");
-        c.output_file.write("  br i1 %argv.missing, label %startup.failed, label %startup.ready\n\n");
-        c.output_file.write("startup.failed:\n");
-        c.output_file.write("  call void @" + exit_info.name + "(i32 127)\n");
-        c.output_file.write("  unreachable\n\n");
-        c.output_file.write("startup.ready:\n");
-        c.output_file.write("  %argc = load i32, i32* %argc.addr\n");
-        c.output_file.write("  %argv = bitcast i8* %argv.raw to %struct.$String**\n");
-        c.output_file.write("  %status = call i32 @main(i32 %argc, %struct.$String** %argv)\n");
-        c.output_file.write("  call void @" + free_info.name + "(i32 %argc, i8* %argv.raw)\n");
-    }
-    c.output_file.write("  call void @" + exit_info.name + "(i32 %status)\n");
-    c.output_file.write("  unreachable\n");
-    c.output_file.write("}\n\n");
-}
-
 func emit_alloc_check(c -> Compiler, ptr_reg -> String) -> Void {
     let failed -> String = next_reg(c);
     c.output_file.write(c.indent + failed + " = icmp eq i8* " + ptr_reg + ", null\n");
@@ -6412,6 +6360,12 @@ func register_extern_library(c -> Compiler, name -> String, pos -> Position) -> 
     }
     c.extra_libs.append(name);
 }
+func backend_symbol_signature(name -> String) -> String {
+    if (get_target_os() != "WINDOWS") { return ""; }
+    if (name == "memcpy" || name == "memmove") { return "ccc i8* (i8*, i8*, i64)"; }
+    if (name == "memset") { return "ccc i8* (i8*, i32, i64)"; }
+    return "";
+}
 func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult {
     let func_name -> String = node.name_tok.value;
     let abi_name -> String = normalize_extern_abi(node.abi_name, node.pos);
@@ -6467,9 +6421,14 @@ func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult
     let callconv -> String = extern_callconv(abi_name);
     let ret_llvm -> String = get_llvm_type_str(c, ret_type_id);
     let signature -> String = callconv + ret_llvm + " (" + params_str + ")";
+    let backend_signature -> String = backend_symbol_signature(func_name);
+    if (backend_signature.length() > 0 && signature != backend_signature) {
+        throw_extern_error(node.pos, "Extern declaration for compiler-provided symbol '" + func_name + "' has an incompatible signature.");
+        return void_result();
+    }
     let existing_decl -> StringConstant = c.declared_externs.get(func_name);
     if (existing_decl is null) {
-        c.output_file.write("declare " + callconv + ret_llvm + " @" + func_name + "(" + params_str + ")\n");
+        if (backend_signature.length() == 0) { c.output_file.write("declare " + callconv + ret_llvm + " @" + func_name + "(" + params_str + ")\n"); }
         c.declared_externs.put(func_name, StringConstant(id=0, value=signature));
     } else if (existing_decl.value.length() > 0 && existing_decl.value != signature) {
         throw_extern_error(node.pos, "Conflicting extern declaration for symbol '" + func_name + "'.");
@@ -10867,12 +10826,177 @@ func compile(c -> Compiler, node -> Struct) -> Void {
     compile_end(c);
 }
 
+func emit_freestanding_memops(c -> Compiler) -> Void {
+    c.output_file.write("define i8* @memcpy(i8* %dest, i8* %src, i64 %count) noinline optnone {\n");
+    c.output_file.write("entry:\n");
+    c.output_file.write("  br label %copy.cond\n\n");
+    c.output_file.write("copy.cond:\n");
+    c.output_file.write("  %index = phi i64 [ 0, %entry ], [ %next, %copy.body ]\n");
+    c.output_file.write("  %done = icmp uge i64 %index, %count\n");
+    c.output_file.write("  br i1 %done, label %copy.end, label %copy.body\n\n");
+    c.output_file.write("copy.body:\n");
+    c.output_file.write("  %source = getelementptr i8, i8* %src, i64 %index\n");
+    c.output_file.write("  %byte = load volatile i8, i8* %source\n");
+    c.output_file.write("  %target = getelementptr i8, i8* %dest, i64 %index\n");
+    c.output_file.write("  store volatile i8 %byte, i8* %target\n");
+    c.output_file.write("  %next = add i64 %index, 1\n");
+    c.output_file.write("  br label %copy.cond\n\n");
+    c.output_file.write("copy.end:\n");
+    c.output_file.write("  ret i8* %dest\n");
+    c.output_file.write("}\n\n");
+
+    c.output_file.write("define i8* @memmove(i8* %dest, i8* %src, i64 %count) noinline optnone {\n");
+    c.output_file.write("entry:\n");
+    c.output_file.write("  %same = icmp eq i8* %dest, %src\n");
+    c.output_file.write("  %empty = icmp eq i64 %count, 0\n");
+    c.output_file.write("  %trivial = or i1 %same, %empty\n");
+    c.output_file.write("  br i1 %trivial, label %move.end, label %move.direction\n\n");
+    c.output_file.write("move.direction:\n");
+    c.output_file.write("  %dest.addr = ptrtoint i8* %dest to i64\n");
+    c.output_file.write("  %src.addr = ptrtoint i8* %src to i64\n");
+    c.output_file.write("  %before = icmp ult i64 %dest.addr, %src.addr\n");
+    c.output_file.write("  %distance = sub i64 %dest.addr, %src.addr\n");
+    c.output_file.write("  %separate = icmp uge i64 %distance, %count\n");
+    c.output_file.write("  %forward = or i1 %before, %separate\n");
+    c.output_file.write("  br i1 %forward, label %forward.cond, label %backward.cond\n\n");
+    c.output_file.write("forward.cond:\n");
+    c.output_file.write("  %forward.index = phi i64 [ 0, %move.direction ], [ %forward.next, %forward.body ]\n");
+    c.output_file.write("  %forward.done = icmp uge i64 %forward.index, %count\n");
+    c.output_file.write("  br i1 %forward.done, label %move.end, label %forward.body\n\n");
+    c.output_file.write("forward.body:\n");
+    c.output_file.write("  %forward.src = getelementptr i8, i8* %src, i64 %forward.index\n");
+    c.output_file.write("  %forward.byte = load volatile i8, i8* %forward.src\n");
+    c.output_file.write("  %forward.dest = getelementptr i8, i8* %dest, i64 %forward.index\n");
+    c.output_file.write("  store volatile i8 %forward.byte, i8* %forward.dest\n");
+    c.output_file.write("  %forward.next = add i64 %forward.index, 1\n");
+    c.output_file.write("  br label %forward.cond\n\n");
+    c.output_file.write("backward.cond:\n");
+    c.output_file.write("  %remaining = phi i64 [ %count, %move.direction ], [ %backward.index, %backward.body ]\n");
+    c.output_file.write("  %backward.done = icmp eq i64 %remaining, 0\n");
+    c.output_file.write("  br i1 %backward.done, label %move.end, label %backward.body\n\n");
+    c.output_file.write("backward.body:\n");
+    c.output_file.write("  %backward.index = sub i64 %remaining, 1\n");
+    c.output_file.write("  %backward.src = getelementptr i8, i8* %src, i64 %backward.index\n");
+    c.output_file.write("  %backward.byte = load volatile i8, i8* %backward.src\n");
+    c.output_file.write("  %backward.dest = getelementptr i8, i8* %dest, i64 %backward.index\n");
+    c.output_file.write("  store volatile i8 %backward.byte, i8* %backward.dest\n");
+    c.output_file.write("  br label %backward.cond\n\n");
+    c.output_file.write("move.end:\n");
+    c.output_file.write("  ret i8* %dest\n");
+    c.output_file.write("}\n\n");
+
+    c.output_file.write("define i8* @memset(i8* %dest, i32 %value, i64 %count) noinline optnone {\n");
+    c.output_file.write("entry:\n");
+    c.output_file.write("  %byte = trunc i32 %value to i8\n");
+    c.output_file.write("  br label %set.cond\n\n");
+    c.output_file.write("set.cond:\n");
+    c.output_file.write("  %index = phi i64 [ 0, %entry ], [ %next, %set.body ]\n");
+    c.output_file.write("  %done = icmp uge i64 %index, %count\n");
+    c.output_file.write("  br i1 %done, label %set.end, label %set.body\n\n");
+    c.output_file.write("set.body:\n");
+    c.output_file.write("  %target = getelementptr i8, i8* %dest, i64 %index\n");
+    c.output_file.write("  store volatile i8 %byte, i8* %target\n");
+    c.output_file.write("  %next = add i64 %index, 1\n");
+    c.output_file.write("  br label %set.cond\n\n");
+    c.output_file.write("set.end:\n");
+    c.output_file.write("  ret i8* %dest\n");
+    c.output_file.write("}\n\n");
+}
+
+func emit_windows_stack_probe(c -> Compiler) -> Void {
+    // keep target assembly private to the Windows backend until structured asm is available
+    c.output_file.write("module asm \".text\"\n");
+    c.output_file.write("module asm \".p2align 4, 0x90\"\n");
+    c.output_file.write("module asm \".globl __chkstk\"\n");
+    c.output_file.write("module asm \".globl ___chkstk_ms\"\n");
+    c.output_file.write("module asm \"__chkstk:\"\n");
+    c.output_file.write("module asm \"___chkstk_ms:\"\n");
+    c.output_file.write("module asm \"pushq %rcx\"\n");
+    c.output_file.write("module asm \"pushq %rax\"\n");
+    c.output_file.write("module asm \"cmpq $0x1000, %rax\"\n");
+    c.output_file.write("module asm \"leaq 24(%rsp), %rcx\"\n");
+    c.output_file.write("module asm \"jb 2f\"\n");
+    c.output_file.write("module asm \"1:\"\n");
+    c.output_file.write("module asm \"subq $0x1000, %rcx\"\n");
+    c.output_file.write("module asm \"testb $0, (%rcx)\"\n");
+    c.output_file.write("module asm \"subq $0x1000, %rax\"\n");
+    c.output_file.write("module asm \"cmpq $0x1000, %rax\"\n");
+    c.output_file.write("module asm \"ja 1b\"\n");
+    c.output_file.write("module asm \"2:\"\n");
+    c.output_file.write("module asm \"subq %rax, %rcx\"\n");
+    c.output_file.write("module asm \"testb $0, (%rcx)\"\n");
+    c.output_file.write("module asm \"popq %rax\"\n");
+    c.output_file.write("module asm \"popq %rcx\"\n");
+    c.output_file.write("module asm \"retq\"\n\n");
+}
+
+func emit_windows_abi(c -> Compiler) -> Void {
+    if (sys.OS != "WINDOWS") { return; }
+    c.output_file.write("@_fltused = global i32 39029\n\n");
+    c.output_file.write("define void @__main() {\nentry:\n  ret void\n}\n\n");
+    emit_freestanding_memops(c);
+    emit_windows_stack_probe(c);
+}
+
+func emit_windows_entrypoint(c -> Compiler) -> Void {
+    if (sys.OS != "WINDOWS") { return; }
+    if (c.is_shared) {
+        c.output_file.write("define i32 @DllMainCRTStartup(i8* %instance, i32 %reason, i8* %reserved) {\n");
+        c.output_file.write("entry:\n");
+        c.output_file.write("  ret i32 1\n");
+        c.output_file.write("}\n\n");
+        return;
+    }
+
+    let main_info -> FuncInfo = c.func_table.get("main");
+    let exit_key -> String = c.compiler_link.get("process_exit");
+    let exit_info -> FuncInfo = c.func_table.get(exit_key);
+    if (main_info is null || exit_info is null) {
+        throw_internal_compiler_error(null, "Missing compiler runtime hooks required by the native entry point.");
+        return;
+    }
+
+    let argc -> Int = 0;
+    if (main_info.arg_types is !null) { argc = main_info.arg_types.length(); }
+    c.output_file.write("define void @mainCRTStartup() {\n");
+    c.output_file.write("entry:\n");
+    if (argc == 0) {
+        c.output_file.write("  %status = call i32 @main()\n");
+    } else {
+        let args_key -> String = c.compiler_link.get("startup_args");
+        let free_key -> String = c.compiler_link.get("startup_args_free");
+        let args_info -> FuncInfo = c.func_table.get(args_key);
+        let free_info -> FuncInfo = c.func_table.get(free_key);
+        if (args_info is null || free_info is null) {
+            throw_internal_compiler_error(null, "Missing compiler runtime hooks required by the Windows entry point.");
+            return;
+        }
+        c.output_file.write("  %argc.addr = alloca i32\n");
+        c.output_file.write("  store i32 0, i32* %argc.addr\n");
+        c.output_file.write("  %argv.raw = call i8* @" + args_info.name + "(i32* %argc.addr)\n");
+        c.output_file.write("  %argv.missing = icmp eq i8* %argv.raw, null\n");
+        c.output_file.write("  br i1 %argv.missing, label %startup.failed, label %startup.ready\n\n");
+        c.output_file.write("startup.failed:\n");
+        c.output_file.write("  call void @" + exit_info.name + "(i32 127)\n");
+        c.output_file.write("  unreachable\n\n");
+        c.output_file.write("startup.ready:\n");
+        c.output_file.write("  %argc = load i32, i32* %argc.addr\n");
+        c.output_file.write("  %argv = bitcast i8* %argv.raw to %struct.$String**\n");
+        c.output_file.write("  %status = call i32 @main(i32 %argc, %struct.$String** %argv)\n");
+        c.output_file.write("  call void @" + free_info.name + "(i32 %argc, i8* %argv.raw)\n");
+    }
+    c.output_file.write("  call void @" + exit_info.name + "(i32 %status)\n");
+    c.output_file.write("  unreachable\n");
+    c.output_file.write("}\n\n");
+}
+
 func compile_end(c -> Compiler) -> Void {
     if (!c.has_main && !c.is_shared) {
         throw_missing_main_function();
         return;
     }
     compile_arc_hooks(c);
+    emit_windows_abi(c);
     emit_windows_entrypoint(c);
 
     let str_vec -> Vector(Struct) = c.string_list;

@@ -4,123 +4,114 @@
 ![Version](https://img.shields.io/github/v/tag/pangbai520/White-Language?label=version&color=green&sort=semver)
 ![Status](https://img.shields.io/badge/status-bootstrapped-success.svg)
 
-White Language is a compiled, statically typed language with the `.wl` file
-extension. The compiler emits LLVM IR and lets Clang do the final code
-generation.
+White is a statically typed language and a self-hosting compiler project.
+Source files use the `.wl` extension. `wlc` lowers them to LLVM IR and uses
+Clang for machine-code generation and linking.
 
-`wlc` is written in White Language. It has been self-hosting for a while now:
-the compiler in a release builds the compiler in the next release. I normally
-build it twice and compare the generated IR before calling a compiler change
-done.
+The design target is fairly simple to state: native performance, a language
+which stays pleasant to read, and safety checks which fail clearly instead of
+turning mistakes into silent memory corruption. Those are design goals, not a
+claim that a young compiler has already caught up with C++, Go, or Rust.
 
-## A quick example
+The compiler is written in White and bootstraps from the previous release. For
+compiler changes I normally build two generations and compare normalized LLVM
+IR. A compiler which can build itself once is useful; one which reaches a fixed
+point is much easier to trust.
 
-```rust
-import "builtin"
-import "dict" // this will auto-imported by compiler, but listed here for clarity
+It is not a production-ready replacement for an established systems language.
+The limitations near the end of this file are part of the project, not fine print.
 
+## A small program
+
+```rs
 interface Named {
     method name() -> String;
 }
 
-class Entity with Named {
-    let entity_name -> String = "";
+class Project with Named {
+    let project_name -> String;
+    let targets -> Vector(String);
 
     init(name -> String) {
-        self.entity_name = name;
+        self.project_name = name;
+        self.targets = [];
     }
 
     method name() -> String {
-        return self.entity_name;
+        return self.project_name;
     }
 
-    method describe() -> Void {
-        print("Entity(" + self.entity_name + ")");
+    method add_target(target -> String) -> Void {
+        self.targets.append(target);
     }
 
     deinit() {
-        print("dropping " + self.entity_name);
+        print("dropping ", self.project_name);
     }
-}
-
-class Player(Entity) {
-    let score -> Int = 0;
-
-    init(name -> String, score -> Int) {
-        super.init(name);
-        self.score = score;
-    }
-
-    method describe() -> Void {
-        print(self.entity_name + ": " + self.score);
-    }
-}
-
-func add(left -> Int, right -> Int) -> Int {
-    return left + right;
 }
 
 func main() -> Int {
-    let operation -> Function(Int, Int, Int) = add;
-    print(operation(20, 22));
+    let project -> Project = Project("White Language");
+    project.add_target("windows");
+    project.add_target("linux");
+    project.add_target("macos");
 
-    let numbers -> Vector(Int) = [10, 20, 30];
-    let copy -> Array(Int) = numbers[0:2];
-    let view -> Array(Int) = ref numbers[0:2];
-    view[0] = 99;
-
-    print(copy[0]);       // 10
-    print(numbers[0]);    // 99
-
-    let values -> Dict = {
-        "language": "White Language",
-        "version": "12345"
-    };
-    print(values["language"]);
-
-    let player -> Player = Player("CC", 999);
-    let describe -> Method(Void) = player.describe;
-    describe();
+    let get_name -> Method(String) = project.name;
+    print(get_name(), " targets: ", project.targets);
     return 0;
 }
 ```
 
-Classes use virtual dispatch, methods and functions are ordinary
-values, and the array slice rules shown above are the rules used by normal
-programs.
+There is no special demonstration machinery in that example. Interfaces use
+dynamic dispatch, methods can be stored as values, class instances are managed
+by ARC, and `deinit` runs when the last owning reference is released.
 
-## Some language details
+Class fields may omit a default when every initializer definitely assigns
+them. The compiler rejects reads before initialization and initializers which
+leave a field unset.
 
-White has signed and unsigned integers from 8 to 128 bits, fixed arrays,
-vectors, slices, strings, dictionaries, classes, structs, enums, interfaces,
-closures and raw pointers.
+## What is implemented
 
-Managed values use atomic reference counts. When the last owning reference goes
-away, fields are released and `deinit` runs immediately. The compiler also
-emits cleanup for returns, loop exits and error propagation. ARC only protects
-object lifetime; it does not make a mutable `Vector` or `Dict` safe to modify
-from several threads at once.
+The language currently has:
 
-Operations which can fail return `T?` (or `Void?`):
+- signed and unsigned integers from 8 through 128 bits;
+- UTF-8 strings, Unicode scalar `Char`, arrays, vectors and slices;
+- structs, classes, inheritance, interfaces, enums and destructors;
+- first-class functions, bound methods and closures;
+- atomic reference counting for managed values;
+- checked indexing, null checks and runtime arithmetic checks;
+- fallible functions and user-defined error domains;
+- modules, packages, private symbols and controlled wildcard imports;
+- C and system ABI declarations, shared-library exports and linker search paths;
+- a standard library covering strings, files, processes, environment access,
+  standard I/O, dictionaries and JSON.
+
+This list says what the compiler accepts, not that every subsystem is finished.
+For example, the generic type system is still limited, `Dict` is not yet a
+general-purpose generic map, and the standard library is small.
+
+## Errors
+
+A fallible function returns `T?` or `Void?`. `?` either passes the value on or
+transfers control to the following `catch` block:
 
 ```rs
 import "file"
-import Error from "errors"
 
 func read_config(path -> String) -> String? {
     let input -> file.File = file.open(path)?;
-    let content -> String = input.read_all()?;
+    let text -> String = input.read_all()?;
     input.close_checked()?;
-    return content;
+    return text;
 }
 
 func main() -> Int {
-    let config -> String = read_config("config.txt")?;
+    let config -> String = read_config("config.json")?;
     catch(err) {
-        if (err == Error.FileNotFound) {
-            print("config.txt does not exist");
+        if (err == file.Error.NotFound) {
+            print("config.json does not exist");
         } else {
-            print("could not read config, error code " + Int(err));
+            print("could not read config.json: ", err);
         }
         return 1;
     }
@@ -130,30 +121,74 @@ func main() -> Int {
 }
 ```
 
-`catch(err)` receives an error value carrying both its error domain and numeric
-code. Compare it directly with a concrete member such as
-`Error.FileNotFound`. `Int(err)` extracts only the numeric code. If a function
-is itself fallible, a `?` without a following `catch` propagates the complete
-error value.
+If the containing function is also fallible, leaving off the local `catch`
+propagates the error. Error values keep both a domain and a member number, so
+two libraries can define an error called `InvalidData` without making the
+values equal.
 
-Libraries can define errors without adding members to the standard `Error`
-type:
+Libraries declare their own domains with `error`:
 
 ```rs
-error JsonError {
+error ParseError {
     UnexpectedToken,
-    InvalidEscape
+    UnexpectedEnd
 }
 
-func parse_json() -> Int? {
-    throw JsonError.UnexpectedToken;
+func parse_header() -> Int? {
+    throw ParseError.UnexpectedToken;
 }
 ```
 
-Error domains are kept during `?` propagation and rethrowing, so identically
-numbered members from different libraries do not compare equal.
+The prelude `Error` type is reserved for failures produced by language
+primitives, such as allocation, checked conversion and bounds handling.
+Standard-library packages use their own domains: `file.Error`, `io.Error`,
+`process.Error`, `sys.env.Error` and `json.JsonError`.
 
-Standard input, output and error are available through `io`:
+## Strings and slices
+
+`String` is a UTF-8 byte string. `length()` and indexing are deliberately
+byte-based and O(1):
+
+```rs
+let text -> String = "A中😀";
+print(text.length()); // 8
+
+let first -> Byte = text[0];
+let chinese -> Char = text.char_at(1)?;
+catch(err) { return 1; }
+```
+
+`char_count`, `char_at`, `is_char_boundary` and `is_valid_utf8` are available
+when code needs Unicode scalar operations. A byte slice is allowed to contain
+invalid UTF-8; APIs which require text validate it at their boundary.
+
+Slices use a left-closed, right-open range. Without `ref`, slicing copies the
+element storage:
+
+```rs
+let values -> Vector(Int) = [10, 20, 30];
+let copy -> Array(Int) = values[0:2];
+copy[0] = 99;
+print(values[0]); // 10
+```
+
+`ref` creates a shared view and keeps its backing storage alive:
+
+```rs
+let view -> Array(Int) = ref values[0:2];
+view[0] = 99;
+print(values[0]); // 99
+```
+
+Strings use the same copy syntax. The zero-copy string form currently provided
+is the complete `ref text[:]` alias; bounded string views are still on the
+worklist.
+
+## Standard I/O and JSON
+
+`print` is in the prelude and is meant for convenient formatted output. It
+keeps a `Void` return type for compatibility. Code which needs to observe short
+writes, broken pipes, or end of input should use `io` instead:
 
 ```rs
 import "io"
@@ -171,41 +206,35 @@ func main() -> Int {
 }
 ```
 
-`read_bytes` may return fewer bytes than requested. `read_full` either fills the
-request or reports `Error.EndOfFile`; `write_all` handles short writes. Use
-these APIs for pipes and binary protocols. `print` is the convenient formatted
-front end and deliberately keeps its old `Void` contract, so it cannot report
-an output failure to its caller.
+The prelude `input(prompt)` is a small wrapper around `io.stdin.read_line()`.
+The `input` namespace also exposes prompted forms of byte reads, exact reads,
+delimiter reads, whole-input reads and byte skipping.
 
-For interactive input, the prelude provides a small prompt wrapper:
-
-```wl
-let name -> String = input.read("name: ")?;
-```
-
-`input.read_bytes`, `input.read_full`, `input.read_until`, `input.read_all` and
-`input.skip_bytes` add a prompt to their matching `io.stdin` operation.
-
-Slices are left-closed and right-open. An ordinary slice is a shallow copy:
+The JSON package builds a mutable `json.Value` tree. It has strict UTF-8 and
+number parsing, preserves object insertion order, and keeps the original text
+of JSON numbers so that large integers survive a parse/encode round trip.
 
 ```rs
-let copy -> Array(Int) = values[1:3];
+import "json"
+
+let document -> json.Value =
+    json.decode("{\"name\":\"White Language\",\"version\":3}")?;
+catch(err) {
+    print("bad JSON: ", err);
+    return 1;
+}
+
+let name -> String = String(document.get("name")?)?;
+catch(err) { return 1; }
+print(name);
 ```
 
-Adding `ref` makes it a shared view:
+The full JSON API, including exact numbers, decoder positions and resource
+limits, is documented in [docs/std/json.md](docs/std/json.md).
 
-```rs
-let view -> Array(Int) = ref values[1:3];
-```
+## Native code
 
-The view retains its backing storage, so growing the original vector does not
-leave the view pointing at freed memory. Strings have the same copy syntax.
-The only zero-copy String form currently implemented is the full
-`ref text[:]` alias; bounded String views are not there yet.
-
-## Calling native code
-
-There are block and single-function forms:
+Native declarations have block and single-function forms:
 
 ```rs
 extern "C" in "mylib" {
@@ -215,35 +244,36 @@ extern "C" in "mylib" {
 extern func native_version() -> Int from "C" in "mylib";
 ```
 
-`"C"` and `"system"` are currently supported. `in "mylib"` asks the linker for
-that library, while `-L` tells it where to look:
+The supported ABI names are `"C"` and `"system"`. `in "mylib"` adds a linker
+library; `-L` adds a directory to the library search path:
 
-```sh
+```bash
 wlc app.wl -L ./native/lib
 ```
 
-On Windows, putting `mylib.dll` next to the source file is not enough for the
-link step. Clang still needs a `.lib` or `libmylib.a` import library. The DLL is
-used later, when the finished program starts.
+On Windows, a DLL by itself is not normally enough for the link step. The
+linker needs the matching `.lib` or `libname.a` import library. `wlc --shared`
+creates an import library beside a DLL built from White source.
 
-Functions declared with `extern` keep their native symbol names. Normal White
-functions are mangled; `@ExportLib` can be used when a shared library needs to
-export an unmangled entry point.
+Extern functions keep their native symbol names. Ordinary White functions are
+mangled. `@ExportLib` gives a shared-library entry point an unmangled exported
+name.
 
-## Building
+Raw pointers and native declarations are outside the compiler's memory-safety
+guarantees. A wrong extern signature is just as dangerous here as it is in C.
 
-`WL_PATH` points to the root of the White Language installation, not its `bin`
-directory:
+## Building a program
+
+`WL_PATH` points to the root of an installed White Language tree:
 
 ```text
 WhiteLanguage/
 ├── bin/
-├── runtime/
 ├── std/
 └── tools/
 ```
 
-On Linux or macOS:
+Linux and macOS:
 
 ```bash
 export WL_PATH=/path/to/WhiteLanguage
@@ -251,109 +281,115 @@ wlc hello.wl
 ./hello
 ```
 
-On Windows:
+Windows:
 
-Installer will automatically configure environment variables so we don't need to configure them manually.
-
-```bash
+```powershell
 wlc hello.wl
 .\hello.exe
 ```
+(The Windows installer configures PATH and WL_PATH automatically.)
 
-The options I use most often are:
+The options used most often are:
 
 ```text
--o <file>       choose the output name
--O0 ... -O3     optimize for runtime speed
+-o <file>       choose the output path
+-O0 ... -O3     choose a speed optimization level
 -Os / -Oz       optimize for binary size
 -c              emit an object file
 -S              emit assembly
 --emit-llvm     emit LLVM IR
---shared        build a DLL/.so/.dylib
--L <dir>        add a library search path
---keep-temps    keep intermediate files
+--shared        build a DLL, shared object, or dynamic library
+-L <dir>        add a native library search path
+--keep-temps    keep the temporary LLVM IR
 ```
 
-`wlc --help` lists the rest.
+Run `wlc --help` for the complete driver help.
 
-### Rebuilding `wlc`
+## Rebuilding the compiler
 
-You need an existing White compiler to build the compiler source:
+Bootstrapping requires an existing `wlc`, normally the compiler from the latest
+release:
 
 ```bash
 wlc src/wlc.wl -Oz -o wlc_new
 ```
 
-or on Windows:
+On Windows the output name is normally `wlc_new.exe`.
 
-```bash
-wlc src/wlc.wl -Oz -o wlc_new.exe
-```
+The first generation is compiled by the old compiler even though it is reading
+the new source. Syntax and ABI changes which need their own implementation must
+therefore be staged. This is why some compiler changes land as explicit
+bootstrap steps instead of one large commit.
 
-The existing compiler gets its standard library and runtime from `WL_PATH`.
-When changing syntax or compiler intrinsics, remember that this first build is
-still being parsed by the old compiler. A change which requires its own new
-syntax needs to be staged rather than committed as a bootstrap loop.
+For a fixed-point check, use `wlc_new` to compile the same source again and
+compare normalized LLVM IR from the two new generations. Machine binaries are
+not a useful byte-for-byte comparison because object metadata may differ.
 
-The release compiler is built with `-Oz`. On the compiler's large generated IR
-this produces a substantially smaller binary and spends less time in LLVM,
-without making the compiler frontend slower.
+Release compilers are built with `-Oz`. The compiler spends most of its time in
+the frontend and emits a large LLVM module, so `-Oz` has produced a smaller
+binary without a meaningful loss in compiler throughput.
 
-## Runtime notes
+## Platform runtime
 
-Windows builds use native Windows APIs for startup, allocation, console output,
-files and processes. The runtime provides its own EXE and DLL entry points, so
-White programs do not need MSVCRT/UCRT for those jobs.
+Windows programs do not link MSVCRT or UCRT for White Language startup and
+standard-library operation. Allocation, files, processes and console I/O call
+native Windows APIs. The compiler emits `mainCRTStartup`, `DllMainCRTStartup`,
+the stack probe and the small set of freestanding memory symbols required by
+optimized code. There is no separate C runtime object.
 
-I have not tried to force the same design onto POSIX. Linux and macOS already
-have a stable libc/POSIX environment, and the White runtime uses it for the
-parts where that is the sensible option.
+Linux and macOS intentionally use the platform libc/POSIX interfaces for
+allocation, files, processes and environment access. Replacing those stable
+interfaces with handwritten system calls would add architecture-specific code
+without improving ordinary White programs.
 
-The C file in `runtime/` is now mostly an ABI and platform boundary. Code which
-does not need to live there, such as integer formatting, is being moved into
-White Language.
+Windows x86-64 is the most heavily tested native ABI. Linux and macOS have also
+been used for bootstrapping, including macOS on ARM64, but the target model is
+not yet broad enough to advertise general 32-bit support.
 
 ## Repository layout
 
 ```text
-src/            compiler source
+docs/           package and implementation notes
+src/            self-hosted compiler
 std/            standard library
-runtime/        startup and native ABI glue
-tests/          language, diagnostic, FFI and integration tests
+tests/          diagnostics, language, memory, FFI and integration tests
 ```
 
-## Tooling & ecosystem
+## Editor tooling and releases
 
-- [wlls](https://github.com/pangbai520/White-Language-LangServer) — language server for diagnostics, navigation, and semantic highlighting.
+`wlls`, the White Language language server, lives in its own project. It reuses
+the compiler frontend rather than maintaining a second grammar. The current VS
+Code extension uses it for diagnostics, symbols, definitions and semantic
+highlighting. Both are still under active development.
 
-- [website](https://www.white-lang.org) - Our official website.
+An official website and binary download portal also exist. Work there has been
+slower while the compiler and standard library settle down, but the
+site has not been abandoned.
 
+A package manager named `wlp` is planned(Maybe?). Today, dependencies are resolved from
+the standard library, source-relative paths and `WL_PATH`.
 
-A package manager `wlp` is planned (Maybe?).
+## Known limitations
 
-## Things which are not finished
+The important ones are:
 
-The compiler currently has the following known issues:
+- ARC cannot collect cycles, and weak references are not implemented.
+- There is no borrow checker. Shared mutable objects require the same care they
+  would in other ARC-based languages.
+- The generic system is limited and not yet suitable for building a broad
+  generic collection library.
+- `Dict` has `String` keys and stores values through an internal Variant.
+- Networking, threads, async I/O and a full filesystem package are missing.
+- Unicode scalar operations exist, but normalization, grapheme clusters and
+  the larger Unicode database do not.
+- Raw pointers and incorrect extern declarations can cause undefined behaviour.
+- The internal White ABI may change between compiler releases.
+- The current data model assumes 64-bit targets in several places.
 
-- ARC cannot collect cycles and there are no weak references yet.
-- Strings contain UTF-8, but indexing and slicing are still byte-based. They
-  can split a multi-byte character.
-- The generic system is limited and is not yet something I would compare with
-  Rust generics or C++ templates.
-- `Dict` currently has String keys and uses an internal Variant representation
-  for its values.
-- Networking, threads, async I/O and a larger filesystem API are still missing
-  from the standard library.
-- Raw pointers and a wrong `extern` declaration can still produce undefined
-  behaviour. They are unsafe interfaces, even though there is no `unsafe`
-  keyword around them today.
-- The internal White ABI can change between compiler releases.
-- Windows x86-64, Linux x86-64, and macOS ARM64 are covered by the release pipeline and the main language test suite.
-
-The project is suitable for experimenting with the language, working on the
-compiler, and writing small native programs. I would not currently recommend
-dropping it into production infrastructure and expecting the compatibility
-guarantees of an established language.
+White is a good place to experiment with language design, work
+on a self-hosted compiler, and write small native tools. Production deployment
+still needs more time, more users and a wider platform test matrix.
+But I don't have any users yet.
 
 ## License
 

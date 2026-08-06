@@ -404,30 +404,18 @@ func main(argc -> Int, ptr argv -> String) -> Int {
             if (sys.OS != "WINDOWS") { clang_args.append("-fPIC"); }
         }
 
-        let wl_path -> String = sys.env.get_env("WL_PATH");
-        if (wl_path is !null) {
-            if (sys.OS == "WINDOWS") {
-                clang_args.append(wl_path + "/runtime/wl_runtime.obj");
-                if (cfg.is_shared) {
-                    clang_args.append("-nostdlib");
-                    clang_args.append("-Xlinker");
-                    clang_args.append("/entry:DllMainCRTStartup");
-                    clang_args.append("-lkernel32");
-                    clang_args.append("-lshell32");
-                } else {
-                    clang_args.append("-nostdlib");
-                    clang_args.append("-Xlinker");
-                    clang_args.append("/entry:mainCRTStartup");
-                    clang_args.append("-Xlinker");
-                    clang_args.append("/subsystem:console");
-                    clang_args.append("-lkernel32");
-                    clang_args.append("-lshell32");
-                }
+        if (sys.OS == "WINDOWS") {
+            clang_args.append("-nostdlib");
+            clang_args.append("-Xlinker");
+            if (cfg.is_shared) {
+                clang_args.append("/entry:DllMainCRTStartup");
             } else {
-                clang_args.append(wl_path + "/runtime/wl_runtime.o");
+                clang_args.append("/entry:mainCRTStartup");
+                clang_args.append("-Xlinker");
+                clang_args.append("/subsystem:console");
             }
-        } else {
-            print("Warning: WL_PATH environment variable is not set. Auto-linking of runtime skipped.");
+            clang_args.append("-lkernel32");
+            clang_args.append("-lshell32");
         }
 
         let lib_idx -> Int = 0;
