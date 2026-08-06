@@ -7,6 +7,12 @@ import "WhitelangTokens.wl"
 import * from "WhitelangNodes.wl"
 import * from "WhitelangExceptions.wl"
 
+extern "system" {
+    func GetSystemInfo(info -> AnyPtr) -> Void;
+}
+
+extern func uname(info -> AnyPtr) -> Int from "C";
+
 // Type constants
 const TYPE_INT   -> Int = 1;
 const TYPE_FLOAT -> Int = 2;
@@ -2851,5 +2857,64 @@ func is_subclass(c -> Compiler, child_id -> Int, parent_id -> Int) -> Bool {
 
 // system utils
 func get_target_os() -> String {
-    return sys.OS;
+    if (sys.OS == "WINDOWS") { return "WINDOWS"; }
+    if (sys.OS == "LINUX") { return "LINUX"; }
+    if (sys.OS == "MACOS") { return "MACOS"; }
+    return "UNKNOWN";
+}
+
+func target_name_equals(buffer -> AnyPtr, offset -> Int, name -> String) -> Bool {
+    let ptr bytes -> Byte = buffer;
+    let i -> Int = 0;
+    while (i < name.length()) {
+        if (bytes[offset + i] != name[i]) { return false; }
+        i += 1;
+    }
+    return bytes[offset + name.length()] == Byte(0);
+}
+
+func get_target_arch() -> String {
+    if (sys.OS == "WINDOWS") {
+        let info -> Byte[48] = [0];
+        GetSystemInfo(ref info[0]);
+        let arch -> Int = Int(info[0]) | (Int(info[1]) << 8);
+        if (arch == 0) { return "X86"; }
+        if (arch == 5) { return "ARM"; }
+        if (arch == 9) { return "X86_64"; }
+        if (arch == 12) { return "AARCH64"; }
+        return "UNKNOWN";
+    }
+
+    let info -> Byte[1536] = [0];
+    if (uname(ref info[0]) != 0) { return "UNKNOWN"; }
+    let machine_offset -> Int = 260;
+    if (sys.OS == "MACOS") { machine_offset = 1024; }
+    let raw -> AnyPtr = ref info[0];
+    if (target_name_equals(raw, machine_offset, "i386") || target_name_equals(raw, machine_offset, "i686")) { return "X86"; }
+    if (target_name_equals(raw, machine_offset, "x86_64") || target_name_equals(raw, machine_offset, "amd64")) { return "X86_64"; }
+    if (target_name_equals(raw, machine_offset, "arm") || target_name_equals(raw, machine_offset, "armv7l")) { return "ARM"; }
+    if (target_name_equals(raw, machine_offset, "aarch64") || target_name_equals(raw, machine_offset, "arm64")) { return "AARCH64"; }
+    if (target_name_equals(raw, machine_offset, "riscv32")) { return "RISCV32"; }
+    if (target_name_equals(raw, machine_offset, "riscv64")) { return "RISCV64"; }
+    if (target_name_equals(raw, machine_offset, "ppc64") || target_name_equals(raw, machine_offset, "ppc64le")) { return "POWERPC64"; }
+    if (target_name_equals(raw, machine_offset, "s390x")) { return "S390X"; }
+    return "UNKNOWN";
+}
+
+func get_target_abi() -> String {
+    if (sys.OS == "WINDOWS") { return "MSVC"; }
+    if (sys.OS == "LINUX") { return "GNU"; }
+    if (sys.OS == "MACOS") { return "NONE"; }
+    return "UNKNOWN";
+}
+
+func get_target_binary_format() -> String {
+    if (sys.OS == "WINDOWS") { return "COFF"; }
+    if (sys.OS == "LINUX") { return "ELF"; }
+    if (sys.OS == "MACOS") { return "MACHO"; }
+    return "UNKNOWN";
+}
+
+func get_target_pointer_bits() -> Int {
+    return Int(size_of(AnyPtr)) * 8;
 }

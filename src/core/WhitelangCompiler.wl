@@ -44,22 +44,109 @@ func emit_error_value(c -> Compiler, value -> CompileResult, pos -> Position) ->
     c.output_file.write(c.indent + result + " = insertvalue { i64, i32 } " + with_domain + ", i32 " + value.reg + ", 1\n");
     return CompileResult(reg=result, type=TYPE_ANY_ERROR);
 }
-func is_os_expr(c -> Compiler, node -> Struct) -> Bool {
-    if (node is null) { return false; }
+func target_intrinsic(c -> Compiler, node -> Struct) -> String {
+    if (node is null) { return ""; }
     let base -> BaseNode = node;
-
+    let info -> SymbolInfo = null;
     if (base.type == NODE_FIELD_ACCESS) {
-        if (format_ast_path(node) == "sys.OS") { return true; }
-    }
-
-    if (base.type == NODE_VAR_ACCESS) {
+        let name -> String = format_ast_path(node);
+        let mapped -> String = c.current_file_global_aliases.get(name);
+        if (mapped is null) { mapped = c.global_var_aliases.get(name); }
+        if (mapped is !null) { info = c.global_symbol_table.get(mapped); }
+        if (info is null) { info = c.global_symbol_table.get(name); }
+    } else if (base.type == NODE_VAR_ACCESS) {
         let access -> VarAccessNode = node;
-        let info -> SymbolInfo = find_symbol(c, access.name_tok.value);
-        if (info is !null && info.reg == "$intrinsic.target_os") { return true; }
+        info = find_symbol(c, access.name_tok.value);
     }
-    return false;
+    if (info is null || !info.reg.starts_with("$intrinsic.")) { return ""; }
+    return info.reg.slice(11, info.reg.length());
 }
-func fold_os_cond(c -> Compiler, node -> Struct) -> Int {
+
+func target_value(name -> String) -> Int {
+    if (name == "target_os") {
+        let os -> String = get_target_os();
+        if (os == "WINDOWS") { return 0; }
+        if (os == "LINUX") { return 1; }
+        if (os == "MACOS") { return 2; }
+        return 3;
+    }
+    if (name == "target_arch") {
+        let arch -> String = get_target_arch();
+        if (arch == "X86") { return 0; }
+        if (arch == "X86_64") { return 1; }
+        if (arch == "ARM") { return 2; }
+        if (arch == "AARCH64") { return 3; }
+        if (arch == "RISCV32") { return 4; }
+        if (arch == "RISCV64") { return 5; }
+        if (arch == "WASM32") { return 6; }
+        if (arch == "WASM64") { return 7; }
+        if (arch == "POWERPC64") { return 8; }
+        if (arch == "S390X") { return 9; }
+        return 10;
+    }
+    if (name == "target_abi") {
+        let abi -> String = get_target_abi();
+        if (abi == "MSVC") { return 0; }
+        if (abi == "GNU") { return 1; }
+        if (abi == "MUSL") { return 2; }
+        if (abi == "NONE") { return 3; }
+        return 4;
+    }
+    if (name == "target_binary_format") {
+        let format -> String = get_target_binary_format();
+        if (format == "COFF") { return 0; }
+        if (format == "ELF") { return 1; }
+        if (format == "MACHO") { return 2; }
+        if (format == "WASM") { return 3; }
+        return 4;
+    }
+    if (name == "target_pointer_bits") { return get_target_pointer_bits(); }
+    return -1;
+}
+
+func target_member(name -> String, member -> String) -> Int {
+    if (name == "target_os") {
+        if (member == "Windows") { return 0; }
+        if (member == "Linux") { return 1; }
+        if (member == "MacOS") { return 2; }
+        if (member == "Unknown") { return 3; }
+    } else if (name == "target_arch") {
+        if (member == "X86") { return 0; }
+        if (member == "X86_64") { return 1; }
+        if (member == "Arm") { return 2; }
+        if (member == "AArch64") { return 3; }
+        if (member == "RiscV32") { return 4; }
+        if (member == "RiscV64") { return 5; }
+        if (member == "Wasm32") { return 6; }
+        if (member == "Wasm64") { return 7; }
+        if (member == "PowerPC64") { return 8; }
+        if (member == "S390x") { return 9; }
+        if (member == "Unknown") { return 10; }
+    } else if (name == "target_abi") {
+        if (member == "Msvc") { return 0; }
+        if (member == "Gnu") { return 1; }
+        if (member == "Musl") { return 2; }
+        if (member == "None") { return 3; }
+        if (member == "Unknown") { return 4; }
+    } else if (name == "target_binary_format") {
+        if (member == "Coff") { return 0; }
+        if (member == "Elf") { return 1; }
+        if (member == "MachO") { return 2; }
+        if (member == "Wasm") { return 3; }
+        if (member == "Unknown") { return 4; }
+    }
+    return -1;
+}
+
+func target_enum_name(name -> String) -> String {
+    if (name == "target_os") { return "Os"; }
+    if (name == "target_arch") { return "Arch"; }
+    if (name == "target_abi") { return "Abi"; }
+    if (name == "target_binary_format") { return "BinaryFormat"; }
+    return "";
+}
+
+func fold_target_cond(c -> Compiler, node -> Struct) -> Int {
 // return -1 when the condition cannot be folded for this target
     if (node is null) { return -1; }
     let base -> BaseNode = node;
@@ -67,7 +154,7 @@ func fold_os_cond(c -> Compiler, node -> Struct) -> Int {
     if (base.type == NODE_UNARYOP) {
         let unary -> UnaryOpNode = node;
         if (unary.op_tok.value == "!") {
-            let value -> Int = fold_os_cond(c, unary.node);
+            let value -> Int = fold_target_cond(c, unary.node);
             if (value == 0) { return 1; }
             if (value == 1) { return 0; }
         }
@@ -79,8 +166,8 @@ func fold_os_cond(c -> Compiler, node -> Struct) -> Int {
     let op -> String = binary.op_tok.value;
 
     if (op == "&&" || op == "||") {
-        let left_value -> Int = fold_os_cond(c, binary.left);
-        let right_value -> Int = fold_os_cond(c, binary.right);
+        let left_value -> Int = fold_target_cond(c, binary.left);
+        let right_value -> Int = fold_target_cond(c, binary.right);
         if (left_value == -1 || right_value == -1) { return -1; }
         if (op == "&&") {
             if (left_value == 1 && right_value == 1) { return 1; }
@@ -92,19 +179,35 @@ func fold_os_cond(c -> Compiler, node -> Struct) -> Int {
 
     if (op != "==" && op != "!=") { return -1; }
 
-    let literal_node -> Struct = null;
-    if (is_os_expr(c, binary.left)) {
-        literal_node = binary.right;
-    } else if (is_os_expr(c, binary.right)) {
+    let intrinsic_node -> Struct = binary.left;
+    let intrinsic -> String = target_intrinsic(c, intrinsic_node);
+    let literal_node -> Struct = binary.right;
+    if (intrinsic.length() == 0) {
+        intrinsic_node = binary.right;
+        intrinsic = target_intrinsic(c, intrinsic_node);
         literal_node = binary.left;
+    }
+    if (intrinsic.length() == 0) { return -1; }
+
+    let literal_base -> BaseNode = literal_node;
+    let equal -> Bool = false;
+    if (intrinsic == "target_os" && literal_base is !null && literal_base.type == NODE_STRING) {
+        let literal -> StringNode = literal_node;
+        equal = get_target_os() == literal.tok.value;
+    } else if (intrinsic == "target_pointer_bits" && literal_base is !null && literal_base.type == NODE_INT) {
+        let literal -> IntNode = literal_node;
+        equal = get_target_pointer_bits() == string_to_int(literal.tok.value, literal.pos);
+    } else if (literal_base is !null && literal_base.type == NODE_FIELD_ACCESS) {
+        let field -> FieldAccessNode = literal_node;
+        let enum_name -> String = target_enum_name(intrinsic);
+        let field_path -> String = format_ast_path(literal_node);
+        if (!field_path.ends_with(enum_name + "." + field.field_name)) { return -1; }
+        let expected -> Int = target_member(intrinsic, field.field_name);
+        if (expected < 0) { return -1; }
+        equal = target_value(intrinsic) == expected;
     } else {
         return -1;
     }
-
-    let literal_base -> BaseNode = literal_node;
-    if (literal_base is null || literal_base.type != NODE_STRING) { return -1; }
-    let literal -> StringNode = literal_node;
-    let equal -> Bool = get_target_os() == literal.tok.value;
 
     if (op == "==") {
         if equal { return 1; }
@@ -1076,7 +1179,9 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
     return CompileResult(reg="0", type=expected_type, origin_type=expected_type);
 }
 
-func emit_os(c -> Compiler) -> CompileResult {
+func emit_target_intrinsic(c -> Compiler, info -> SymbolInfo) -> CompileResult {
+    let name -> String = info.reg.slice(11, info.reg.length());
+    if (name != "target_os" || info.type != TYPE_STRING) { return CompileResult(reg="" + target_value(name), type=info.type, origin_type=info.type); }
     let value -> String = get_target_os();
     let id -> Int = register_string_constant(c, value);
     let len -> Int = value.length() + 1;
@@ -2959,7 +3064,7 @@ func must_terminate(c -> Compiler, node -> Struct) -> Bool {
 
     if (base.type == NODE_IF) {
         let if_node -> IfNode = node;
-        let platform_value -> Int = fold_os_cond(c, if_node.condition);
+        let platform_value -> Int = fold_target_cond(c, if_node.condition);
         if (platform_value == 1) {
             return must_terminate(c, if_node.body);
         }
@@ -3106,15 +3211,31 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         }
 
         if ((sys_anns.ann_flags & FLAG_ANN_INTRINSIC) != 0) {
-            if (sys_anns.intrinsic_name != "target_os") {
+            let intrinsic -> String = sys_anns.intrinsic_name;
+            if (intrinsic != "target_os" && intrinsic != "target_arch" && intrinsic != "target_abi" && intrinsic != "target_binary_format" && intrinsic != "target_pointer_bits") {
                 throw_internal_compiler_error(node.pos, "Unknown intrinsic global '" + sys_anns.intrinsic_name + "'.");
                 return void_result();
             }
-            if (target_type_id != TYPE_STRING || !node.is_const) {
-                throw_type_error(node.pos, "Intrinsic 'sys.OS' must be declared as const String.");
+            if (!node.is_const) {
+                throw_type_error(node.pos, "Target intrinsics must be declared as const values.");
                 return void_result();
             }
-            c.global_symbol_table.put(full_var_name, SymbolInfo(reg="$intrinsic." + sys_anns.intrinsic_name, type=TYPE_STRING, origin_type=TYPE_STRING, is_const=true));
+            if (intrinsic == "target_pointer_bits") {
+                if (target_type_id != TYPE_INT) {
+                    throw_type_error(node.pos, "Intrinsic 'sys.POINTER_BITS' must be declared as const Int.");
+                    return void_result();
+                }
+            } else if (intrinsic == "target_os" && target_type_id == TYPE_STRING) {
+                // keep the old declaration valid for one bootstrap generation
+            } else {
+                let target_info -> StructInfo = c.struct_id_map.get("" + target_type_id);
+                let enum_name -> String = target_enum_name(intrinsic);
+                if (target_info is null || !target_info.is_enum || (target_info.name != enum_name && !target_info.name.ends_with("." + enum_name))) {
+                    throw_type_error(node.pos, "Target intrinsics must use their target enum type.");
+                    return void_result();
+                }
+            }
+            c.global_symbol_table.put(full_var_name, SymbolInfo(reg="$intrinsic." + intrinsic, type=target_type_id, origin_type=target_type_id, is_const=true));
             return void_result();
         }
 
@@ -3391,7 +3512,7 @@ func compile_var_assign(c -> Compiler, node -> VarAssignNode) -> CompileResult {
 }
 
 func compile_if(c -> Compiler, node -> IfNode) -> CompileResult {
-    let platform_value -> Int = fold_os_cond(c, node.condition);
+    let platform_value -> Int = fold_target_cond(c, node.condition);
     if (platform_value == 1) {
         compile_node(c, node.body);
         return void_result();
@@ -4701,7 +4822,7 @@ func check_local_init_node(c -> Compiler, node -> Struct, scope -> LocalInitScop
     if (base.type == NODE_IF) {
         let branch -> IfNode = node;
         let condition_flow -> InitFlow = check_local_init_node(c, branch.condition, scope, initialized);
-        let selected -> Int = fold_os_cond(c, branch.condition);
+        let selected -> Int = fold_target_cond(c, branch.condition);
         let condition -> BaseNode = branch.condition;
         if (condition is !null && condition.type == NODE_BOOL) {
             let boolean -> BooleanNode = branch.condition;
@@ -4943,7 +5064,7 @@ func check_init_node(c -> Compiler, class_name -> String, node -> Struct, requir
             c, class_name, branch.condition, required, known_fields, initialized
         );
 
-        let selected -> Int = fold_os_cond(c, branch.condition);
+        let selected -> Int = fold_target_cond(c, branch.condition);
         let condition -> BaseNode = branch.condition;
         if (condition is !null && condition.type == NODE_BOOL) {
             let boolean -> BooleanNode = branch.condition;
@@ -5932,9 +6053,7 @@ func compile_field_access(c -> Compiler, node -> FieldAccessNode) -> CompileResu
         }
 
         if (g_info is !null) {
-            if (g_info.reg == "$intrinsic.target_os") {
-                return emit_os(c);
-            }
+            if (g_info.reg.starts_with("$intrinsic.")) { return emit_target_intrinsic(c, g_info); }
             let llvm_ty_str -> String = get_llvm_type_str(c, g_info.type);
             let val_reg -> String = next_reg(c);
             c.output_file.write(c.indent + val_reg + " = load " + llvm_ty_str + ", " + llvm_ty_str + "* " + g_info.reg + "\n");
@@ -8691,9 +8810,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
         
         if (info.type == TYPE_POISON) { return CompileResult(reg="poison", type=TYPE_POISON); }
 
-        if (info.reg == "$intrinsic.target_os") {
-            return emit_os(c);
-        }
+        if (info.reg.starts_with("$intrinsic.")) { return emit_target_intrinsic(c, info); }
 
         let llvm_ty_str -> String = get_llvm_type_str(c, info.type);
         if (llvm_ty_str == "") {
