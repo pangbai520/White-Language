@@ -1,13 +1,37 @@
 // std/internal/runtime/string.wl
 // low-level String storage access shared by the standard library
 
-extern "C" {
-    func wl_alloc_string(size -> Long) -> String;
-    func wl_string_set_length(value -> String, length -> Int) -> Void;
-}
+import "memory.wl" as memory
+
+const __STRING_TYPE_ID -> Int = 5;
+const __OBJECT_HEADER_SIZE -> Int = 8;
 
 func alloc(length -> Long) -> String {
-    return wl_alloc_string(length);
+    if (length < 0L || length > 2147483647L) { return null; }
+
+    let pointer_size -> Int = Int(size_of(AnyPtr));
+    let value_size -> Int = pointer_size + 8;
+    let storage_size -> Long = Long(__OBJECT_HEADER_SIZE + value_size) + length + 1L;
+    let storage -> AnyPtr = memory.mem_alloc_zeroed(storage_size);
+    if (storage is nullptr) { return null; }
+
+    let ptr header -> Int = storage;
+    header[0] = 0;
+    header[1] = __STRING_TYPE_ID;
+
+    let ptr storage_bytes -> Byte = storage;
+    let value -> AnyPtr = ref storage_bytes[__OBJECT_HEADER_SIZE];
+    let buffer -> AnyPtr = ref storage_bytes[__OBJECT_HEADER_SIZE + value_size];
+    let ptr fields -> AnyPtr = value;
+    fields[0] = buffer;
+
+    let lengths_address -> AnyPtr = ref storage_bytes[__OBJECT_HEADER_SIZE + pointer_size];
+    let ptr lengths -> Int = lengths_address;
+    lengths[0] = Int(length);
+    lengths[1] = Int(length);
+
+    let result -> String = value;
+    return result;
 }
 
 func data(value -> String) -> AnyPtr {
@@ -17,7 +41,29 @@ func data(value -> String) -> AnyPtr {
 }
 
 func set_length(value -> String, length -> Int) -> Void {
-    wl_string_set_length(value, length);
+    if (value is null || length < 0) { return; }
+    let ptr value_bytes -> Byte = AnyPtr(value);
+    let lengths_address -> AnyPtr = ref value_bytes[Int(size_of(AnyPtr))];
+    let ptr lengths -> Int = lengths_address;
+    if (length > lengths[1]) { return; }
+    lengths[0] = length;
+    let ptr bytes -> Byte = data(value);
+    bytes[length] = Byte(0);
+}
+
+func from_c_string(value -> AnyPtr) -> String {
+    if (value is nullptr) { return null; }
+    let ptr source -> Byte = value;
+    let length -> Int = 0;
+    while (source[length] != Byte(0)) {
+        if (length == 2147483647) { return null; }
+        length += 1;
+    }
+
+    let result -> String = alloc(Long(length));
+    if (result is null) { return null; }
+    memory.mem_copy(data(result), value, Long(length));
+    return result;
 }
 
 func is_native_text(value -> String) -> Bool {

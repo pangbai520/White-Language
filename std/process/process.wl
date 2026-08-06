@@ -210,7 +210,14 @@ func shell(command -> String) -> Int {
         }
         return status;
     }
-    return posix.system_call(command);
+    return posix.system(runtime_string.data(command));
+}
+
+func argument(argc -> Int, ptr argv -> String, index -> Int) -> String {
+    if (argv is nullptr || index < 0 || index >= argc) { return null; }
+    let raw_argv -> AnyPtr = AnyPtr(argv);
+    let ptr native_argv -> AnyPtr = raw_argv;
+    return runtime_string.from_c_string(native_argv[index]);
 }
 
 func id() -> Int {

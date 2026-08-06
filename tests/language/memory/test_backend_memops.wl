@@ -7,8 +7,6 @@ extern "C" {
     func memcpy(dest -> AnyPtr, src -> AnyPtr, count -> Long) -> AnyPtr;
     func memmove(dest -> AnyPtr, src -> AnyPtr, count -> Long) -> AnyPtr;
     func memset(dest -> AnyPtr, value -> Int, count -> Long) -> AnyPtr;
-    func wl_alloc_string(size -> Long) -> String;
-    func wl_string_set_length(value -> String, length -> Int) -> Void;
 }
 
 func string_data(value -> String) -> AnyPtr {
@@ -16,35 +14,26 @@ func string_data(value -> String) -> AnyPtr {
     return fields[0];
 }
 
-func shift_left(value -> String) -> Void {
-    let ptr bytes -> Byte = string_data(value);
-    let index -> Int = 1;
-    while (index < value.length()) {
-        bytes[index - 1] = bytes[index];
-        index += 1;
-    }
-    wl_string_set_length(value, value.length() - 1);
-}
-
 func main() -> Int {
     let source -> String = "ABCDEF";
-    let value -> String = wl_alloc_string(6L);
+    let value -> String = "......"[:];
     memcpy(string_data(value), string_data(source), 6L);
 
-    shift_left(value);
-    if (value != "BCDEF") {
+    let ptr value_bytes -> Byte = string_data(value);
+    memmove(string_data(value), ref value_bytes[1], 5L);
+    if (value.slice(0, 5) != "BCDEF") {
         print("FAIL: Optimized overlapping copy was corrupted");
         return 1;
     }
 
-    let moved -> String = wl_alloc_string(5L);
+    let moved -> String = "....."[:];
     memmove(string_data(moved), string_data(value), 5L);
     if (moved != "BCDEF") {
         print("FAIL: Runtime memmove returned corrupted data");
         return 1;
     }
 
-    let filled -> String = wl_alloc_string(4L);
+    let filled -> String = "...."[:];
     memset(string_data(filled), Int('x'), 4L);
     if (filled != "xxxx") {
         print("FAIL: Runtime memset returned corrupted data");

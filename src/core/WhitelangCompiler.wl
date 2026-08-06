@@ -10681,8 +10681,6 @@ func compile_string_method_call(c -> Compiler, obj_node -> Struct, method_name -
 // --------------
 
 func compile_start(c -> Compiler) -> Void {
-    c.output_file.write("declare %struct.$String* @wl_alloc_string(i64)\n");
-    c.declared_externs.put("wl_alloc_string", StringConstant(id=0, value=""));
 
     c.output_file.write("declare void @llvm.trap()\n\n");
 

@@ -126,7 +126,7 @@ class File {
             return;
         }
 
-        let raw_handle -> AnyPtr = posix.wl_fopen(file_path, mode);
+        let raw_handle -> AnyPtr = posix.fopen(runtime_string.data(file_path), runtime_string.data(mode));
         if (raw_handle is !nullptr) {
             self.handle = raw_handle;
         } else {
@@ -209,7 +209,8 @@ class File {
             self.last_error = Error.OutOfMemory;
             throw self.last_error;
         }
-        let read_count -> Long = posix.wl_fread(buffer, 1L, size, self.handle);
+        let read_count -> Long = posix.fread(runtime_string.data(buffer), 1L, size, self.handle);
+        runtime_string.set_length(buffer, Int(read_count));
         if (read_count != size) {
             self.last_error = __last_error();
             throw self.last_error;
@@ -238,7 +239,7 @@ class File {
             self.last_error = Error.None;
             return bytes_written;
         }
-        let written -> Long = posix.wl_fwrite(content, 1L, length, self.handle);
+        let written -> Long = posix.fwrite(runtime_string.data(content), 1L, length, self.handle);
         if (written != length) {
             self.last_error = __last_error();
             throw self.last_error;
@@ -281,7 +282,7 @@ class File {
             }
             return;
         }
-        if (posix.wl_fwrite(content, 1L, length, self.handle) != length) {
+        if (posix.fwrite(runtime_string.data(content), 1L, length, self.handle) != length) {
             self.last_error = __last_error();
         }
     }
@@ -355,7 +356,8 @@ func exists(path -> String) -> Bool {
         return attributes != windows.INVALID_FILE_ATTRIBUTES;
     }
 
-    let handle -> AnyPtr = posix.wl_fopen(path, "rb");
+    let mode -> String = "rb";
+    let handle -> AnyPtr = posix.fopen(runtime_string.data(path), runtime_string.data(mode));
     if (handle is nullptr) { return false; }
     posix.fclose(handle);
     return true;
@@ -371,6 +373,6 @@ func remove(path -> String) -> Void? {
         if (!removed) { throw __last_error(); }
         return;
     }
-    if (posix.wl_remove(path) != 0) { throw __last_error(); }
+    if (posix.remove(runtime_string.data(path)) != 0) { throw __last_error(); }
     return;
 }

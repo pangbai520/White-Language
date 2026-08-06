@@ -62,7 +62,8 @@ func get(name -> String) -> String? {
         return result;
     }
 
-    let result -> String = posix.wl_getenv(name);
+    let native_value -> AnyPtr = posix.getenv(runtime_string.data(name));
+    let result -> String = runtime_string.from_c_string(native_value);
     if (result is null) { throw Error.NotFound; }
     if (!runtime_string.is_native_text(result)) { throw Error.InvalidData; }
     return result;

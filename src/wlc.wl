@@ -12,9 +12,6 @@ import "core/WhitelangExceptions.wl"
 import "core/WhitelangCompiler.wl"
 import "core/WhitelangUtils.wl"
 
-
-extern func get_arg(ptr argv -> String, idx -> Int) -> String from "C";
-
 struct CompilerConfig(
     source_file     -> String,
     output_file     -> String,
@@ -142,7 +139,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
 
     let i -> Int = 1;
     while (i < argc) {
-        let arg -> String = get_arg(argv, i);
+        let arg -> String = process.argument(argc, argv, i);
 
         if (arg == "-h" || arg == "--help") {
             print_usage();
@@ -166,12 +163,12 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         else if (arg == "-o") {
             i++;
             if (i >= argc) { print("Error: -o requires an argument"); return 1; }
-            cfg.output_file = get_arg(argv, i);
+            cfg.output_file = process.argument(argc, argv, i);
         }
         else if (arg == "-L" || arg == "--library-path") {
             i++;
             if (i >= argc) { print("Error: " + arg + " requires an argument"); return 1; }
-            let library_path -> String = get_arg(argv, i);
+            let library_path -> String = process.argument(argc, argv, i);
             if (library_path.length() == 0) { print("Error: Library search path cannot be empty"); return 1; }
             cfg.library_paths.append(library_path);
         }
@@ -181,7 +178,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         else if (arg == "--ldflags") {
             i++;
             if (i >= argc) { print("Error: --ldflags requires an argument"); return 1; }
-            let flags -> Vector(String) = split_link_flags(get_arg(argv, i));
+            let flags -> Vector(String) = split_link_flags(process.argument(argc, argv, i));
             let flag_idx -> Int = 0;
             while (flag_idx < flags.length()) {
                 cfg.extra_ldflags.append(flags[flag_idx]);
