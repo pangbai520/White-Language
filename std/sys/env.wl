@@ -42,7 +42,7 @@ func get(name -> String) -> String? {
             throw __from_platform(platform_errors.from_windows(code));
         }
 
-        let wide_value -> AnyPtr = windows.HeapAlloc(windows.GetProcessHeap(), windows.HEAP_ZERO_MEMORY, Long(required) * 2L);
+        let wide_value -> AnyPtr = windows.HeapAlloc(windows.GetProcessHeap(), windows.HEAP_ZERO_MEMORY, UIntSize(required) * UIntSize(2));
         if (wide_value is nullptr) {
             windows.free_utf16(wide_name);
             throw CoreError.OutOfMemory;

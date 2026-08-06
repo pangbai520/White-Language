@@ -16,7 +16,7 @@ func write_err(message -> String) -> Void {
         }
         return;
     }
-    posix.write(2, runtime_string.data(message), Long(message.length()));
+    posix.write(2, runtime_string.data(message), UIntSize(message.length()));
 }
 
 func panic(message -> String) -> Void {
@@ -51,7 +51,7 @@ func startup_args(ptr argc -> Int) -> AnyPtr {
     if (wide_argv is nullptr || argc[0] < 0) { return nullptr; }
 
     let count -> Int = argc[0];
-    let storage -> AnyPtr = windows.HeapAlloc(windows.GetProcessHeap(), windows.HEAP_ZERO_MEMORY, Long(count + 1) * Long(size_of(AnyPtr)));
+    let storage -> AnyPtr = windows.HeapAlloc(windows.GetProcessHeap(), windows.HEAP_ZERO_MEMORY, UIntSize(count + 1) * size_of(AnyPtr));
     if (storage is nullptr) {
         windows.LocalFree(wide_argv);
         return nullptr;
@@ -68,7 +68,7 @@ func startup_args(ptr argc -> Int) -> AnyPtr {
             return nullptr;
         }
 
-        args[i] = windows.HeapAlloc(windows.GetProcessHeap(), 0, Long(length));
+        args[i] = windows.HeapAlloc(windows.GetProcessHeap(), 0, UIntSize(length));
         if (args[i] is nullptr || windows.WideCharToMultiByte(windows.CP_UTF8, windows.WC_ERR_INVALID_CHARS, wide_args[i], -1, args[i], length, nullptr, nullptr) <= 0) {
             if (args[i] is !nullptr) { windows.HeapFree(windows.GetProcessHeap(), 0, args[i]); }
             args[i] = nullptr;

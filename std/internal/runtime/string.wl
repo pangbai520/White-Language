@@ -12,7 +12,7 @@ func alloc(length -> Long) -> String {
     let pointer_size -> Int = Int(size_of(AnyPtr));
     let value_size -> Int = pointer_size + 8;
     let storage_size -> Long = Long(__OBJECT_HEADER_SIZE + value_size) + length + 1L;
-    let storage -> AnyPtr = memory.mem_alloc_zeroed(storage_size);
+    let storage -> AnyPtr = memory.mem_alloc_zeroed(UIntSize(storage_size));
     if (storage is nullptr) { return null; }
 
     let ptr header -> Int = storage;
@@ -62,7 +62,7 @@ func from_c_string(value -> AnyPtr) -> String {
 
     let result -> String = alloc(Long(length));
     if (result is null) { return null; }
-    memory.mem_copy(data(result), value, Long(length));
+    memory.mem_copy(data(result), value, UIntSize(length));
     return result;
 }
 

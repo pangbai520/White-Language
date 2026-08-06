@@ -49,10 +49,10 @@ class Dict {
         }
 
         // keys and variants are stored as pointers, hashes are 32-bit values
-        let slot_size -> Long = runtime.pointer_size();
-        let ptr new_keys -> String = runtime.mem_alloc_zeroed(Long(actual_cap) * slot_size);
-        let ptr new_values -> Variant = runtime.mem_alloc_zeroed(Long(actual_cap) * slot_size);
-        let ptr new_hashes -> Int = runtime.mem_alloc_zeroed(Long(actual_cap) * 4L);
+        let slot_size -> UIntSize = runtime.pointer_size();
+        let ptr new_keys -> String = runtime.mem_alloc_zeroed(UIntSize(actual_cap) * slot_size);
+        let ptr new_values -> Variant = runtime.mem_alloc_zeroed(UIntSize(actual_cap) * slot_size);
+        let ptr new_hashes -> Int = runtime.mem_alloc_zeroed(UIntSize(actual_cap) * UIntSize(4));
         if (new_keys is nullptr || new_values is nullptr || new_hashes is nullptr) {
             runtime.mem_dealloc(new_keys);
             runtime.mem_dealloc(new_values);
@@ -92,10 +92,10 @@ class Dict {
             return;
         }
         let new_cap -> Int = old_cap << 1;
-        let slot_size -> Long = runtime.pointer_size();
-        let ptr new_keys -> String = runtime.mem_alloc_zeroed(Long(new_cap) * slot_size);
-        let ptr new_vals -> Variant = runtime.mem_alloc_zeroed(Long(new_cap) * slot_size);
-        let ptr new_hashes -> Int = runtime.mem_alloc_zeroed(Long(new_cap) * 4L);
+        let slot_size -> UIntSize = runtime.pointer_size();
+        let ptr new_keys -> String = runtime.mem_alloc_zeroed(UIntSize(new_cap) * slot_size);
+        let ptr new_vals -> Variant = runtime.mem_alloc_zeroed(UIntSize(new_cap) * slot_size);
+        let ptr new_hashes -> Int = runtime.mem_alloc_zeroed(UIntSize(new_cap) * UIntSize(4));
         if (new_keys is nullptr || new_vals is nullptr || new_hashes is nullptr) {
             runtime.mem_dealloc(new_keys);
             runtime.mem_dealloc(new_vals);

@@ -209,9 +209,9 @@ class File {
             self.last_error = Error.OutOfMemory;
             throw self.last_error;
         }
-        let read_count -> Long = posix.fread(runtime_string.data(buffer), 1L, size, self.handle);
+        let read_count -> UIntSize = posix.fread(runtime_string.data(buffer), UIntSize(1), UIntSize(size), self.handle);
         runtime_string.set_length(buffer, Int(read_count));
-        if (read_count != size) {
+        if (read_count != UIntSize(size)) {
             self.last_error = __last_error();
             throw self.last_error;
         }
@@ -239,8 +239,8 @@ class File {
             self.last_error = Error.None;
             return bytes_written;
         }
-        let written -> Long = posix.fwrite(runtime_string.data(content), 1L, length, self.handle);
-        if (written != length) {
+        let written -> UIntSize = posix.fwrite(runtime_string.data(content), UIntSize(1), UIntSize(length), self.handle);
+        if (written != UIntSize(length)) {
             self.last_error = __last_error();
             throw self.last_error;
         }
@@ -282,7 +282,7 @@ class File {
             }
             return;
         }
-        if (posix.fwrite(runtime_string.data(content), 1L, length, self.handle) != length) {
+        if (posix.fwrite(runtime_string.data(content), UIntSize(1), UIntSize(length), self.handle) != UIntSize(length)) {
             self.last_error = __last_error();
         }
     }

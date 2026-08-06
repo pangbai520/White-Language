@@ -831,6 +831,20 @@ func format_ast_path(node_raw -> Struct) -> String {
 
 
 // type system & mapping utils
+func get_size_llvm_type() -> String {
+    return "i" + get_target_pointer_bits();
+}
+
+func get_pointer_size_bytes() -> Int {
+    return get_target_pointer_bits() / 8;
+}
+
+func get_vector_llvm_type(c -> Compiler, element_type -> Int) -> String {
+    let size_ty -> String = get_size_llvm_type();
+    let element_ty -> String = get_llvm_type_str(c, element_type);
+    return "{ " + size_ty + ", " + size_ty + ", " + element_ty + "* }";
+}
+
 func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_INT)   { return "i32"; }
     if (type_id == TYPE_LONG)   { return "i64"; }
@@ -858,7 +872,7 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
     if (type_id == TYPE_UINT64){ return "i64"; }
     if (type_id == TYPE_UINT128){ return "i128"; }
     if (type_id == TYPE_FLOAT32){ return "float"; }
-    if (type_id == TYPE_INTSIZE || type_id == TYPE_UINTSIZE) { return "i64"; }
+    if (type_id == TYPE_INTSIZE || type_id == TYPE_UINTSIZE) { return get_size_llvm_type(); }
 
     let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
     if (arr_info is !null) {
@@ -892,8 +906,7 @@ func get_llvm_type_str(c -> Compiler, type_id -> Int) -> String {
 
         let v_info -> SymbolInfo = c.vector_base_map.get("" + type_id);
         if (v_info is !null) {
-            let elem_ty -> String = get_llvm_type_str(c, v_info.type);
-            return "{ i64, i64, " + elem_ty + "* }*";
+            return get_vector_llvm_type(c, v_info.type) + "*";
         }
 
         let fll_info -> SymbolInfo = c.fallible_base_map.get("" + type_id);
@@ -1250,7 +1263,8 @@ func get_slice_type_id(c -> Compiler, base_id -> Int) -> Int {
     c.type_counter += 1;
 
     let elem_ty -> String = get_llvm_type_str(c, base_id);
-    let slice_ty -> String = "{ i64, i64, i8*, " + elem_ty + "**, i64* }";
+    let size_ty -> String = get_size_llvm_type();
+    let slice_ty -> String = "{ " + size_ty + ", " + size_ty + ", i8*, " + elem_ty + "**, " + size_ty + "* }";
     c.array_type_cache.put(key, SymbolInfo(reg="", type=new_id, origin_type=0, is_const=false));
     c.array_info_map.put("" + new_id, ArrayInfo(base_type=base_id, size=-1, llvm_name=slice_ty));
     return new_id;
@@ -1745,9 +1759,10 @@ func get_type_bitwidth(t -> Int) -> Int {
     if (t == TYPE_BYTE || t == TYPE_INT8) { return 8; }
     if (t == TYPE_INT16 || t == TYPE_UINT16) { return 16; }
     if (t == TYPE_INT || t == TYPE_UINT32 || t == TYPE_CHAR || t == TYPE_FLOAT32) { return 32; }
-    if (t == TYPE_LONG || t == TYPE_UINT64 || t == TYPE_FLOAT || t == TYPE_INTSIZE || t == TYPE_UINTSIZE) { return 64; }
+    if (t == TYPE_INTSIZE || t == TYPE_UINTSIZE) { return get_target_pointer_bits(); }
+    if (t == TYPE_LONG || t == TYPE_UINT64 || t == TYPE_FLOAT) { return 64; }
     if (t == TYPE_INT128 || t == TYPE_UINT128) { return 128; }
-    return 64; // fallback for pointers
+    return get_target_pointer_bits(); // fallback for pointer-backed values
 }
 
 func get_type_size_bytes(c -> Compiler, type_id -> Int) -> Int {
@@ -1756,17 +1771,18 @@ func get_type_size_bytes(c -> Compiler, type_id -> Int) -> Int {
     if (type_id == TYPE_INT16 || type_id == TYPE_UINT16) { return 2; }
     if (type_id == TYPE_INT || type_id == TYPE_UINT32 || type_id == TYPE_CHAR || type_id == TYPE_FLOAT32 || type_id == TYPE_GENERIC_ENUM) { return 4; }
     if (type_id == TYPE_INT128 || type_id == TYPE_UINT128) { return 16; }
-    if (type_id == TYPE_LONG || type_id == TYPE_UINT64 || type_id == TYPE_FLOAT || type_id == TYPE_INTSIZE || type_id == TYPE_UINTSIZE) { return 8; }
+    if (type_id == TYPE_INTSIZE || type_id == TYPE_UINTSIZE) { return get_pointer_size_bytes(); }
+    if (type_id == TYPE_LONG || type_id == TYPE_UINT64 || type_id == TYPE_FLOAT) { return 8; }
     if (type_id == TYPE_ANY_ERROR) { return 16; } // { i64 domain, i32 code } with tail padding
 
     let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
     if (arr_info is !null) {
-        if (arr_info.size < 0) { return 16; }
+        if (arr_info.size < 0) { return get_pointer_size_bytes() * 5; }
         return arr_info.size * get_type_size_bytes(c, arr_info.base_type);
     }
 
     let struct_info -> StructInfo = c.struct_id_map.get("" + type_id);
-    if (struct_info is !null && struct_info.is_interface) { return 16; }
+    if (struct_info is !null && struct_info.is_interface) { return get_pointer_size_bytes() * 2; }
 
     let fallible_info -> SymbolInfo = c.fallible_base_map.get("" + type_id);
     if (fallible_info is !null) {
@@ -1783,7 +1799,7 @@ func get_type_size_bytes(c -> Compiler, type_id -> Int) -> Int {
         return offset;
     }
 
-    return 8;
+    return get_pointer_size_bytes();
 }
 
 func get_type_align_bytes(c -> Compiler, type_id -> Int) -> Int {
@@ -1791,10 +1807,11 @@ func get_type_align_bytes(c -> Compiler, type_id -> Int) -> Int {
     if (type_id == TYPE_INT16 || type_id == TYPE_UINT16) { return 2; }
     if (type_id == TYPE_INT || type_id == TYPE_UINT32 || type_id == TYPE_CHAR || type_id == TYPE_FLOAT32 || type_id == TYPE_GENERIC_ENUM) { return 4; }
     if (type_id == TYPE_INT128 || type_id == TYPE_UINT128) { return 16; }
+    if (type_id == TYPE_INTSIZE || type_id == TYPE_UINTSIZE) { return get_pointer_size_bytes(); }
 
     let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
     if (arr_info is !null) {
-        if (arr_info.size < 0) { return 8; }
+        if (arr_info.size < 0) { return get_pointer_size_bytes(); }
         return get_type_align_bytes(c, arr_info.base_type);
     }
 
@@ -1803,13 +1820,14 @@ func get_type_align_bytes(c -> Compiler, type_id -> Int) -> Int {
         let value_align -> Int = get_type_align_bytes(c, fallible_info.type);
         if (value_align > 8) { return value_align; }
     }
-    return 8;
+    return get_pointer_size_bytes();
 }
 
 func get_signed_min_literal(type_id -> Int) -> String {
     if (type_id == TYPE_INT8) { return "-128"; }
     if (type_id == TYPE_INT16) { return "-32768"; }
     if (type_id == TYPE_INT) { return "-2147483648"; }
+    if (type_id == TYPE_INTSIZE && get_target_pointer_bits() == 32) { return "-2147483648"; }
     if (type_id == TYPE_LONG || type_id == TYPE_INTSIZE) { return "-9223372036854775808"; }
     if (type_id == TYPE_INT128) { return "-170141183460469231731687303715884105728"; }
     return "";

@@ -5,13 +5,13 @@ import "sys"
 import "internal/platform/windows"
 import "internal/platform/posix"
 
-func pointer_size() -> Long {
-    return Long(size_of(AnyPtr));
+func pointer_size() -> UIntSize {
+    return size_of(AnyPtr);
 }
 
 @CompilerLink("memory_alloc")
-func mem_alloc(size -> Long) -> AnyPtr {
-    if (size <= 0L) { size = 1L; }
+func mem_alloc(size -> UIntSize) -> AnyPtr {
+    if (size == UIntSize(0)) { size = UIntSize(1); }
     if (sys.OS == sys.Os.Windows) {
         return windows.HeapAlloc(windows.GetProcessHeap(), 0, size);
     }
@@ -19,18 +19,18 @@ func mem_alloc(size -> Long) -> AnyPtr {
 }
 
 @CompilerLink("memory_alloc_zeroed")
-func mem_alloc_zeroed(size -> Long) -> AnyPtr {
-    if (size <= 0L) { size = 1L; }
+func mem_alloc_zeroed(size -> UIntSize) -> AnyPtr {
+    if (size == UIntSize(0)) { size = UIntSize(1); }
     if (sys.OS == sys.Os.Windows) {
         return windows.HeapAlloc(windows.GetProcessHeap(), windows.HEAP_ZERO_MEMORY, size);
     }
-    return posix.calloc(1L, size);
+    return posix.calloc(UIntSize(1), size);
 }
 
 @CompilerLink("memory_resize")
-func mem_resize(block -> AnyPtr, size -> Long) -> AnyPtr {
+func mem_resize(block -> AnyPtr, size -> UIntSize) -> AnyPtr {
     if (block is nullptr) { return mem_alloc(size); }
-    if (size <= 0L) { size = 1L; }
+    if (size == UIntSize(0)) { size = UIntSize(1); }
     if (sys.OS == sys.Os.Windows) {
         return windows.HeapReAlloc(windows.GetProcessHeap(), 0, block, size);
     }
@@ -48,27 +48,27 @@ func mem_dealloc(block -> AnyPtr) -> Void {
 }
 
 @CompilerLink("memory_copy")
-func mem_copy(dest -> AnyPtr, src -> AnyPtr, count -> Long) -> AnyPtr {
-    if (dest is nullptr || src is nullptr || count <= 0L) { return dest; }
+func mem_copy(dest -> AnyPtr, src -> AnyPtr, count -> UIntSize) -> AnyPtr {
+    if (dest is nullptr || src is nullptr || count == UIntSize(0)) { return dest; }
     let ptr d -> Byte = dest;
     let ptr s -> Byte = src;
-    let i -> Long = 0L;
+    let i -> UIntSize = UIntSize(0);
     while (i < count) {
         let idx -> Int = Int(i);
         d[idx] = s[idx];
-        i += 1L;
+        i += UIntSize(1);
     }
     return dest;
 }
 
 @CompilerLink("memory_set")
-func mem_set(dest -> AnyPtr, value -> Byte, count -> Long) -> AnyPtr {
-    if (dest is nullptr || count <= 0L) { return dest; }
+func mem_set(dest -> AnyPtr, value -> Byte, count -> UIntSize) -> AnyPtr {
+    if (dest is nullptr || count == UIntSize(0)) { return dest; }
     let ptr d -> Byte = dest;
-    let i -> Long = 0L;
+    let i -> UIntSize = UIntSize(0);
     while (i < count) {
         d[Int(i)] = value;
-        i += 1L;
+        i += UIntSize(1);
     }
     return dest;
 }

@@ -772,7 +772,15 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
             c.output_file.write(c.indent + fpext_reg + " = fpext float " + val_res.reg + " to double\n");
             payload_low = next_reg(c);
             c.output_file.write(c.indent + payload_low + " = bitcast double " + fpext_reg + " to i64\n");
-        } else if (val_res.type == TYPE_LONG || val_res.type == TYPE_UINT64 || val_res.type == TYPE_INTSIZE || val_res.type == TYPE_UINTSIZE) {
+        } else if (val_res.type == TYPE_INTSIZE || val_res.type == TYPE_UINTSIZE) {
+            let size_ty -> String = get_size_llvm_type();
+            payload_low = next_reg(c);
+            if (val_res.type == TYPE_INTSIZE) {
+                c.output_file.write(c.indent + payload_low + " = sext " + size_ty + " " + val_res.reg + " to i64\n");
+            } else {
+                c.output_file.write(c.indent + payload_low + " = zext " + size_ty + " " + val_res.reg + " to i64\n");
+            }
+        } else if (val_res.type == TYPE_LONG || val_res.type == TYPE_UINT64) {
             payload_low = next_reg(c);
             c.output_file.write(c.indent + payload_low + " = add i64 0, " + val_res.reg + "\n");
         } else if (val_res.type == TYPE_FLOAT) {
@@ -897,7 +905,11 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
             c.output_file.write(c.indent + cast_double + " = bitcast i64 " + payload_low + " to double\n");
             unboxed_reg = next_reg(c);
             c.output_file.write(c.indent + unboxed_reg + " = fptrunc double " + cast_double + " to float\n");
-        } else if (expected_type == TYPE_LONG || expected_type == TYPE_UINT64 || expected_type == TYPE_INTSIZE || expected_type == TYPE_UINTSIZE) {
+        } else if (expected_type == TYPE_INTSIZE || expected_type == TYPE_UINTSIZE) {
+            let size_ty -> String = get_size_llvm_type();
+            unboxed_reg = next_reg(c);
+            c.output_file.write(c.indent + unboxed_reg + " = trunc i64 " + payload_low + " to " + size_ty + "\n");
+        } else if (expected_type == TYPE_LONG || expected_type == TYPE_UINT64) {
             unboxed_reg = next_reg(c);
             c.output_file.write(c.indent + unboxed_reg + " = add i64 0, " + payload_low + "\n");
         } else if (expected_type == TYPE_FLOAT) {
@@ -1156,19 +1168,23 @@ func emit_implicit_cast(c -> Compiler, val_res -> CompileResult, expected_type -
 
         let val_vec -> SymbolInfo = c.vector_base_map.get("" + val_res.type);
         if (val_vec is !null && val_vec.type == elem_type) {
-            let vec_struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+            let vec_struct_ty -> String = get_vector_llvm_type(c, elem_type);
+            let size_ty -> String = get_size_llvm_type();
             let size_ptr -> String = next_reg(c);
             c.output_file.write(c.indent + size_ptr + " = getelementptr inbounds " + vec_struct_ty + ", " + vec_struct_ty + "* " + val_res.reg + ", i32 0, i32 0\n");
             let size_val -> String = next_reg(c);
-            c.output_file.write(c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
+            c.output_file.write(c.indent + size_val + " = load " + size_ty + ", " + size_ty + "* " + size_ptr + "\n");
             
             let data_ptr_ptr -> String = next_reg(c);
             c.output_file.write(c.indent + data_ptr_ptr + " = getelementptr inbounds " + vec_struct_ty + ", " + vec_struct_ty + "* " + val_res.reg + ", i32 0, i32 2\n");
             let data_ptr -> String = next_reg(c);
             c.output_file.write(c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_ptr_ptr + "\n");
 
-            let size_i32 -> String = next_reg(c);
-            c.output_file.write(c.indent + size_i32 + " = trunc i64 " + size_val + " to i32\n");
+            let size_i32 -> String = size_val;
+            if (size_ty != "i32") {
+                size_i32 = next_reg(c);
+                c.output_file.write(c.indent + size_i32 + " = trunc " + size_ty + " " + size_val + " to i32\n");
+            }
             let copied -> CompileResult = emit_slice_copy(c, elem_type, data_ptr, "0", size_i32, pos);
             emit_release_owned(c, val_res);
             return copied;
@@ -1389,8 +1405,17 @@ func convert_to_string(c -> Compiler, res -> CompileResult) -> CompileResult {
     if (res.type == TYPE_FLOAT32) {
         res = promote_to_float(c, res);
     }
-    if (res.type == TYPE_INTSIZE) {
+    if (res.type == TYPE_INTSIZE && get_target_pointer_bits() < 64) {
+        let widened -> String = next_reg(c);
+        c.output_file.write(c.indent + widened + " = sext " + get_size_llvm_type() + " " + res.reg + " to i64\n");
+        res = CompileResult(reg=widened, type=TYPE_LONG);
+    } else if (res.type == TYPE_INTSIZE) {
         res.type = TYPE_LONG;
+    }
+    if (res.type == TYPE_UINTSIZE && get_target_pointer_bits() < 64) {
+        let widened -> String = next_reg(c);
+        c.output_file.write(c.indent + widened + " = zext " + get_size_llvm_type() + " " + res.reg + " to i64\n");
+        res = CompileResult(reg=widened, type=TYPE_UINT64);
     }
 
     if (res.type == TYPE_INT128 || res.type == TYPE_UINT128) {
@@ -1962,13 +1987,14 @@ func emit_alloc_check(c -> Compiler, ptr_reg -> String) -> Void {
 func emit_alloc_obj(c -> Compiler, payload_size_reg -> String, type_id_str -> String, dest_llvm_type -> String) -> String {
     let header_size -> Int = 16;
     if (type_id_str == "" + TYPE_STRING) { header_size = 8; }
+    let size_ty -> String = get_size_llvm_type();
 
     let total_size -> String = next_reg(c);
-    c.output_file.write(c.indent + total_size + " = add i64 " + payload_size_reg + ", " + header_size + "\n");
+    c.output_file.write(c.indent + total_size + " = add " + size_ty + " " + payload_size_reg + ", " + header_size + "\n");
     
     let raw_mem -> String = next_reg(c);
     let alloc_hook -> String = get_mangled_symbol(c, "memory_alloc", null);
-    c.output_file.write(c.indent + raw_mem + " = call i8* @" + alloc_hook + "(i64 " + total_size + ")\n");
+    c.output_file.write(c.indent + raw_mem + " = call i8* @" + alloc_hook + "(" + size_ty + " " + total_size + ")\n");
     emit_alloc_check(c, raw_mem);
 
     let header_mem -> String = raw_mem;
@@ -2222,18 +2248,36 @@ func emit_pointer_null_check(c -> Compiler, ptr_reg -> String, type_id -> Int, p
     c.output_file.write("\n" + ok_label + ":\n");
 }
 
+func emit_size_to_int(c -> Compiler, value -> String) -> String {
+    let size_ty -> String = get_size_llvm_type();
+    if (size_ty == "i32") { return value; }
+    let result -> String = next_reg(c);
+    c.output_file.write(c.indent + result + " = trunc " + size_ty + " " + value + " to i32\n");
+    return result;
+}
+
+func emit_int_to_size(c -> Compiler, value -> String, signed -> Bool) -> String {
+    let size_ty -> String = get_size_llvm_type();
+    if (size_ty == "i32") { return value; }
+    let result -> String = next_reg(c);
+    let op -> String = "zext";
+    if signed { op = "sext"; }
+    c.output_file.write(c.indent + result + " = " + op + " i32 " + value + " to " + size_ty + "\n");
+    return result;
+}
+
 
 func emit_vector_bounds_check(c -> Compiler, vec_reg -> String, idx_reg -> String, struct_ty -> String, pos -> Position) -> Void {
+    let size_ty -> String = get_size_llvm_type();
     let size_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_reg + ", i32 0, i32 0\n");
     let size_val -> String = next_reg(c);
-    c.output_file.write(c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
+    c.output_file.write(c.indent + size_val + " = load " + size_ty + ", " + size_ty + "* " + size_ptr + "\n");
 
-    let idx_i64 -> String = next_reg(c);
-    c.output_file.write(c.indent + idx_i64 + " = sext i32 " + idx_reg + " to i64\n");
+    let size_index -> String = emit_int_to_size(c, idx_reg, true);
 
     let cmp_reg -> String = next_reg(c);
-    c.output_file.write(c.indent + cmp_reg + " = icmp uge i64 " + idx_i64 + ", " + size_val + "\n");
+    c.output_file.write(c.indent + cmp_reg + " = icmp uge " + size_ty + " " + size_index + ", " + size_val + "\n");
 
     let fail_label -> String = "bounds_fail_" + c.type_counter;
     let ok_label -> String = "bounds_ok_" + c.type_counter;
@@ -2293,17 +2337,18 @@ func emit_slice_parts(c -> Compiler, slice_reg -> String, slice_type -> Int, pos
     let arr_info -> ArrayInfo = c.array_info_map.get("" + slice_type);
     let elem_ty -> String = get_llvm_type_str(c, arr_info.base_type);
     let slice_ty -> String = arr_info.llvm_name;
+    let size_ty -> String = get_size_llvm_type();
     emit_pointer_null_check(c, slice_reg, slice_type, pos);
 
     let start_slot -> String = next_reg(c);
     c.output_file.write(c.indent + start_slot + " = getelementptr inbounds " + slice_ty + ", " + slice_ty + "* " + slice_reg + ", i32 0, i32 0\n");
     let start -> String = next_reg(c);
-    c.output_file.write(c.indent + start + " = load i64, i64* " + start_slot + "\n");
+    c.output_file.write(c.indent + start + " = load " + size_ty + ", " + size_ty + "* " + start_slot + "\n");
 
     let len_slot -> String = next_reg(c);
     c.output_file.write(c.indent + len_slot + " = getelementptr inbounds " + slice_ty + ", " + slice_ty + "* " + slice_reg + ", i32 0, i32 1\n");
     let length -> String = next_reg(c);
-    c.output_file.write(c.indent + length + " = load i64, i64* " + len_slot + "\n");
+    c.output_file.write(c.indent + length + " = load " + size_ty + ", " + size_ty + "* " + len_slot + "\n");
 
     let owner_slot -> String = next_reg(c);
     c.output_file.write(c.indent + owner_slot + " = getelementptr inbounds " + slice_ty + ", " + slice_ty + "* " + slice_reg + ", i32 0, i32 2\n");
@@ -2318,14 +2363,14 @@ func emit_slice_parts(c -> Compiler, slice_reg -> String, slice_type -> Int, pos
     let size_slot_slot -> String = next_reg(c);
     c.output_file.write(c.indent + size_slot_slot + " = getelementptr inbounds " + slice_ty + ", " + slice_ty + "* " + slice_reg + ", i32 0, i32 4\n");
     let size_slot -> String = next_reg(c);
-    c.output_file.write(c.indent + size_slot + " = load i64*, i64** " + size_slot_slot + "\n");
+    c.output_file.write(c.indent + size_slot + " = load " + size_ty + "*, " + size_ty + "** " + size_slot_slot + "\n");
     let owner_size -> String = next_reg(c);
-    c.output_file.write(c.indent + owner_size + " = load i64, i64* " + size_slot + "\n");
+    c.output_file.write(c.indent + owner_size + " = load " + size_ty + ", " + size_ty + "* " + size_slot + "\n");
 
     let slice_end -> String = next_reg(c);
-    c.output_file.write(c.indent + slice_end + " = add i64 " + start + ", " + length + "\n");
+    c.output_file.write(c.indent + slice_end + " = add " + size_ty + " " + start + ", " + length + "\n");
     let invalid -> String = next_reg(c);
-    c.output_file.write(c.indent + invalid + " = icmp ugt i64 " + slice_end + ", " + owner_size + "\n");
+    c.output_file.write(c.indent + invalid + " = icmp ugt " + size_ty + " " + slice_end + ", " + owner_size + "\n");
     let fail_label -> String = next_label(c);
     let ok_label -> String = next_label(c);
     c.output_file.write(c.indent + "br i1 " + invalid + ", label %" + fail_label + ", label %" + ok_label + "\n");
@@ -2343,19 +2388,20 @@ func emit_make_slice(c -> Compiler, elem_type -> Int, owner -> String, data_slot
     let arr_info -> ArrayInfo = c.array_info_map.get("" + slice_type);
     let elem_ty -> String = get_llvm_type_str(c, elem_type);
     let slice_ty -> String = arr_info.llvm_name;
+    let size_ty -> String = get_size_llvm_type();
 
     let size_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + size_ptr + " = getelementptr " + slice_ty + ", " + slice_ty + "* null, i32 1\n");
     let size -> String = next_reg(c);
-    c.output_file.write(c.indent + size + " = ptrtoint " + slice_ty + "* " + size_ptr + " to i64\n");
+    c.output_file.write(c.indent + size + " = ptrtoint " + slice_ty + "* " + size_ptr + " to " + size_ty + "\n");
     let result -> String = emit_alloc_obj(c, size, "" + slice_type, slice_ty + "*");
 
     let start_slot -> String = next_reg(c);
     c.output_file.write(c.indent + start_slot + " = getelementptr inbounds " + slice_ty + ", " + slice_ty + "* " + result + ", i32 0, i32 0\n");
-    c.output_file.write(c.indent + "store i64 " + start + ", i64* " + start_slot + "\n");
+    c.output_file.write(c.indent + "store " + size_ty + " " + start + ", " + size_ty + "* " + start_slot + "\n");
     let len_slot -> String = next_reg(c);
     c.output_file.write(c.indent + len_slot + " = getelementptr inbounds " + slice_ty + ", " + slice_ty + "* " + result + ", i32 0, i32 1\n");
-    c.output_file.write(c.indent + "store i64 " + length + ", i64* " + len_slot + "\n");
+    c.output_file.write(c.indent + "store " + size_ty + " " + length + ", " + size_ty + "* " + len_slot + "\n");
     let owner_slot -> String = next_reg(c);
     c.output_file.write(c.indent + owner_slot + " = getelementptr inbounds " + slice_ty + ", " + slice_ty + "* " + result + ", i32 0, i32 2\n");
     c.output_file.write(c.indent + "store i8* " + owner + ", i8** " + owner_slot + "\n");
@@ -2364,7 +2410,7 @@ func emit_make_slice(c -> Compiler, elem_type -> Int, owner -> String, data_slot
     c.output_file.write(c.indent + "store " + elem_ty + "** " + data_slot + ", " + elem_ty + "*** " + data_slot_slot + "\n");
     let size_slot_slot -> String = next_reg(c);
     c.output_file.write(c.indent + size_slot_slot + " = getelementptr inbounds " + slice_ty + ", " + slice_ty + "* " + result + ", i32 0, i32 4\n");
-    c.output_file.write(c.indent + "store i64* " + size_slot + ", i64** " + size_slot_slot + "\n");
+    c.output_file.write(c.indent + "store " + size_ty + "* " + size_slot + ", " + size_ty + "** " + size_slot_slot + "\n");
     c.output_file.write(c.indent + "call void @__wl_retain(i8* " + owner + ")\n");
     return CompileResult(reg=result, type=slice_type);
 }
@@ -2372,27 +2418,26 @@ func emit_make_slice(c -> Compiler, elem_type -> Int, owner -> String, data_slot
 func emit_slice_copy(c -> Compiler, elem_type -> Int, source -> String, start_i32 -> String, length_i32 -> String, pos -> Position) -> CompileResult {
     let elem_ty -> String = get_llvm_type_str(c, elem_type);
     let vec_type -> Int = get_vector_type_id(c, elem_type);
-    let vec_ty -> String = "{ i64, i64, " + elem_ty + "* }";
+    let vec_ty -> String = get_vector_llvm_type(c, elem_type);
+    let size_ty -> String = get_size_llvm_type();
 
     let vec_size_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + vec_size_ptr + " = getelementptr " + vec_ty + ", " + vec_ty + "* null, i32 1\n");
     let vec_size -> String = next_reg(c);
-    c.output_file.write(c.indent + vec_size + " = ptrtoint " + vec_ty + "* " + vec_size_ptr + " to i64\n");
+    c.output_file.write(c.indent + vec_size + " = ptrtoint " + vec_ty + "* " + vec_size_ptr + " to " + size_ty + "\n");
     let owner_ptr -> String = emit_alloc_obj(c, vec_size, "" + vec_type, vec_ty + "*");
 
-    let length -> String = next_reg(c);
-    c.output_file.write(c.indent + length + " = zext i32 " + length_i32 + " to i64\n");
-    let start -> String = next_reg(c);
-    c.output_file.write(c.indent + start + " = zext i32 " + start_i32 + " to i64\n");
+    let length -> String = emit_int_to_size(c, length_i32, false);
+    let start -> String = emit_int_to_size(c, start_i32, false);
     let is_empty -> String = next_reg(c);
-    c.output_file.write(c.indent + is_empty + " = icmp eq i64 " + length + ", 0\n");
+    c.output_file.write(c.indent + is_empty + " = icmp eq " + size_ty + " " + length + ", 0\n");
     let alloc_count -> String = next_reg(c);
-    c.output_file.write(c.indent + alloc_count + " = select i1 " + is_empty + ", i64 1, i64 " + length + "\n");
+    c.output_file.write(c.indent + alloc_count + " = select i1 " + is_empty + ", " + size_ty + " 1, " + size_ty + " " + length + "\n");
 
     let elem_size -> Int = get_type_size_bytes(c, elem_type);
-    let max_capacity -> Long = 9223372036854775807L / Long(elem_size);
+    let max_capacity -> Long = vector_capacity_limit(elem_size);
     let overflow -> String = next_reg(c);
-    c.output_file.write(c.indent + overflow + " = icmp ugt i64 " + alloc_count + ", " + max_capacity + "\n");
+    c.output_file.write(c.indent + overflow + " = icmp ugt " + size_ty + " " + alloc_count + ", " + max_capacity + "\n");
     let fail_label -> String = next_label(c);
     let alloc_label -> String = next_label(c);
     c.output_file.write(c.indent + "br i1 " + overflow + ", label %" + fail_label + ", label %" + alloc_label + "\n");
@@ -2402,51 +2447,51 @@ func emit_slice_copy(c -> Compiler, elem_type -> Int, source -> String, start_i3
     c.output_file.write("\n" + alloc_label + ":\n");
 
     let bytes -> String = next_reg(c);
-    c.output_file.write(c.indent + bytes + " = mul i64 " + alloc_count + ", " + elem_size + "\n");
+    c.output_file.write(c.indent + bytes + " = mul " + size_ty + " " + alloc_count + ", " + elem_size + "\n");
     let alloc_hook -> String = get_mangled_symbol(c, "memory_alloc", pos);
     let raw_data -> String = next_reg(c);
-    c.output_file.write(c.indent + raw_data + " = call i8* @" + alloc_hook + "(i64 " + bytes + ")\n");
+    c.output_file.write(c.indent + raw_data + " = call i8* @" + alloc_hook + "(" + size_ty + " " + bytes + ")\n");
     emit_alloc_check(c, raw_data);
     let data -> String = next_reg(c);
     c.output_file.write(c.indent + data + " = bitcast i8* " + raw_data + " to " + elem_ty + "*\n");
 
     let size_slot -> String = next_reg(c);
     c.output_file.write(c.indent + size_slot + " = getelementptr inbounds " + vec_ty + ", " + vec_ty + "* " + owner_ptr + ", i32 0, i32 0\n");
-    c.output_file.write(c.indent + "store i64 " + length + ", i64* " + size_slot + "\n");
+    c.output_file.write(c.indent + "store " + size_ty + " " + length + ", " + size_ty + "* " + size_slot + "\n");
     let cap_slot -> String = next_reg(c);
     c.output_file.write(c.indent + cap_slot + " = getelementptr inbounds " + vec_ty + ", " + vec_ty + "* " + owner_ptr + ", i32 0, i32 1\n");
-    c.output_file.write(c.indent + "store i64 " + length + ", i64* " + cap_slot + "\n");
+    c.output_file.write(c.indent + "store " + size_ty + " " + length + ", " + size_ty + "* " + cap_slot + "\n");
     let data_slot -> String = next_reg(c);
     c.output_file.write(c.indent + data_slot + " = getelementptr inbounds " + vec_ty + ", " + vec_ty + "* " + owner_ptr + ", i32 0, i32 2\n");
     c.output_file.write(c.indent + "store " + elem_ty + "* " + data + ", " + elem_ty + "** " + data_slot + "\n");
 
     let index -> String = next_reg(c);
-    c.output_file.write(c.indent + index + " = alloca i64\n");
-    c.output_file.write(c.indent + "store i64 0, i64* " + index + "\n");
+    c.output_file.write(c.indent + index + " = alloca " + size_ty + "\n");
+    c.output_file.write(c.indent + "store " + size_ty + " 0, " + size_ty + "* " + index + "\n");
     let loop_cond -> String = next_label(c);
     let loop_body -> String = next_label(c);
     let loop_end -> String = next_label(c);
     c.output_file.write(c.indent + "br label %" + loop_cond + "\n");
     c.output_file.write("\n" + loop_cond + ":\n");
     let i -> String = next_reg(c);
-    c.output_file.write(c.indent + i + " = load i64, i64* " + index + "\n");
+    c.output_file.write(c.indent + i + " = load " + size_ty + ", " + size_ty + "* " + index + "\n");
     let more -> String = next_reg(c);
-    c.output_file.write(c.indent + more + " = icmp ult i64 " + i + ", " + length + "\n");
+    c.output_file.write(c.indent + more + " = icmp ult " + size_ty + " " + i + ", " + length + "\n");
     c.output_file.write(c.indent + "br i1 " + more + ", label %" + loop_body + ", label %" + loop_end + "\n");
     c.output_file.write("\n" + loop_body + ":\n");
     let source_index -> String = next_reg(c);
-    c.output_file.write(c.indent + source_index + " = add i64 " + start + ", " + i + "\n");
+    c.output_file.write(c.indent + source_index + " = add " + size_ty + " " + start + ", " + i + "\n");
     let source_slot -> String = next_reg(c);
-    c.output_file.write(c.indent + source_slot + " = getelementptr inbounds " + elem_ty + ", " + elem_ty + "* " + source + ", i64 " + source_index + "\n");
+    c.output_file.write(c.indent + source_slot + " = getelementptr inbounds " + elem_ty + ", " + elem_ty + "* " + source + ", " + size_ty + " " + source_index + "\n");
     let value -> String = next_reg(c);
     c.output_file.write(c.indent + value + " = load " + elem_ty + ", " + elem_ty + "* " + source_slot + "\n");
     let dest_slot -> String = next_reg(c);
-    c.output_file.write(c.indent + dest_slot + " = getelementptr inbounds " + elem_ty + ", " + elem_ty + "* " + data + ", i64 " + i + "\n");
+    c.output_file.write(c.indent + dest_slot + " = getelementptr inbounds " + elem_ty + ", " + elem_ty + "* " + data + ", " + size_ty + " " + i + "\n");
     c.output_file.write(c.indent + "store " + elem_ty + " " + value + ", " + elem_ty + "* " + dest_slot + "\n");
     if (needs_drop(c, elem_type)) { emit_retain_slot(c, dest_slot, elem_type); }
     let next -> String = next_reg(c);
-    c.output_file.write(c.indent + next + " = add i64 " + i + ", 1\n");
-    c.output_file.write(c.indent + "store i64 " + next + ", i64* " + index + "\n");
+    c.output_file.write(c.indent + next + " = add " + size_ty + " " + i + ", 1\n");
+    c.output_file.write(c.indent + "store " + size_ty + " " + next + ", " + size_ty + "* " + index + "\n");
     c.output_file.write(c.indent + "br label %" + loop_cond + "\n");
     c.output_file.write("\n" + loop_end + ":\n");
 
@@ -2595,26 +2640,27 @@ func emit_type_drop(c -> Compiler, type_id -> Int) -> Void {
     if (vec_info is !null) {
         let elem_type -> Int = vec_info.type;
         let elem_ty -> String = get_llvm_type_str(c, elem_type);
-        let vec_ty -> String = "{ i64, i64, " + elem_ty + "* }";
+        let vec_ty -> String = get_vector_llvm_type(c, elem_type);
+        let size_ty -> String = get_size_llvm_type();
         c.output_file.write("  %vec = bitcast i8* %ptr to " + vec_ty + "*\n");
         c.output_file.write("  %size.slot = getelementptr inbounds " + vec_ty + ", " + vec_ty + "* %vec, i32 0, i32 0\n");
-        c.output_file.write("  %size = load i64, i64* %size.slot\n");
+        c.output_file.write("  %size = load " + size_ty + ", " + size_ty + "* %size.slot\n");
         c.output_file.write("  %data.slot = getelementptr inbounds " + vec_ty + ", " + vec_ty + "* %vec, i32 0, i32 2\n");
         c.output_file.write("  %data = load " + elem_ty + "*, " + elem_ty + "** %data.slot\n");
 
         if (needs_drop(c, elem_type)) {
-            c.output_file.write("  %index = alloca i64\n");
-            c.output_file.write("  store i64 0, i64* %index\n");
+            c.output_file.write("  %index = alloca " + size_ty + "\n");
+            c.output_file.write("  store " + size_ty + " 0, " + size_ty + "* %index\n");
             c.output_file.write("  br label %loop.cond\n");
             c.output_file.write("loop.cond:\n");
-            c.output_file.write("  %i = load i64, i64* %index\n");
-            c.output_file.write("  %more = icmp ult i64 %i, %size\n");
+            c.output_file.write("  %i = load " + size_ty + ", " + size_ty + "* %index\n");
+            c.output_file.write("  %more = icmp ult " + size_ty + " %i, %size\n");
             c.output_file.write("  br i1 %more, label %loop.body, label %loop.end\n");
             c.output_file.write("loop.body:\n");
-            c.output_file.write("  %slot = getelementptr inbounds " + elem_ty + ", " + elem_ty + "* %data, i64 %i\n");
+            c.output_file.write("  %slot = getelementptr inbounds " + elem_ty + ", " + elem_ty + "* %data, " + size_ty + " %i\n");
             emit_drop_slot(c, "%slot", elem_type);
-            c.output_file.write("  %next = add i64 %i, 1\n");
-            c.output_file.write("  store i64 %next, i64* %index\n");
+            c.output_file.write("  %next = add " + size_ty + " %i, 1\n");
+            c.output_file.write("  store " + size_ty + " %next, " + size_ty + "* %index\n");
             c.output_file.write("  br label %loop.cond\n");
             c.output_file.write("loop.end:\n");
         }
@@ -4228,9 +4274,9 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
 
     let size_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + size_ptr + " = getelementptr " + llvm_env_name + ", " + llvm_env_name + "* null, i32 1\n");
-    let size_i64 -> String = next_reg(c);
-    c.output_file.write(c.indent + size_i64 + " = ptrtoint " + llvm_env_name + "* " + size_ptr + " to i64\n");
-    let env_payload -> String = emit_alloc_obj(c, size_i64, "" + env_id, llvm_env_name + "*");
+    let env_size -> String = next_reg(c);
+    c.output_file.write(c.indent + env_size + " = ptrtoint " + llvm_env_name + "* " + size_ptr + " to " + get_size_llvm_type() + "\n");
+    let env_payload -> String = emit_alloc_obj(c, env_size, "" + env_id, llvm_env_name + "*");
 
     let env_payload_i8 -> String = next_reg(c);
     c.output_file.write(c.indent + env_payload_i8 + " = bitcast " + llvm_env_name + "* " + env_payload + " to i8*\n");
@@ -4578,11 +4624,12 @@ func compile_struct_def(c -> Compiler, node -> StructDefNode) -> CompileResult {
 }
 
 func compile_struct_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode) -> CompileResult {
+    let size_ty -> String = get_size_llvm_type();
     let size_ptr -> String = next_reg(c);
-    c.output_file.write(c.indent + size_ptr + " = getelementptr " + s_info.llvm_name + ", " + s_info.llvm_name + "* null, i64 1\n");
-    let size_i64 -> String = next_reg(c);
-    c.output_file.write(c.indent + size_i64 + " = ptrtoint " + s_info.llvm_name + "* " + size_ptr + " to i64\n");
-    let obj_ptr -> String = emit_alloc_obj(c, size_i64, "" + s_info.type_id, s_info.llvm_name + "*");
+    c.output_file.write(c.indent + size_ptr + " = getelementptr " + s_info.llvm_name + ", " + s_info.llvm_name + "* null, " + size_ty + " 1\n");
+    let object_size -> String = next_reg(c);
+    c.output_file.write(c.indent + object_size + " = ptrtoint " + s_info.llvm_name + "* " + size_ptr + " to " + size_ty + "\n");
+    let obj_ptr -> String = emit_alloc_obj(c, object_size, "" + s_info.type_id, s_info.llvm_name + "*");
 
     let fields_vec -> Vector(Struct) = s_info.fields;
     let f_len -> Int = 0;
@@ -5595,11 +5642,12 @@ func emit_class_field_initializers(c -> Compiler, class_info -> StructInfo, obje
 }
 
 func compile_class_init(c -> Compiler, s_info -> StructInfo, n_call -> CallNode) -> CompileResult {
+    let size_ty -> String = get_size_llvm_type();
     let size_ptr -> String = next_reg(c);
-    c.output_file.write(c.indent + size_ptr + " = getelementptr " + s_info.llvm_name + ", " + s_info.llvm_name + "* null, i64 1\n");
-    let size_i64 -> String = next_reg(c);
-    c.output_file.write(c.indent + size_i64 + " = ptrtoint " + s_info.llvm_name + "* " + size_ptr + " to i64\n");
-    let obj_ptr -> String = emit_alloc_obj(c, size_i64, "" + s_info.type_id, s_info.llvm_name + "*");
+    c.output_file.write(c.indent + size_ptr + " = getelementptr " + s_info.llvm_name + ", " + s_info.llvm_name + "* null, " + size_ty + " 1\n");
+    let object_size -> String = next_reg(c);
+    c.output_file.write(c.indent + object_size + " = ptrtoint " + s_info.llvm_name + "* " + size_ptr + " to " + size_ty + "\n");
+    let obj_ptr -> String = emit_alloc_obj(c, object_size, "" + s_info.type_id, s_info.llvm_name + "*");
 
     let fields_vec -> Vector(Struct) = s_info.fields;
     let f_len -> Int = 0;
@@ -6479,10 +6527,20 @@ func register_extern_library(c -> Compiler, name -> String, pos -> Position) -> 
     }
     c.extra_libs.append(name);
 }
+
+func vector_capacity_limit(elem_size -> Int) -> Long {
+    let limit -> Long = 2147483647L;
+    if (get_target_pointer_bits() == 32) {
+        let address_limit -> Long = 4294967295L / Long(elem_size);
+        if (address_limit < limit) { limit = address_limit; }
+    }
+    return limit;
+}
 func backend_symbol_signature(name -> String) -> String {
     if (get_target_os() != "WINDOWS") { return ""; }
-    if (name == "memcpy" || name == "memmove") { return "ccc i8* (i8*, i8*, i64)"; }
-    if (name == "memset") { return "ccc i8* (i8*, i32, i64)"; }
+    let size_ty -> String = get_size_llvm_type();
+    if (name == "memcpy" || name == "memmove") { return "ccc i8* (i8*, i8*, " + size_ty + ")"; }
+    if (name == "memset") { return "ccc i8* (i8*, i32, " + size_ty + ")"; }
     return "";
 }
 func compile_extern_func(c -> Compiler, node -> ExternFuncNode) -> CompileResult {
@@ -6643,20 +6701,21 @@ func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallN
 
     arg_res = emit_implicit_cast(c, arg_res, elem_type, call_node.pos);
     let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
-    let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+    let struct_ty -> String = get_vector_llvm_type(c, elem_type);
+    let size_ty -> String = get_size_llvm_type();
 
     let size_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 0\n");
     let size_val -> String = next_reg(c);
-    c.output_file.write(c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
+    c.output_file.write(c.indent + size_val + " = load " + size_ty + ", " + size_ty + "* " + size_ptr + "\n");
     
     let cap_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + cap_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 1\n");
     let cap_val -> String = next_reg(c);
-    c.output_file.write(c.indent + cap_val + " = load i64, i64* " + cap_ptr + "\n");
+    c.output_file.write(c.indent + cap_val + " = load " + size_ty + ", " + size_ty + "* " + cap_ptr + "\n");
 
     let cmp_reg -> String = next_reg(c);
-    c.output_file.write(c.indent + cmp_reg + " = icmp uge i64 " + size_val + ", " + cap_val + "\n");
+    c.output_file.write(c.indent + cmp_reg + " = icmp uge " + size_ty + " " + size_val + ", " + cap_val + "\n");
     
     let grow_label -> String = next_label(c);
     let push_label -> String = next_label(c);
@@ -6666,9 +6725,12 @@ func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallN
     c.output_file.write("\n" + grow_label + ":\n");
     
     let is_zero_cap -> String = next_reg(c);
-    c.output_file.write(c.indent + is_zero_cap + " = icmp eq i64 " + cap_val + ", 0\n");
+    c.output_file.write(c.indent + is_zero_cap + " = icmp eq " + size_ty + " " + cap_val + ", 0\n");
     let cap_overflow -> String = next_reg(c);
-    c.output_file.write(c.indent + cap_overflow + " = icmp ugt i64 " + cap_val + ", 4611686018427387903\n");
+    let elem_size -> Int = get_type_size_bytes(c, elem_type);
+    let max_capacity -> Long = vector_capacity_limit(elem_size);
+    let growth_limit -> Long = max_capacity / 2;
+    c.output_file.write(c.indent + cap_overflow + " = icmp ugt " + size_ty + " " + cap_val + ", " + growth_limit + "\n");
     let grow_fail -> String = next_label(c);
     let grow_calc -> String = next_label(c);
     c.output_file.write(c.indent + "br i1 " + cap_overflow + ", label %" + grow_fail + ", label %" + grow_calc + "\n");
@@ -6679,9 +6741,9 @@ func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallN
 
     c.output_file.write("\n" + grow_calc + ":\n");
     let dbl_cap -> String = next_reg(c);
-    c.output_file.write(c.indent + dbl_cap + " = mul i64 " + cap_val + ", 2\n");
+    c.output_file.write(c.indent + dbl_cap + " = mul " + size_ty + " " + cap_val + ", 2\n");
     let new_cap -> String = next_reg(c);
-    c.output_file.write(c.indent + new_cap + " = select i1 " + is_zero_cap + ", i64 4, i64 " + dbl_cap + "\n");
+    c.output_file.write(c.indent + new_cap + " = select i1 " + is_zero_cap + ", " + size_ty + " 4, " + size_ty + " " + dbl_cap + "\n");
 
     let data_field_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 2\n");
@@ -6691,10 +6753,8 @@ func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallN
     let old_data_i8 -> String = next_reg(c);
     c.output_file.write(c.indent + old_data_i8 + " = bitcast " + elem_ty_str + "* " + old_data + " to i8*\n");
 
-    let elem_size -> Int = get_type_size_bytes(c, elem_type);
-    let max_capacity -> Long = 9223372036854775807L / Long(elem_size);
     let bytes_overflow -> String = next_reg(c);
-    c.output_file.write(c.indent + bytes_overflow + " = icmp ugt i64 " + new_cap + ", " + max_capacity + "\n");
+    c.output_file.write(c.indent + bytes_overflow + " = icmp ugt " + size_ty + " " + new_cap + ", " + max_capacity + "\n");
     let bytes_fail -> String = next_label(c);
     let resize_label -> String = next_label(c);
     c.output_file.write(c.indent + "br i1 " + bytes_overflow + ", label %" + bytes_fail + ", label %" + resize_label + "\n");
@@ -6706,17 +6766,17 @@ func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallN
     c.output_file.write("\n" + resize_label + ":\n");
     
     let new_bytes -> String = next_reg(c);
-    c.output_file.write(c.indent + new_bytes + " = mul i64 " + new_cap + ", " + elem_size + "\n");
+    c.output_file.write(c.indent + new_bytes + " = mul " + size_ty + " " + new_cap + ", " + elem_size + "\n");
     
     let resize_hook -> String = get_mangled_symbol(c, "memory_resize", call_node.pos);
     let new_data_i8 -> String = next_reg(c);
-    c.output_file.write(c.indent + new_data_i8 + " = call i8* @" + resize_hook + "(i8* " + old_data_i8 + ", i64 " + new_bytes + ")\n");
+    c.output_file.write(c.indent + new_data_i8 + " = call i8* @" + resize_hook + "(i8* " + old_data_i8 + ", " + size_ty + " " + new_bytes + ")\n");
     emit_alloc_check(c, new_data_i8);
     
     let new_data_typed -> String = next_reg(c);
     c.output_file.write(c.indent + new_data_typed + " = bitcast i8* " + new_data_i8 + " to " + elem_ty_str + "*\n");
     c.output_file.write(c.indent + "store " + elem_ty_str + "* " + new_data_typed + ", " + elem_ty_str + "** " + data_field_ptr + "\n");
-    c.output_file.write(c.indent + "store i64 " + new_cap + ", i64* " + cap_ptr + "\n");
+    c.output_file.write(c.indent + "store " + size_ty + " " + new_cap + ", " + size_ty + "* " + cap_ptr + "\n");
     
     c.output_file.write(c.indent + "br label %" + push_label + "\n");
     c.output_file.write("\n" + push_label + ":\n");
@@ -6727,7 +6787,7 @@ func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallN
     c.output_file.write(c.indent + final_data + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + final_data_field_ptr + "\n");
     
     let slot_ptr -> String = next_reg(c);
-    c.output_file.write(c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + final_data + ", i64 " + size_val + "\n");
+    c.output_file.write(c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + final_data + ", " + size_ty + " " + size_val + "\n");
     
     if (result_owns_value(c, elem_type) && !arg_res.owns_ref) {
         emit_retain_value(c, arg_res.reg, elem_type);
@@ -6735,8 +6795,8 @@ func compile_vector_append(c -> Compiler, vec_node -> Struct, call_node -> CallN
     c.output_file.write(c.indent + "store " + elem_ty_str + " " + arg_res.reg + ", " + elem_ty_str + "* " + slot_ptr + "\n");
     
     let new_size -> String = next_reg(c);
-    c.output_file.write(c.indent + new_size + " = add i64 " + size_val + ", 1\n");
-    c.output_file.write(c.indent + "store i64 " + new_size + ", i64* " + size_ptr + "\n");
+    c.output_file.write(c.indent + new_size + " = add " + size_ty + " " + size_val + ", 1\n");
+    c.output_file.write(c.indent + "store " + size_ty + " " + new_size + ", " + size_ty + "* " + size_ptr + "\n");
     
     return void_result();
 }
@@ -6752,15 +6812,16 @@ func compile_vector_drop(c -> Compiler, vec_node -> Struct, call_node -> CallNod
     let v_info -> SymbolInfo = c.vector_base_map.get("" + vec_res.type);
     let elem_type -> Int = v_info.type;
     let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
-    let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+    let struct_ty -> String = get_vector_llvm_type(c, elem_type);
+    let size_ty -> String = get_size_llvm_type();
 
     let size_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 0\n");
     let size_val -> String = next_reg(c);
-    c.output_file.write(c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
+    c.output_file.write(c.indent + size_val + " = load " + size_ty + ", " + size_ty + "* " + size_ptr + "\n");
 
     let cmp_reg -> String = next_reg(c);
-    c.output_file.write(c.indent + cmp_reg + " = icmp ugt i64 " + size_val + ", 0\n");
+    c.output_file.write(c.indent + cmp_reg + " = icmp ugt " + size_ty + " " + size_val + ", 0\n");
     
     let pop_label -> String = next_label(c);
     let empty_label -> String = next_label(c);
@@ -6776,8 +6837,8 @@ func compile_vector_drop(c -> Compiler, vec_node -> Struct, call_node -> CallNod
     
     // size--
     let new_size -> String = next_reg(c);
-    c.output_file.write(c.indent + new_size + " = sub i64 " + size_val + ", 1\n");
-    c.output_file.write(c.indent + "store i64 " + new_size + ", i64* " + size_ptr + "\n");
+    c.output_file.write(c.indent + new_size + " = sub " + size_ty + " " + size_val + ", 1\n");
+    c.output_file.write(c.indent + "store " + size_ty + " " + new_size + ", " + size_ty + "* " + size_ptr + "\n");
 
     let data_field_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + data_field_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_res.reg + ", i32 0, i32 2\n");
@@ -6785,7 +6846,7 @@ func compile_vector_drop(c -> Compiler, vec_node -> Struct, call_node -> CallNod
     c.output_file.write(c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
     
     let slot_ptr -> String = next_reg(c);
-    c.output_file.write(c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + new_size + "\n");
+    c.output_file.write(c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", " + size_ty + " " + new_size + "\n");
     
     let ret_val -> String = next_reg(c);
     c.output_file.write(c.indent + ret_val + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot_ptr + "\n");
@@ -6830,38 +6891,38 @@ func compile_vector_lit(c -> Compiler, node -> VectorLitNode) -> CompileResult {
     
     let vec_type_id -> Int = get_vector_type_id(c, elem_type_id);
     let elem_ty_str -> String = get_llvm_type_str(c, elem_type_id);
-    let struct_name -> String = "{ i64, i64, " + elem_ty_str + "* }";
+    let struct_name -> String = get_vector_llvm_type(c, elem_type_id);
+    let size_ty -> String = get_size_llvm_type();
 
     let struct_size_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + struct_size_ptr + " = getelementptr " + struct_name + ", " + struct_name + "* null, i32 1\n");
     let struct_size -> String = next_reg(c);
-    c.output_file.write(c.indent + struct_size + " = ptrtoint " + struct_name + "* " + struct_size_ptr + " to i64\n");
+    c.output_file.write(c.indent + struct_size + " = ptrtoint " + struct_name + "* " + struct_size_ptr + " to " + size_ty + "\n");
     let vec_ptr -> String = emit_alloc_obj(c, struct_size, "" + vec_type_id, struct_name + "*");
     
     let arr_size_ptr -> String = next_reg(c);
     let alloc_count -> Int = count;
     if (alloc_count == 0) { alloc_count = 1; }
-    c.output_file.write(c.indent + arr_size_ptr + " = getelementptr " + elem_ty_str + ", " + elem_ty_str + "* null, i64 " + alloc_count + "\n");
+    c.output_file.write(c.indent + arr_size_ptr + " = getelementptr " + elem_ty_str + ", " + elem_ty_str + "* null, " + size_ty + " " + alloc_count + "\n");
     let arr_bytes -> String = next_reg(c);
-    c.output_file.write(c.indent + arr_bytes + " = ptrtoint " + elem_ty_str + "* " + arr_size_ptr + " to i64\n");
+    c.output_file.write(c.indent + arr_bytes + " = ptrtoint " + elem_ty_str + "* " + arr_size_ptr + " to " + size_ty + "\n");
     
     let alloc_hook -> String = get_mangled_symbol(c, "memory_alloc", node.pos);
     let raw_data -> String = next_reg(c);
-    c.output_file.write(c.indent + raw_data + " = call i8* @" + alloc_hook + "(i64 " + arr_bytes + ")\n");
+    c.output_file.write(c.indent + raw_data + " = call i8* @" + alloc_hook + "(" + size_ty + " " + arr_bytes + ")\n");
     emit_alloc_check(c, raw_data);
     let data_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + data_ptr + " = bitcast i8* " + raw_data + " to " + elem_ty_str + "*\n");
 
-    // struct { i64 size, i64 capacity, T* data }
-    // size
+    // vector length and capacity follow the target pointer width
     let size_ptr -> String = next_reg(c); 
     c.output_file.write(c.indent + size_ptr + " = getelementptr inbounds " + struct_name + ", " + struct_name + "* " + vec_ptr + ", i32 0, i32 0\n");
-    c.output_file.write(c.indent + "store i64 " + count + ", i64* " + size_ptr + "\n");
+    c.output_file.write(c.indent + "store " + size_ty + " " + count + ", " + size_ty + "* " + size_ptr + "\n");
     
     // capacity
     let cap_ptr -> String = next_reg(c); 
     c.output_file.write(c.indent + cap_ptr + " = getelementptr inbounds " + struct_name + ", " + struct_name + "* " + vec_ptr + ", i32 0, i32 1\n");
-    c.output_file.write(c.indent + "store i64 " + count + ", i64* " + cap_ptr + "\n"); 
+    c.output_file.write(c.indent + "store " + size_ty + " " + count + ", " + size_ty + "* " + cap_ptr + "\n"); 
     
     // data pointer
     let data_field_ptr -> String = next_reg(c); 
@@ -6880,7 +6941,7 @@ func compile_vector_lit(c -> Compiler, node -> VectorLitNode) -> CompileResult {
         val_res = emit_implicit_cast(c, val_res, elem_type_id, node.pos);
         
         let slot_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + idx + "\n");
+        c.output_file.write(c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", " + size_ty + " " + idx + "\n");
 
         if (result_owns_value(c, elem_type_id) && !val_res.owns_ref) {
             emit_retain_value(c, val_res.reg, elem_type_id);
@@ -6928,8 +6989,7 @@ func compile_length_method(c -> Compiler, obj_node -> Struct, call_node -> CallN
         if (arr_info is !null) {
             if (arr_info.size == -1) {
                 let parts -> SliceParts = emit_slice_parts(c, obj_res.reg, type_id, call_node.pos);
-                let trunc_reg -> String = next_reg(c);
-                c.output_file.write(c.indent + trunc_reg + " = trunc i64 " + parts.length + " to i32\n");
+                let trunc_reg -> String = emit_size_to_int(c, parts.length);
                 return CompileResult(reg=trunc_reg, type=TYPE_INT);
             } else {
                 return CompileResult(reg="" + arr_info.size, type=TYPE_INT);
@@ -6938,17 +6998,16 @@ func compile_length_method(c -> Compiler, obj_node -> Struct, call_node -> CallN
 
     if is_vec {
         let v_info -> SymbolInfo = c.vector_base_map.get("" + type_id);
-        let elem_ty_str -> String = get_llvm_type_str(c, v_info.type);
-        let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+        let struct_ty -> String = get_vector_llvm_type(c, v_info.type);
+        let size_ty -> String = get_size_llvm_type();
         
         let size_ptr -> String = next_reg(c);
         c.output_file.write(c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + obj_res.reg + ", i32 0, i32 0\n");
         
         let size_val -> String = next_reg(c);
-        c.output_file.write(c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
+        c.output_file.write(c.indent + size_val + " = load " + size_ty + ", " + size_ty + "* " + size_ptr + "\n");
 
-        let trunc_reg -> String = next_reg(c);
-        c.output_file.write(c.indent + trunc_reg + " = trunc i64 " + size_val + " to i32\n");
+        let trunc_reg -> String = emit_size_to_int(c, size_val);
         
         return CompileResult(reg=trunc_reg, type=TYPE_INT);
     }
@@ -7051,10 +7110,9 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
         let data_ptr -> String = "";
         if (arr_info.size == -1) {
             let parts -> SliceParts = emit_slice_parts(c, target_res.reg, target_res.type, node.pos);
-            curr_len = next_reg(c);
-            c.output_file.write(c.indent + curr_len + " = trunc i64 " + parts.length + " to i32\n");
+            curr_len = emit_size_to_int(c, parts.length);
             data_ptr = next_reg(c);
-            c.output_file.write(c.indent + data_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + parts.data + ", i64 " + parts.start + "\n");
+            c.output_file.write(c.indent + data_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + parts.data + ", " + get_size_llvm_type() + " " + parts.start + "\n");
         } else {
             curr_len = "" + arr_info.size;
             data_ptr = next_reg(c);
@@ -7086,7 +7144,7 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
         let elem_type -> Int = v_info.type;
         let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
         
-        let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+        let struct_ty -> String = get_vector_llvm_type(c, elem_type);
 
         emit_vector_bounds_check(c, target_res.reg, index_res.reg, struct_ty, node.pos);
 
@@ -7098,10 +7156,8 @@ func compile_index_access(c -> Compiler, node -> IndexAccessNode) -> CompileResu
 
         let slot_ptr -> String = next_reg(c);
         
-        let idx_i64 -> String = next_reg(c);
-        c.output_file.write(c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
-        
-        c.output_file.write(c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + idx_i64 + "\n");
+        let size_index -> String = emit_int_to_size(c, index_res.reg, true);
+        c.output_file.write(c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", " + get_size_llvm_type() + " " + size_index + "\n");
         
         let val_reg -> String = next_reg(c);
         c.output_file.write(c.indent + val_reg + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot_ptr + "\n");
@@ -7200,10 +7256,9 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
         let data_ptr -> String = "";
         if (arr_info.size == -1) {
             let parts -> SliceParts = emit_slice_parts(c, target_res.reg, target_res.type, node.pos);
-            curr_len = next_reg(c);
-            c.output_file.write(c.indent + curr_len + " = trunc i64 " + parts.length + " to i32\n");
+            curr_len = emit_size_to_int(c, parts.length);
             data_ptr = next_reg(c);
-            c.output_file.write(c.indent + data_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + parts.data + ", i64 " + parts.start + "\n");
+            c.output_file.write(c.indent + data_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + parts.data + ", " + get_size_llvm_type() + " " + parts.start + "\n");
         } else {
             curr_len = "" + arr_info.size;
             data_ptr = next_reg(c);
@@ -7239,8 +7294,6 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
 
         if is_magic_func {
             let val_res -> CompileResult = compile_node(c, node.value);
-            let idx_i64 -> String = next_reg(c);
-            c.output_file.write(c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
 
             // extract i8* buffer from %struct.$String*
             let src_struct_buf -> String = next_reg(c);
@@ -7249,7 +7302,7 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
             c.output_file.write(c.indent + src_buf + " = load i8*, i8** " + src_struct_buf + "\n");
 
             let ptr_reg -> String = next_reg(c);
-            c.output_file.write(c.indent + ptr_reg + " = getelementptr inbounds i8, i8* " + src_buf + ", i64 " + idx_i64 + "\n");
+            c.output_file.write(c.indent + ptr_reg + " = getelementptr inbounds i8, i8* " + src_buf + ", i32 " + index_res.reg + "\n");
             val_res = emit_implicit_cast(c, val_res, TYPE_BYTE, node.pos);
             c.output_file.write(c.indent + "store i8 " + val_res.reg + ", i8* " + ptr_reg + "\n");
             return val_res;
@@ -7270,7 +7323,7 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
         c.expected_type = 0;
         
         val_res = emit_implicit_cast(c, val_res, elem_type, node.pos);
-        let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+        let struct_ty -> String = get_vector_llvm_type(c, elem_type);
 
         emit_vector_bounds_check(c, target_res.reg, index_res.reg, struct_ty, node.pos);
 
@@ -7279,10 +7332,9 @@ func compile_index_assign(c -> Compiler, node -> IndexAssignNode) -> CompileResu
         let data_ptr -> String = next_reg(c);
         c.output_file.write(c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
         
-        let idx_i64 -> String = next_reg(c);
-        c.output_file.write(c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
+        let size_index -> String = emit_int_to_size(c, index_res.reg, true);
         let slot_ptr -> String = next_reg(c);
-        c.output_file.write(c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + idx_i64 + "\n");
+        c.output_file.write(c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", " + get_size_llvm_type() + " " + size_index + "\n");
 
         if (result_owns_value(c, elem_type)) {
             if (!val_res.owns_ref) { emit_retain_value(c, val_res.reg, elem_type); }
@@ -7363,10 +7415,9 @@ func compile_slice_access(c -> Compiler, node -> SliceAccessNode, shared -> Bool
         if (arr_info.size == -1) {
             source_kind = 2;
             source_parts = emit_slice_parts(c, target_res.reg, target_res.type, node.pos);
-            current_len = next_reg(c);
-            c.output_file.write(c.indent + current_len + " = trunc i64 " + source_parts.length + " to i32\n");
+            current_len = emit_size_to_int(c, source_parts.length);
             source_data = next_reg(c);
-            c.output_file.write(c.indent + source_data + " = getelementptr inbounds " + elem_ty + ", " + elem_ty + "* " + source_parts.data + ", i64 " + source_parts.start + "\n");
+            c.output_file.write(c.indent + source_data + " = getelementptr inbounds " + elem_ty + ", " + elem_ty + "* " + source_parts.data + ", " + get_size_llvm_type() + " " + source_parts.start + "\n");
         } else {
             source_kind = 1;
             current_len = "" + arr_info.size;
@@ -7377,13 +7428,13 @@ func compile_slice_access(c -> Compiler, node -> SliceAccessNode, shared -> Bool
         source_kind = 3;
         elem_type = vec_info.type;
         let elem_ty -> String = get_llvm_type_str(c, elem_type);
-        let vec_ty -> String = "{ i64, i64, " + elem_ty + "* }";
+        let vec_ty -> String = get_vector_llvm_type(c, elem_type);
+        let size_ty -> String = get_size_llvm_type();
         vec_size_slot = next_reg(c);
         c.output_file.write(c.indent + vec_size_slot + " = getelementptr inbounds " + vec_ty + ", " + vec_ty + "* " + target_res.reg + ", i32 0, i32 0\n");
-        let len_i64 -> String = next_reg(c);
-        c.output_file.write(c.indent + len_i64 + " = load i64, i64* " + vec_size_slot + "\n");
-        current_len = next_reg(c);
-        c.output_file.write(c.indent + current_len + " = trunc i64 " + len_i64 + " to i32\n");
+        let vector_length -> String = next_reg(c);
+        c.output_file.write(c.indent + vector_length + " = load " + size_ty + ", " + size_ty + "* " + vec_size_slot + "\n");
+        current_len = emit_size_to_int(c, vector_length);
         vec_data_slot = next_reg(c);
         c.output_file.write(c.indent + vec_data_slot + " = getelementptr inbounds " + vec_ty + ", " + vec_ty + "* " + target_res.reg + ", i32 0, i32 2\n");
         source_data = next_reg(c);
@@ -7418,16 +7469,14 @@ func compile_slice_access(c -> Compiler, node -> SliceAccessNode, shared -> Bool
         return void_result();
     }
 
-    let start_i64 -> String = next_reg(c);
-    c.output_file.write(c.indent + start_i64 + " = zext i32 " + start + " to i64\n");
-    let length_i64 -> String = next_reg(c);
-    c.output_file.write(c.indent + length_i64 + " = zext i32 " + length + " to i64\n");
+    let size_start -> String = emit_int_to_size(c, start, false);
+    let size_length -> String = emit_int_to_size(c, length, false);
     if (source_kind == 2) {
         let absolute_start -> String = next_reg(c);
-        c.output_file.write(c.indent + absolute_start + " = add i64 " + source_parts.start + ", " + start_i64 + "\n");
-        return emit_make_slice(c, elem_type, source_parts.owner, source_parts.data_slot, source_parts.size_slot, absolute_start, length_i64);
+        c.output_file.write(c.indent + absolute_start + " = add " + get_size_llvm_type() + " " + source_parts.start + ", " + size_start + "\n");
+        return emit_make_slice(c, elem_type, source_parts.owner, source_parts.data_slot, source_parts.size_slot, absolute_start, size_length);
     }
-    return emit_make_slice(c, elem_type, vec_owner, vec_data_slot, vec_size_slot, start_i64, length_i64);
+    return emit_make_slice(c, elem_type, vec_owner, vec_data_slot, vec_size_slot, size_start, size_length);
 }
 
 func compile_map_lit(c -> Compiler, lit_node -> Struct) -> CompileResult {
@@ -7742,10 +7791,9 @@ func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> Compi
             let data_ptr -> String = "";
             if (arr_info.size == -1) {
                 let parts -> SliceParts = emit_slice_parts(c, target_res.reg, target_res.type, ia.pos);
-                curr_len = next_reg(c);
-                c.output_file.write(c.indent + curr_len + " = trunc i64 " + parts.length + " to i32\n");
+                curr_len = emit_size_to_int(c, parts.length);
                 data_ptr = next_reg(c);
-                c.output_file.write(c.indent + data_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + parts.data + ", i64 " + parts.start + "\n");
+                c.output_file.write(c.indent + data_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + parts.data + ", " + get_size_llvm_type() + " " + parts.start + "\n");
             } else {
                 curr_len = "" + arr_info.size;
                 data_ptr = next_reg(c);
@@ -7761,7 +7809,7 @@ func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> Compi
             let v_info -> SymbolInfo = c.vector_base_map.get("" + target_res.type);
             let elem_type -> Int = v_info.type;
             let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
-            let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+            let struct_ty -> String = get_vector_llvm_type(c, elem_type);
             emit_vector_bounds_check(c, target_res.reg, index_res.reg, struct_ty, ia.pos);
             
             let data_field_ptr -> String = next_reg(c);
@@ -7769,11 +7817,9 @@ func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> Compi
             let data_ptr -> String = next_reg(c);
             c.output_file.write(c.indent + data_ptr + " = load " + elem_ty_str + "*, " + elem_ty_str + "** " + data_field_ptr + "\n");
             
-            let idx_i64 -> String = next_reg(c);
-            c.output_file.write(c.indent + idx_i64 + " = sext i32 " + index_res.reg + " to i64\n");
-            
+            let size_index -> String = emit_int_to_size(c, index_res.reg, true);
             let slot_ptr -> String = next_reg(c);
-            c.output_file.write(c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + idx_i64 + "\n");
+            c.output_file.write(c.indent + slot_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", " + get_size_llvm_type() + " " + size_index + "\n");
             return CompileResult(reg=slot_ptr, type=elem_type, origin_type=elem_type);
         }
         
@@ -7943,12 +7989,13 @@ func compile_type_layout(c -> Compiler, node -> TypeLayoutNode) -> CompileResult
     if (!check_layout_type(c, type_id, node.is_align, node.pos)) { return CompileResult(reg="poison", type=TYPE_POISON); }
 
     let llvm_type -> String = get_llvm_type_str(c, type_id);
+    let size_ty -> String = get_size_llvm_type();
     let value -> String = "";
     if (node.is_align) {
         let pair_type -> String = "{ i8, " + llvm_type + " }";
-        value = "ptrtoint (" + llvm_type + "* getelementptr (" + pair_type + ", " + pair_type + "* null, i32 0, i32 1) to i64)";
+        value = "ptrtoint (" + llvm_type + "* getelementptr (" + pair_type + ", " + pair_type + "* null, i32 0, i32 1) to " + size_ty + ")";
     } else {
-        value = "ptrtoint (" + llvm_type + "* getelementptr (" + llvm_type + ", " + llvm_type + "* null, i32 1) to i64)";
+        value = "ptrtoint (" + llvm_type + "* getelementptr (" + llvm_type + ", " + llvm_type + "* null, i32 1) to " + size_ty + ")";
     }
     return CompileResult(reg=value, type=TYPE_UINTSIZE);
 }
@@ -9669,11 +9716,13 @@ func integer_max_literal(type_id -> Int) -> String {
     if (type_id == TYPE_INT8) { return "127"; }
     if (type_id == TYPE_INT16) { return "32767"; }
     if (type_id == TYPE_INT) { return "2147483647"; }
+    if (type_id == TYPE_INTSIZE && get_target_pointer_bits() == 32) { return "2147483647"; }
     if (type_id == TYPE_LONG || type_id == TYPE_INTSIZE) { return "9223372036854775807"; }
     if (type_id == TYPE_INT128) { return "170141183460469231731687303715884105727"; }
     if (type_id == TYPE_BYTE) { return "255"; }
     if (type_id == TYPE_UINT16) { return "65535"; }
     if (type_id == TYPE_UINT32) { return "4294967295"; }
+    if (type_id == TYPE_UINTSIZE && get_target_pointer_bits() == 32) { return "4294967295"; }
     if (type_id == TYPE_UINT64 || type_id == TYPE_UINTSIZE) { return "18446744073709551615"; }
     if (type_id == TYPE_UINT128) { return "340282366920938463463374607431768211455"; }
     return "";
@@ -9683,6 +9732,7 @@ func signed_negative_limit(type_id -> Int) -> UInt128 {
     if (type_id == TYPE_INT8) { return UInt128(128); }
     if (type_id == TYPE_INT16) { return UInt128(32768); }
     if (type_id == TYPE_INT) { return UInt128(2147483648UL); }
+    if (type_id == TYPE_INTSIZE && get_target_pointer_bits() == 32) { return UInt128(2147483648UL); }
     if (type_id == TYPE_LONG || type_id == TYPE_INTSIZE) { return UInt128(9223372036854775808UL); }
     if (type_id == TYPE_INT128) { return 170141183460469231731687303715884105728ULL; }
     return UInt128(0);
@@ -9692,11 +9742,13 @@ func positive_integer_limit(type_id -> Int) -> UInt128 {
     if (type_id == TYPE_INT8) { return UInt128(127); }
     if (type_id == TYPE_INT16) { return UInt128(32767); }
     if (type_id == TYPE_INT) { return UInt128(2147483647); }
+    if (type_id == TYPE_INTSIZE && get_target_pointer_bits() == 32) { return UInt128(2147483647); }
     if (type_id == TYPE_LONG || type_id == TYPE_INTSIZE) { return UInt128(9223372036854775807L); }
     if (type_id == TYPE_INT128) { return 170141183460469231731687303715884105727ULL; }
     if (type_id == TYPE_BYTE) { return UInt128(255); }
     if (type_id == TYPE_UINT16) { return UInt128(65535); }
     if (type_id == TYPE_UINT32) { return UInt128(4294967295UL); }
+    if (type_id == TYPE_UINTSIZE && get_target_pointer_bits() == 32) { return UInt128(4294967295UL); }
     if (type_id == TYPE_UINT64 || type_id == TYPE_UINTSIZE) { return UInt128(18446744073709551615UL); }
     if (type_id == TYPE_UINT128) { return 340282366920938463463374607431768211455ULL; }
     return UInt128(0);
@@ -9867,11 +9919,13 @@ func integer_upper_bound(type_id -> Int) -> String {
     if (type_id == TYPE_INT8) { return "128.0"; }
     if (type_id == TYPE_INT16) { return "32768.0"; }
     if (type_id == TYPE_INT) { return "2147483648.0"; }
+    if (type_id == TYPE_INTSIZE && get_target_pointer_bits() == 32) { return "2147483648.0"; }
     if (type_id == TYPE_LONG || type_id == TYPE_INTSIZE) { return "9223372036854775808.0"; }
     if (type_id == TYPE_INT128) { return "170141183460469231731687303715884105728.0"; }
     if (type_id == TYPE_BYTE) { return "256.0"; }
     if (type_id == TYPE_UINT16) { return "65536.0"; }
     if (type_id == TYPE_UINT32) { return "4294967296.0"; }
+    if (type_id == TYPE_UINTSIZE && get_target_pointer_bits() == 32) { return "4294967296.0"; }
     if (type_id == TYPE_UINT64 || type_id == TYPE_UINTSIZE) { return "18446744073709551616.0"; }
     if (type_id == TYPE_UINT128) { return "340282366920938463463374607431768211456.0"; }
     return "";
@@ -9882,6 +9936,7 @@ func integer_lower_bound(type_id -> Int) -> String {
     if (type_id == TYPE_INT8) { return "-128.0"; }
     if (type_id == TYPE_INT16) { return "-32768.0"; }
     if (type_id == TYPE_INT) { return "-2147483648.0"; }
+    if (type_id == TYPE_INTSIZE && get_target_pointer_bits() == 32) { return "-2147483648.0"; }
     if (type_id == TYPE_LONG || type_id == TYPE_INTSIZE) { return "-9223372036854775808.0"; }
     if (type_id == TYPE_INT128) { return "-170141183460469231731687303715884105728.0"; }
     return "0.0";
@@ -10276,6 +10331,13 @@ func compile_print(c -> Compiler, reg -> String, type_id -> Int, pos -> Position
         return;
     }
 
+    if (type_id == TYPE_UINT64 || type_id == TYPE_UINTSIZE) {
+        let formatted -> CompileResult = convert_to_string(c, CompileResult(reg=reg, type=type_id, origin_type=origin_id));
+        compile_print(c, formatted.reg, TYPE_STRING, pos, TYPE_STRING);
+        emit_release_owned(c, formatted);
+        return;
+    }
+
     if (is_primitive_type(type_id)) {
         if (type_id == TYPE_INT || type_id == TYPE_INT8 || type_id == TYPE_INT16 || type_id == TYPE_UINT16) {
             let temp_res -> CompileResult = CompileResult(reg=reg, type=type_id, origin_type=origin_id);
@@ -10497,12 +10559,13 @@ func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> S
     let hook_raw_str -> String = get_mangled_symbol(c, "print_bytes", pos);
     let elem_type -> Int = v_info.type;
     let elem_ty_str -> String = get_llvm_type_str(c, elem_type);
-    let struct_ty -> String = "{ i64, i64, " + elem_ty_str + "* }";
+    let struct_ty -> String = get_vector_llvm_type(c, elem_type);
+    let size_ty -> String = get_size_llvm_type();
 
     let size_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + size_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_reg + ", i32 0, i32 0\n");
     let size_val -> String = next_reg(c);
-    c.output_file.write(c.indent + size_val + " = load i64, i64* " + size_ptr + "\n");
+    c.output_file.write(c.indent + size_val + " = load " + size_ty + ", " + size_ty + "* " + size_ptr + "\n");
     
     let data_ptr_ptr -> String = next_reg(c);
     c.output_file.write(c.indent + data_ptr_ptr + " = getelementptr inbounds " + struct_ty + ", " + struct_ty + "* " + vec_reg + ", i32 0, i32 2\n");
@@ -10517,31 +10580,31 @@ func compile_print_vector_internal(c -> Compiler, vec_reg -> String, v_info -> S
     let label_end  -> String = next_label(c);
 
     let idx_ptr -> String = next_reg(c);
-    c.output_file.write(c.indent + idx_ptr + " = alloca i64\n");
-    c.output_file.write(c.indent + "store i64 0, i64* " + idx_ptr + "\n");
+    c.output_file.write(c.indent + idx_ptr + " = alloca " + size_ty + "\n");
+    c.output_file.write(c.indent + "store " + size_ty + " 0, " + size_ty + "* " + idx_ptr + "\n");
     c.output_file.write(c.indent + "br label %" + label_cond + "\n");
 
     c.output_file.write("\n" + label_cond + ":\n");
     let curr_idx -> String = next_reg(c);
-    c.output_file.write(c.indent + curr_idx + " = load i64, i64* " + idx_ptr + "\n");
+    c.output_file.write(c.indent + curr_idx + " = load " + size_ty + ", " + size_ty + "* " + idx_ptr + "\n");
     let cmp -> String = next_reg(c);
-    c.output_file.write(c.indent + cmp + " = icmp slt i64 " + curr_idx + ", " + size_val + "\n");
+    c.output_file.write(c.indent + cmp + " = icmp ult " + size_ty + " " + curr_idx + ", " + size_val + "\n");
     c.output_file.write(c.indent + "br i1 " + cmp + ", label %" + label_body + ", label %" + label_end + "\n");
 
     c.output_file.write("\n" + label_body + ":\n");
     let slot -> String = next_reg(c);
-    c.output_file.write(c.indent + slot + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", i64 " + curr_idx + "\n");
+    c.output_file.write(c.indent + slot + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + data_ptr + ", " + size_ty + " " + curr_idx + "\n");
     let val -> String = next_reg(c);
     c.output_file.write(c.indent + val + " = load " + elem_ty_str + ", " + elem_ty_str + "* " + slot + "\n");
     
     compile_print(c, val, elem_type, pos, elem_type);
 
     let next_idx -> String = next_reg(c);
-    c.output_file.write(c.indent + next_idx + " = add i64 " + curr_idx + ", 1\n");
-    c.output_file.write(c.indent + "store i64 " + next_idx + ", i64* " + idx_ptr + "\n");
+    c.output_file.write(c.indent + next_idx + " = add " + size_ty + " " + curr_idx + ", 1\n");
+    c.output_file.write(c.indent + "store " + size_ty + " " + next_idx + ", " + size_ty + "* " + idx_ptr + "\n");
     
     let is_not_last -> String = next_reg(c);
-    c.output_file.write(c.indent + is_not_last + " = icmp slt i64 " + next_idx + ", " + size_val + "\n");
+    c.output_file.write(c.indent + is_not_last + " = icmp ult " + size_ty + " " + next_idx + ", " + size_val + "\n");
     c.output_file.write(c.indent + "br i1 " + is_not_last + ", label %" + label_sep + ", label %" + label_cond + "\n");
 
     c.output_file.write("\n" + label_sep + ":\n");
@@ -10563,7 +10626,8 @@ func compile_print_array_internal(c -> Compiler, arr_reg -> String, type_id -> I
     let slice_parts -> SliceParts = null;
     if (arr_info.size == -1) {
         slice_parts = emit_slice_parts(c, arr_reg, type_id, pos);
-        c.output_file.write(c.indent + size_val + " = trunc i64 " + slice_parts.length + " to i32\n");
+        let slice_length -> String = emit_size_to_int(c, slice_parts.length);
+        c.output_file.write(c.indent + size_val + " = add i32 0, " + slice_length + "\n");
     } else {
         c.output_file.write(c.indent + size_val + " = add i32 0, " + arr_info.size + "\n");
     }
@@ -10571,7 +10635,7 @@ func compile_print_array_internal(c -> Compiler, arr_reg -> String, type_id -> I
     let data_ptr -> String = "";
     if (arr_info.size == -1) {
         data_ptr = next_reg(c);
-        c.output_file.write(c.indent + data_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + slice_parts.data + ", i64 " + slice_parts.start + "\n");
+        c.output_file.write(c.indent + data_ptr + " = getelementptr inbounds " + elem_ty_str + ", " + elem_ty_str + "* " + slice_parts.data + ", " + get_size_llvm_type() + " " + slice_parts.start + "\n");
     } else {
         data_ptr = next_reg(c);
         c.output_file.write(c.indent + data_ptr + " = getelementptr inbounds " + arr_info.llvm_name + ", " + arr_info.llvm_name + "* " + arr_reg + ", i32 0, i32 0\n");
@@ -10944,76 +11008,77 @@ func compile(c -> Compiler, node -> Struct) -> Void {
 }
 
 func emit_freestanding_memops(c -> Compiler) -> Void {
-    c.output_file.write("define i8* @memcpy(i8* %dest, i8* %src, i64 %count) noinline optnone {\n");
+    let size_ty -> String = get_size_llvm_type();
+    c.output_file.write("define i8* @memcpy(i8* %dest, i8* %src, " + size_ty + " %count) noinline optnone {\n");
     c.output_file.write("entry:\n");
     c.output_file.write("  br label %copy.cond\n\n");
     c.output_file.write("copy.cond:\n");
-    c.output_file.write("  %index = phi i64 [ 0, %entry ], [ %next, %copy.body ]\n");
-    c.output_file.write("  %done = icmp uge i64 %index, %count\n");
+    c.output_file.write("  %index = phi " + size_ty + " [ 0, %entry ], [ %next, %copy.body ]\n");
+    c.output_file.write("  %done = icmp uge " + size_ty + " %index, %count\n");
     c.output_file.write("  br i1 %done, label %copy.end, label %copy.body\n\n");
     c.output_file.write("copy.body:\n");
-    c.output_file.write("  %source = getelementptr i8, i8* %src, i64 %index\n");
+    c.output_file.write("  %source = getelementptr i8, i8* %src, " + size_ty + " %index\n");
     c.output_file.write("  %byte = load volatile i8, i8* %source\n");
-    c.output_file.write("  %target = getelementptr i8, i8* %dest, i64 %index\n");
+    c.output_file.write("  %target = getelementptr i8, i8* %dest, " + size_ty + " %index\n");
     c.output_file.write("  store volatile i8 %byte, i8* %target\n");
-    c.output_file.write("  %next = add i64 %index, 1\n");
+    c.output_file.write("  %next = add " + size_ty + " %index, 1\n");
     c.output_file.write("  br label %copy.cond\n\n");
     c.output_file.write("copy.end:\n");
     c.output_file.write("  ret i8* %dest\n");
     c.output_file.write("}\n\n");
 
-    c.output_file.write("define i8* @memmove(i8* %dest, i8* %src, i64 %count) noinline optnone {\n");
+    c.output_file.write("define i8* @memmove(i8* %dest, i8* %src, " + size_ty + " %count) noinline optnone {\n");
     c.output_file.write("entry:\n");
     c.output_file.write("  %same = icmp eq i8* %dest, %src\n");
-    c.output_file.write("  %empty = icmp eq i64 %count, 0\n");
+    c.output_file.write("  %empty = icmp eq " + size_ty + " %count, 0\n");
     c.output_file.write("  %trivial = or i1 %same, %empty\n");
     c.output_file.write("  br i1 %trivial, label %move.end, label %move.direction\n\n");
     c.output_file.write("move.direction:\n");
-    c.output_file.write("  %dest.addr = ptrtoint i8* %dest to i64\n");
-    c.output_file.write("  %src.addr = ptrtoint i8* %src to i64\n");
-    c.output_file.write("  %before = icmp ult i64 %dest.addr, %src.addr\n");
-    c.output_file.write("  %distance = sub i64 %dest.addr, %src.addr\n");
-    c.output_file.write("  %separate = icmp uge i64 %distance, %count\n");
+    c.output_file.write("  %dest.addr = ptrtoint i8* %dest to " + size_ty + "\n");
+    c.output_file.write("  %src.addr = ptrtoint i8* %src to " + size_ty + "\n");
+    c.output_file.write("  %before = icmp ult " + size_ty + " %dest.addr, %src.addr\n");
+    c.output_file.write("  %distance = sub " + size_ty + " %dest.addr, %src.addr\n");
+    c.output_file.write("  %separate = icmp uge " + size_ty + " %distance, %count\n");
     c.output_file.write("  %forward = or i1 %before, %separate\n");
     c.output_file.write("  br i1 %forward, label %forward.cond, label %backward.cond\n\n");
     c.output_file.write("forward.cond:\n");
-    c.output_file.write("  %forward.index = phi i64 [ 0, %move.direction ], [ %forward.next, %forward.body ]\n");
-    c.output_file.write("  %forward.done = icmp uge i64 %forward.index, %count\n");
+    c.output_file.write("  %forward.index = phi " + size_ty + " [ 0, %move.direction ], [ %forward.next, %forward.body ]\n");
+    c.output_file.write("  %forward.done = icmp uge " + size_ty + " %forward.index, %count\n");
     c.output_file.write("  br i1 %forward.done, label %move.end, label %forward.body\n\n");
     c.output_file.write("forward.body:\n");
-    c.output_file.write("  %forward.src = getelementptr i8, i8* %src, i64 %forward.index\n");
+    c.output_file.write("  %forward.src = getelementptr i8, i8* %src, " + size_ty + " %forward.index\n");
     c.output_file.write("  %forward.byte = load volatile i8, i8* %forward.src\n");
-    c.output_file.write("  %forward.dest = getelementptr i8, i8* %dest, i64 %forward.index\n");
+    c.output_file.write("  %forward.dest = getelementptr i8, i8* %dest, " + size_ty + " %forward.index\n");
     c.output_file.write("  store volatile i8 %forward.byte, i8* %forward.dest\n");
-    c.output_file.write("  %forward.next = add i64 %forward.index, 1\n");
+    c.output_file.write("  %forward.next = add " + size_ty + " %forward.index, 1\n");
     c.output_file.write("  br label %forward.cond\n\n");
     c.output_file.write("backward.cond:\n");
-    c.output_file.write("  %remaining = phi i64 [ %count, %move.direction ], [ %backward.index, %backward.body ]\n");
-    c.output_file.write("  %backward.done = icmp eq i64 %remaining, 0\n");
+    c.output_file.write("  %remaining = phi " + size_ty + " [ %count, %move.direction ], [ %backward.index, %backward.body ]\n");
+    c.output_file.write("  %backward.done = icmp eq " + size_ty + " %remaining, 0\n");
     c.output_file.write("  br i1 %backward.done, label %move.end, label %backward.body\n\n");
     c.output_file.write("backward.body:\n");
-    c.output_file.write("  %backward.index = sub i64 %remaining, 1\n");
-    c.output_file.write("  %backward.src = getelementptr i8, i8* %src, i64 %backward.index\n");
+    c.output_file.write("  %backward.index = sub " + size_ty + " %remaining, 1\n");
+    c.output_file.write("  %backward.src = getelementptr i8, i8* %src, " + size_ty + " %backward.index\n");
     c.output_file.write("  %backward.byte = load volatile i8, i8* %backward.src\n");
-    c.output_file.write("  %backward.dest = getelementptr i8, i8* %dest, i64 %backward.index\n");
+    c.output_file.write("  %backward.dest = getelementptr i8, i8* %dest, " + size_ty + " %backward.index\n");
     c.output_file.write("  store volatile i8 %backward.byte, i8* %backward.dest\n");
     c.output_file.write("  br label %backward.cond\n\n");
     c.output_file.write("move.end:\n");
     c.output_file.write("  ret i8* %dest\n");
     c.output_file.write("}\n\n");
 
-    c.output_file.write("define i8* @memset(i8* %dest, i32 %value, i64 %count) noinline optnone {\n");
+    c.output_file.write("define i8* @memset(i8* %dest, i32 %value, " + size_ty + " %count) noinline optnone {\n");
     c.output_file.write("entry:\n");
     c.output_file.write("  %byte = trunc i32 %value to i8\n");
     c.output_file.write("  br label %set.cond\n\n");
     c.output_file.write("set.cond:\n");
-    c.output_file.write("  %index = phi i64 [ 0, %entry ], [ %next, %set.body ]\n");
-    c.output_file.write("  %done = icmp uge i64 %index, %count\n");
+    c.output_file.write("  %index = phi " + size_ty + " [ 0, %entry ], [ %next, %set.body ]\n");
+    c.output_file.write("  %done = icmp uge " + size_ty + " %index, %count\n");
     c.output_file.write("  br i1 %done, label %set.end, label %set.body\n\n");
     c.output_file.write("set.body:\n");
-    c.output_file.write("  %target = getelementptr i8, i8* %dest, i64 %index\n");
+    c.output_file.write("  %target = getelementptr i8, i8* %dest, " + size_ty + " %index\n");
     c.output_file.write("  store volatile i8 %byte, i8* %target\n");
-    c.output_file.write("  %next = add i64 %index, 1\n");
+    c.output_file.write("  %next = add " + size_ty + " %index, 1\n");
     c.output_file.write("  br label %set.cond\n\n");
     c.output_file.write("set.end:\n");
     c.output_file.write("  ret i8* %dest\n");

@@ -76,8 +76,8 @@ func read(stream -> Int, data -> AnyPtr, length -> Int) -> Int? {
     }
 
     while true {
-        let count -> Long = posix.read(0, data, Long(length));
-        if (count >= 0L) { return Int(count); }
+        let count -> IntSize = posix.read(0, data, UIntSize(length));
+        if (count >= IntSize(0)) { return Int(count); }
         let err -> platform_errors.Kind = platform_errors.last();
         if (err != platform_errors.Kind.Interrupted) { throw __from_platform(err); }
     }
@@ -105,8 +105,8 @@ func write(stream -> Int, data -> AnyPtr, length -> Int) -> Int? {
     let fd -> Int = 1;
     if (stream == STDERR) { fd = 2; }
     while true {
-        let count -> Long = posix.write(fd, data, Long(length));
-        if (count >= 0L) { return Int(count); }
+        let count -> IntSize = posix.write(fd, data, UIntSize(length));
+        if (count >= IntSize(0)) { return Int(count); }
         let err -> platform_errors.Kind = platform_errors.last();
         if (err != platform_errors.Kind.Interrupted) { throw __from_platform(err); }
     }

@@ -14,8 +14,8 @@ extern "system" {
     func GetCommandLineW() -> AnyPtr;
     func CommandLineToArgvW(lpCmdLine -> AnyPtr, pNumArgs -> AnyPtr) -> AnyPtr;
     func LocalFree(hMem -> AnyPtr) -> AnyPtr;
-    func HeapAlloc(hHeap -> AnyPtr, dwFlags -> Int, dwBytes -> Long) -> AnyPtr;
-    func HeapReAlloc(hHeap -> AnyPtr, dwFlags -> Int, lpMem -> AnyPtr, dwBytes -> Long) -> AnyPtr;
+    func HeapAlloc(hHeap -> AnyPtr, dwFlags -> Int, dwBytes -> UIntSize) -> AnyPtr;
+    func HeapReAlloc(hHeap -> AnyPtr, dwFlags -> Int, lpMem -> AnyPtr, dwBytes -> UIntSize) -> AnyPtr;
     func HeapFree(hHeap -> AnyPtr, dwFlags -> Int, lpMem -> AnyPtr) -> Int;
     func GetLastError() -> Int;
     func GetEnvironmentVariableW(lpName -> AnyPtr, lpBuffer -> AnyPtr, nSize -> Int) -> Int;
@@ -83,7 +83,7 @@ func utf8_to_utf16(value -> String) -> AnyPtr {
         if (wide_length <= 0) { return nullptr; }
     }
 
-    let buffer -> AnyPtr = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (Long(wide_length) + 1L) * 2L);
+    let buffer -> AnyPtr = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, UIntSize(wide_length + 1) * UIntSize(2));
     if (buffer is nullptr) { return nullptr; }
     if (wide_length > 0 && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, runtime_string.data(value), length, buffer, wide_length) <= 0) {
         HeapFree(GetProcessHeap(), 0, buffer);

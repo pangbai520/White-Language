@@ -3,13 +3,13 @@
 
 import * from "../../sys/target.wl"
 
-extern func malloc(size -> Long) -> AnyPtr from "C";
-extern func calloc(count -> Long, size -> Long) -> AnyPtr from "C";
-extern func realloc(block -> AnyPtr, size -> Long) -> AnyPtr from "C";
+extern func malloc(size -> UIntSize) -> AnyPtr from "C";
+extern func calloc(count -> UIntSize, size -> UIntSize) -> AnyPtr from "C";
+extern func realloc(block -> AnyPtr, size -> UIntSize) -> AnyPtr from "C";
 extern func free(block -> AnyPtr) -> Void from "C";
 
-extern func write(fd -> Int, buf -> AnyPtr, count -> Long) -> Long from "C";
-extern func read(fd -> Int, buf -> AnyPtr, count -> Long) -> Long from "C";
+extern func write(fd -> Int, buf -> AnyPtr, count -> UIntSize) -> IntSize from "C";
+extern func read(fd -> Int, buf -> AnyPtr, count -> UIntSize) -> IntSize from "C";
 extern func getenv(name -> AnyPtr) -> AnyPtr from "C";
 extern func system(command -> AnyPtr) -> Int from "C";
 extern func exit(status -> Int) -> Void from "C";
@@ -23,8 +23,8 @@ extern func _exit(status -> Int) -> Void from "C";
 
 extern func fopen(filename -> AnyPtr, mode -> AnyPtr) -> AnyPtr from "C";
 extern func fclose(stream -> AnyPtr) -> Int from "C";
-extern func fread(p -> AnyPtr, size -> Long, count -> Long, stream -> AnyPtr) -> Long from "C";
-extern func fwrite(p -> AnyPtr, size -> Long, count -> Long, stream -> AnyPtr) -> Long from "C";
+extern func fread(p -> AnyPtr, size -> UIntSize, count -> UIntSize, stream -> AnyPtr) -> UIntSize from "C";
+extern func fwrite(p -> AnyPtr, size -> UIntSize, count -> UIntSize, stream -> AnyPtr) -> UIntSize from "C";
 extern func fseek(stream -> AnyPtr, offset -> Long, origin -> Int) -> Int from "C";
 extern func ftell(stream -> AnyPtr) -> Long from "C";
 extern func rewind(stream -> AnyPtr) -> Void from "C";

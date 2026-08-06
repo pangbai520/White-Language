@@ -116,8 +116,8 @@ func run(program -> String, args -> Vector(String)) -> Int? {
         }
 
         let startup_size -> Int = windows.startup_info_size();
-        let info_size -> Long = runtime.pointer_size() * 2L + 8L;
-        let startup -> AnyPtr = runtime.mem_alloc_zeroed(Long(startup_size));
+        let info_size -> UIntSize = runtime.pointer_size() * UIntSize(2) + UIntSize(8);
+        let startup -> AnyPtr = runtime.mem_alloc_zeroed(UIntSize(startup_size));
         let info -> AnyPtr = runtime.mem_alloc_zeroed(info_size);
         if (startup is nullptr || info is nullptr) {
             runtime.mem_dealloc(startup);
@@ -167,7 +167,7 @@ func run(program -> String, args -> Vector(String)) -> Int? {
         return exit_code;
     }
 
-    let bytes -> Long = Long(count + 2) * runtime.pointer_size();
+    let bytes -> UIntSize = UIntSize(count + 2) * runtime.pointer_size();
     let raw_argv -> AnyPtr = runtime.mem_alloc_zeroed(bytes);
     if (raw_argv is nullptr) { throw CoreError.OutOfMemory; }
 
