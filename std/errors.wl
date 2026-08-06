@@ -1,3 +1,4 @@
+// std/errors.wl
 @CompilerLink
 enum Error {
     InvalidArgument,

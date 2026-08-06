@@ -1364,6 +1364,7 @@ func get_expr_type(c -> Compiler, node -> Struct) -> Int {
         return TYPE_FLOAT;
     }
     if (base.type == NODE_BOOL) { return TYPE_BOOL; }
+    if (base.type == NODE_TYPE_LAYOUT) { return TYPE_UINTSIZE; }
     
     if (base.type == NODE_VAR_ACCESS) {
         let v -> VarAccessNode = node;
@@ -1750,6 +1751,7 @@ func get_type_size_bytes(c -> Compiler, type_id -> Int) -> Int {
     if (type_id == TYPE_INT || type_id == TYPE_UINT32 || type_id == TYPE_CHAR || type_id == TYPE_FLOAT32 || type_id == TYPE_GENERIC_ENUM) { return 4; }
     if (type_id == TYPE_INT128 || type_id == TYPE_UINT128) { return 16; }
     if (type_id == TYPE_LONG || type_id == TYPE_UINT64 || type_id == TYPE_FLOAT || type_id == TYPE_INTSIZE || type_id == TYPE_UINTSIZE) { return 8; }
+    if (type_id == TYPE_ANY_ERROR) { return 16; } // { i64 domain, i32 code } with tail padding
 
     let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
     if (arr_info is !null) {
@@ -1760,6 +1762,41 @@ func get_type_size_bytes(c -> Compiler, type_id -> Int) -> Int {
     let struct_info -> StructInfo = c.struct_id_map.get("" + type_id);
     if (struct_info is !null && struct_info.is_interface) { return 16; }
 
+    let fallible_info -> SymbolInfo = c.fallible_base_map.get("" + type_id);
+    if (fallible_info is !null) {
+        let offset -> Int = 8 + get_type_size_bytes(c, TYPE_ANY_ERROR);
+        let layout_align -> Int = get_type_align_bytes(c, type_id);
+        if (fallible_info.type != TYPE_VOID) {
+            let value_align -> Int = get_type_align_bytes(c, fallible_info.type);
+            let remainder -> Int = offset % value_align;
+            if (remainder != 0) { offset += value_align - remainder; }
+            offset += get_type_size_bytes(c, fallible_info.type);
+        }
+        let tail -> Int = offset % layout_align;
+        if (tail != 0) { offset += layout_align - tail; }
+        return offset;
+    }
+
+    return 8;
+}
+
+func get_type_align_bytes(c -> Compiler, type_id -> Int) -> Int {
+    if (type_id == TYPE_BOOL || type_id == TYPE_BYTE || type_id == TYPE_INT8) { return 1; }
+    if (type_id == TYPE_INT16 || type_id == TYPE_UINT16) { return 2; }
+    if (type_id == TYPE_INT || type_id == TYPE_UINT32 || type_id == TYPE_CHAR || type_id == TYPE_FLOAT32 || type_id == TYPE_GENERIC_ENUM) { return 4; }
+    if (type_id == TYPE_INT128 || type_id == TYPE_UINT128) { return 16; }
+
+    let arr_info -> ArrayInfo = c.array_info_map.get("" + type_id);
+    if (arr_info is !null) {
+        if (arr_info.size < 0) { return 8; }
+        return get_type_align_bytes(c, arr_info.base_type);
+    }
+
+    let fallible_info -> SymbolInfo = c.fallible_base_map.get("" + type_id);
+    if (fallible_info is !null && fallible_info.type != TYPE_VOID) {
+        let value_align -> Int = get_type_align_bytes(c, fallible_info.type);
+        if (value_align > 8) { return value_align; }
+    }
     return 8;
 }
 

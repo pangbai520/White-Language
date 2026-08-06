@@ -1,3 +1,4 @@
+// std/process/process.wl
 // process control
 
 import "sys"
@@ -114,7 +115,7 @@ func run(program -> String, args -> Vector(String)) -> Int? {
             throw CoreError.OutOfMemory;
         }
 
-        let startup_size -> Int = windows.wl_startup_info_size();
+        let startup_size -> Int = windows.startup_info_size();
         let info_size -> Long = runtime.pointer_size() * 2L + 8L;
         let startup -> AnyPtr = runtime.mem_alloc_zeroed(Long(startup_size));
         let info -> AnyPtr = runtime.mem_alloc_zeroed(info_size);

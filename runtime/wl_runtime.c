@@ -138,16 +138,6 @@ typedef struct {
     int cap;
 } wl_string;
 
-long long wl_pointer_size(void) {
-    return (long long)sizeof(void*);
-}
-
-#ifdef _WIN32
-int wl_startup_info_size(void) {
-    return (int)sizeof(STARTUPINFOW);
-}
-#endif
-
 enum {
     WL_STRING_TYPE_ID = 5,
     WL_OBJECT_HEADER_SIZE = 8

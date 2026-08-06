@@ -1,3 +1,4 @@
+// std/internal/io/standard.wl
 // standard stream access shared by builtin and io
 
 import "sys"

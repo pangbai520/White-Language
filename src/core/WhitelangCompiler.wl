@@ -221,6 +221,25 @@ func combine_i128_words(c -> Compiler, low -> String, high -> String) -> String 
     return result;
 }
 
+func check_layout_type(c -> Compiler, type_id -> Int, is_align -> Bool, pos -> Position) -> Bool {
+    let property -> String = "size";
+    if is_align { property = "alignment"; }
+    if (type_id == TYPE_POISON) { return false; }
+    if (type_id == TYPE_VOID) {
+        throw_type_error(pos, "Type 'Void' has no " + property + ".");
+        return false;
+    }
+    if (type_id == TYPE_AUTO) {
+        throw_type_error(pos, "Type 'Auto' must be resolved before its " + property + " can be determined.");
+        return false;
+    }
+    if (type_id == TYPE_GENERIC_STRUCT || type_id == TYPE_GENERIC_FUNCTION || type_id == TYPE_GENERIC_CLASS || type_id == TYPE_GENERIC_METHOD || type_id == TYPE_GENERIC_ENUM) {
+        throw_type_error(pos, "Type-erased '" + get_type_name(c, type_id) + "' has no defined " + property + ".");
+        return false;
+    }
+    return true;
+}
+
 func eval_const_long(c -> Compiler, node -> Struct, pos -> Position) -> Long {
     if (node is null) { return 0L; }
     let base -> BaseNode = node;
@@ -230,6 +249,13 @@ func eval_const_long(c -> Compiler, node -> Struct, pos -> Position) -> Long {
         return string_to_long(n.tok.value, n.pos);
     }
     if (base.type == NODE_VAR_ACCESS) { return get_const_integer(c, node, pos); }
+    if (base.type == NODE_TYPE_LAYOUT) {
+        let layout -> TypeLayoutNode = node;
+        let type_id -> Int = resolve_type(c, layout.type_node);
+        if (!check_layout_type(c, type_id, layout.is_align, layout.pos)) { return 0L; }
+        if (layout.is_align) { return Long(get_type_align_bytes(c, type_id)); }
+        return Long(get_type_size_bytes(c, type_id));
+    }
     if (base.type == NODE_UNARYOP) {
         let u -> UnaryOpNode = node;
         let op_str -> String = u.op_tok.value;
@@ -428,6 +454,7 @@ func eval_const_wide(c -> Compiler, node -> Struct, pos -> Position, is_unsigned
         return parsed;
     }
     if (base.type == NODE_VAR_ACCESS) { return get_const_wide_integer(c, node, pos); }
+    if (base.type == NODE_TYPE_LAYOUT) { return UInt128(eval_const_long(c, node, pos)); }
     if (base.type == NODE_UNARYOP) {
         let unary -> UnaryOpNode = node;
         let value -> UInt128 = eval_const_wide(c, unary.node, pos, is_unsigned);
@@ -1561,6 +1588,16 @@ func pre_register_funcs(c -> Compiler, node -> Struct) -> Void {
             }
 
             let sys_anns -> SystemAnnResult = consume_annotations(f_node.annotations, raw_name);
+            if ((sys_anns.ann_flags & FLAG_ANN_INTRINSIC) != 0) {
+                if ((raw_name != "size_of" && raw_name != "align_of") || sys_anns.intrinsic_name != raw_name) {
+                    throw_internal_compiler_error(f_node.pos, "Unknown intrinsic function '" + sys_anns.intrinsic_name + "'.");
+                    return;
+                }
+                if (p_len != 0 || ret_type_id != TYPE_UINTSIZE) {
+                    throw_internal_compiler_error(f_node.pos, "Intrinsic '" + raw_name + "' must be declared as func " + raw_name + "() -> UIntSize.");
+                    return;
+                }
+            }
             let func_key -> String = raw_name;
             if (raw_name != "main") {
                 func_key = c.current_package_prefix + raw_name;
@@ -3602,6 +3639,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     if (f_info is null) {
         return void_result();
     }
+    if ((f_info.ann_flags & FLAG_ANN_INTRINSIC) != 0) { return void_result(); }
     let ret_type_id -> Int = f_info.ret_type;
     let llvm_ret_type -> String = get_llvm_type_str(c, ret_type_id);
 
@@ -7770,6 +7808,21 @@ func compile_lvalue_ptr(c -> Compiler, node -> Struct, pos -> Position) -> Compi
     return null;
 }
 
+func compile_type_layout(c -> Compiler, node -> TypeLayoutNode) -> CompileResult {
+    let type_id -> Int = resolve_type(c, node.type_node);
+    if (!check_layout_type(c, type_id, node.is_align, node.pos)) { return CompileResult(reg="poison", type=TYPE_POISON); }
+
+    let llvm_type -> String = get_llvm_type_str(c, type_id);
+    let value -> String = "";
+    if (node.is_align) {
+        let pair_type -> String = "{ i8, " + llvm_type + " }";
+        value = "ptrtoint (" + llvm_type + "* getelementptr (" + pair_type + ", " + pair_type + "* null, i32 0, i32 1) to i64)";
+    } else {
+        value = "ptrtoint (" + llvm_type + "* getelementptr (" + llvm_type + ", " + llvm_type + "* null, i32 1) to i64)";
+    }
+    return CompileResult(reg=value, type=TYPE_UINTSIZE);
+}
+
 func compile_binop(c -> Compiler, node -> BinOpNode) -> CompileResult {
     let left -> CompileResult = compile_node(c, node.left);
     if (left is !null && left.type == TYPE_POISON) { return CompileResult(reg="poison", type=TYPE_POISON); }
@@ -8234,6 +8287,7 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
     }
 
     let base -> BaseNode = node;
+    if (base.type == NODE_TYPE_LAYOUT) { return compile_type_layout(c, node); }
 
     if (base.type == NODE_BLOCK) {
         return compile_block(c, node);
@@ -8594,6 +8648,10 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
                 if (f_info is !null) { var_name = c.current_package_prefix + var_name; }
             }
             if (f_info is !null) {
+                if ((f_info.ann_flags & FLAG_ANN_INTRINSIC) != 0) {
+                    throw_type_error(v.pos, "Compiler intrinsic '" + f_info.base_name + "' cannot be used as a function value.");
+                    return CompileResult(reg="poison", type=TYPE_POISON);
+                }
                 let specific_type_id -> Int = get_func_type_id(c, f_info.arg_types, f_info.ret_type);
                 let sig -> String = get_func_sig_str(c, f_info);
                 let func_ptr -> String = "@" + f_info.name;
@@ -8973,6 +9031,10 @@ func compile_node(c -> Compiler, node -> Struct) -> CompileResult {
             if (func_info is null) {
                 throw_name_error(n_call.pos, "Function '" + func_name + "' is not defined.");
                 return void_result();
+            }
+            if ((func_info.ann_flags & FLAG_ANN_INTRINSIC) != 0) {
+                throw_invalid_syntax(n_call.pos, "Compiler intrinsic '" + func_info.base_name + "' must be called as " + func_info.base_name + "(Type).");
+                return CompileResult(reg="poison", type=TYPE_POISON);
             }
 
             if (!validate_fallible_call(c, func_info.ret_type, n_call.preserve_fallible, func_info.base_name, n_call.pos)) {

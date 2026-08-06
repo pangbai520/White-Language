@@ -1,3 +1,4 @@
+// std/io/stdin.wl
 // standard input
 
 import "internal/io" as standard_io

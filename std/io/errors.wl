@@ -1,3 +1,4 @@
+// std/io/errors.wl
 error Error {
     Unknown,
     InvalidStream,

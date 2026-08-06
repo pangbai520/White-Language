@@ -559,6 +559,33 @@ func atom(p -> Parser) -> Struct {
 
         parser_advance(p);
         let pos -> Position = Position(idx=0, ln=tok.line, col=tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+        if ((tok.value == "size_of" || tok.value == "align_of") && p.current_tok.type == TOK_LPAREN) {
+            parser_advance(p);
+            if (p.current_tok.type == TOK_RPAREN) {
+                throw_type_error(pos, "Expected 1 arguments, got 0");
+                parser_advance(p);
+                let fallback_tok -> Token = Token(type=TOK_T_INT, value="Int", line=tok.line, col=tok.col);
+                let fallback_type -> Struct = VarAccessNode(type=NODE_VAR_ACCESS, name_tok=fallback_tok, pos=pos);
+                return TypeLayoutNode(type=NODE_TYPE_LAYOUT, type_node=fallback_type, is_align=tok.value == "align_of", pos=pos);
+            }
+            let type_node -> Struct = parse_return_type(p);
+            let arg_count -> Int = 1;
+            let count_pos -> Position = pos;
+            while (p.current_tok.type == TOK_COMMA) {
+                if (arg_count == 1) { count_pos = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn); }
+                parser_advance(p);
+                parse_return_type(p);
+                arg_count += 1;
+            }
+            if (arg_count != 1) { throw_type_error(count_pos, "Expected 1 arguments, got " + arg_count); }
+            if (p.current_tok.type != TOK_RPAREN) {
+                let err_pos -> Position = Position(idx=0, ln=p.current_tok.line, col=p.current_tok.col, text=p.lexer.text, fn=p.lexer.pos.fn);
+                throw_invalid_syntax(err_pos, "Expected ')' after type in '" + tok.value + "'.");
+            } else {
+                parser_advance(p);
+            }
+            return TypeLayoutNode(type=NODE_TYPE_LAYOUT, type_node=type_node, is_align=tok.value == "align_of", pos=pos);
+        }
         return VarAccessNode(type=NODE_VAR_ACCESS, name_tok=tok, pos=pos);
     }
 

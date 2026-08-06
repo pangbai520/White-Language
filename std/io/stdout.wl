@@ -1,3 +1,4 @@
+// std/io/stdout.wl
 // standard output
 
 import "internal/io" as standard_io

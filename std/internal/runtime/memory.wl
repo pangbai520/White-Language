@@ -1,13 +1,12 @@
+// std/internal/runtime/memory.wl
 // compiler memory hooks
 
 import "sys"
 import "internal/platform/windows"
 import "internal/platform/posix"
 
-extern func wl_pointer_size() -> Long from "C";
-
 func pointer_size() -> Long {
-    return wl_pointer_size();
+    return Long(size_of(AnyPtr));
 }
 
 @CompilerLink("memory_alloc")

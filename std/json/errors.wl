@@ -1,3 +1,5 @@
+// std/json/errors.wl
+
 error JsonError {
     UnexpectedEnd,
     UnexpectedToken,

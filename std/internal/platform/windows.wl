@@ -1,9 +1,12 @@
+// std/internal/platform/windows.wl
 // raw windows bindings
 
 import * from "../../sys/target.wl"
 import "internal/runtime/string" as runtime_string
 
-extern func wl_startup_info_size() -> Int from "C";
+func startup_info_size() -> Int {
+    return Int(size_of(AnyPtr) * UIntSize(9) + UIntSize(32));
+}
 
 extern "system" {
     func GetProcessHeap() -> AnyPtr;

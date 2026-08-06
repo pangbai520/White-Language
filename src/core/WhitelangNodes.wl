@@ -58,6 +58,7 @@ const NODE_TRY_UNWRAP     -> Int = 54;
 const NODE_CATCH          -> Int = 55;
 const NODE_THROW          -> Int = 56;
 const NODE_FALLIBLE_TYPE  -> Int = 57;
+const NODE_TYPE_LAYOUT    -> Int = 58;
 
 struct BaseNode(type -> Int) // Used to read node type
 
@@ -462,6 +463,13 @@ struct FallibleTypeNode(
     type      -> Int, // NODE_FALLIBLE_TYPE
     base_type -> Struct,
     pos       -> Position
+)
+
+struct TypeLayoutNode(
+    type -> Int, // NODE_TYPE_LAYOUT
+    type_node -> Struct,
+    is_align -> Bool,
+    pos -> Position
 )
 
 struct InterfaceDefNode(

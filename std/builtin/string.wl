@@ -1,5 +1,4 @@
 // std/builtin/string.wl
-//
 // String operations use the stored length and never scan for a terminator
 
 import "internal/runtime/string" as runtime_string
