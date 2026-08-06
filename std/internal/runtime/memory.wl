@@ -12,7 +12,7 @@ func pointer_size() -> Long {
 @CompilerLink("memory_alloc")
 func mem_alloc(size -> Long) -> AnyPtr {
     if (size <= 0L) { size = 1L; }
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         return windows.HeapAlloc(windows.GetProcessHeap(), 0, size);
     }
     return posix.malloc(size);
@@ -21,7 +21,7 @@ func mem_alloc(size -> Long) -> AnyPtr {
 @CompilerLink("memory_alloc_zeroed")
 func mem_alloc_zeroed(size -> Long) -> AnyPtr {
     if (size <= 0L) { size = 1L; }
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         return windows.HeapAlloc(windows.GetProcessHeap(), windows.HEAP_ZERO_MEMORY, size);
     }
     return posix.calloc(1L, size);
@@ -31,7 +31,7 @@ func mem_alloc_zeroed(size -> Long) -> AnyPtr {
 func mem_resize(block -> AnyPtr, size -> Long) -> AnyPtr {
     if (block is nullptr) { return mem_alloc(size); }
     if (size <= 0L) { size = 1L; }
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         return windows.HeapReAlloc(windows.GetProcessHeap(), 0, block, size);
     }
     return posix.realloc(block, size);
@@ -40,7 +40,7 @@ func mem_resize(block -> AnyPtr, size -> Long) -> AnyPtr {
 @CompilerLink("memory_free")
 func mem_dealloc(block -> AnyPtr) -> Void {
     if (block is nullptr) { return; }
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         windows.HeapFree(windows.GetProcessHeap(), 0, block);
         return;
     }

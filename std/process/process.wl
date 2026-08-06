@@ -108,7 +108,7 @@ func run(program -> String, args -> Vector(String)) -> Int? {
         arg_index += 1;
     }
 
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         let command_line -> String = __windows_command_line(program, args);
         let wide_command -> AnyPtr = windows.utf8_to_utf16(command_line);
         if (wide_command is nullptr) {
@@ -202,7 +202,7 @@ func run(program -> String, args -> Vector(String)) -> Int? {
 
 func shell(command -> String) -> Int {
     if (!runtime_string.is_native_text(command) || command.length() == 0) { return -1; }
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         let args -> Vector(String) = ["/d", "/s", "/c", command];
         let status -> Int = run("cmd.exe", args)?;
         catch(err) {
@@ -221,7 +221,7 @@ func argument(argc -> Int, ptr argv -> String, index -> Int) -> String {
 }
 
 func id() -> Int {
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         return windows.GetCurrentProcessId();
     }
     return posix.getpid();

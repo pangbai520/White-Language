@@ -14,7 +14,7 @@ func compute_sum(a -> Int, b -> Int) -> Int { return a + b; }
 func main() -> Int {
     // native FFI without introducing a Windows CRT dependency
     let process_id -> Int = 0;
-    if (sys.OS == "WINDOWS") { process_id = GetCurrentProcessId(); }
+    if (sys.OS == sys.Os.Windows) { process_id = GetCurrentProcessId(); }
     else { process_id = getpid(); }
 
     // recursive Vector/Struct mix

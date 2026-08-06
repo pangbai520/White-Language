@@ -3364,7 +3364,7 @@ func compile_var_decl(c -> Compiler, node -> VarDeclareNode) -> CompileResult {
         }
 
         let linkage -> String = "";
-        if (c.is_shared && sys.OS == "WINDOWS") {
+        if (c.is_shared && sys.OS == sys.Os.Windows) {
             if ((sys_anns.ann_flags & FLAG_ANN_EXPORT) != 0) {
                 linkage = "dllexport ";
             } else {
@@ -3784,7 +3784,7 @@ func compile_func_def(c -> Compiler, node -> FunctionDefNode) -> CompileResult {
     let linkage -> String = "internal ";
     if (raw_name == "main" || (f_info.ann_flags & FLAG_ANN_EXPORT) != 0) {
         linkage = "";
-        if (c.is_shared && (f_info.ann_flags & FLAG_ANN_EXPORT) != 0 && sys.OS == "WINDOWS") {
+        if (c.is_shared && (f_info.ann_flags & FLAG_ANN_EXPORT) != 0 && sys.OS == sys.Os.Windows) {
             linkage = "dllexport ";
         }
     }
@@ -4256,7 +4256,7 @@ func compile_local_closure(c -> Compiler, func_def -> FunctionDefNode) -> Compil
     let old_file -> file.File = c.output_file;
 
     let temp_dir -> String = "";
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         temp_dir = sys.env.get_env("TMP");
         if (temp_dir is null) { temp_dir = sys.env.get_env("TEMP"); }
         if (temp_dir is null) { temp_dir = "."; }
@@ -11048,7 +11048,7 @@ func emit_windows_stack_probe(c -> Compiler) -> Void {
 }
 
 func emit_windows_abi(c -> Compiler) -> Void {
-    if (sys.OS != "WINDOWS") { return; }
+    if (sys.OS != sys.Os.Windows) { return; }
     c.output_file.write("@_fltused = global i32 39029\n\n");
     c.output_file.write("define void @__main() {\nentry:\n  ret void\n}\n\n");
     emit_freestanding_memops(c);
@@ -11056,7 +11056,7 @@ func emit_windows_abi(c -> Compiler) -> Void {
 }
 
 func emit_windows_entrypoint(c -> Compiler) -> Void {
-    if (sys.OS != "WINDOWS") { return; }
+    if (sys.OS != sys.Os.Windows) { return; }
     if (c.is_shared) {
         c.output_file.write("define i32 @DllMainCRTStartup(i8* %instance, i32 %reason, i8* %reserved) {\n");
         c.output_file.write("entry:\n");
@@ -11108,6 +11108,10 @@ func emit_windows_entrypoint(c -> Compiler) -> Void {
 }
 
 func compile_end(c -> Compiler) -> Void {
+    if (GLOBAL_ERROR_COUNT > 0) {
+        c.output_file.close();
+        return;
+    }
     if (!c.has_main && !c.is_shared) {
         throw_missing_main_function();
         return;

@@ -94,7 +94,7 @@ func from_posix(code -> Int) -> Kind {
     if (code == 30) { return Kind.ReadOnlyFilesystem; }
     if (code == 32) { return Kind.BrokenPipe; }
 
-    if (OS == "MACOS") {
+    if (OS == Os.MacOS) {
         if (code == 35) { return Kind.WouldBlock; }
         if (code == 36) { return Kind.InProgress; }
         if (code == 45) { return Kind.Unsupported; }
@@ -134,7 +134,7 @@ func from_posix(code -> Int) -> Kind {
 }
 
 func last() -> Kind {
-    if (OS == "WINDOWS") {
+    if (OS == Os.Windows) {
         return from_windows(windows.GetLastError());
     }
     return from_posix(posix.last_errno());

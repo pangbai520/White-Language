@@ -32,8 +32,8 @@ extern func remove(filename -> AnyPtr) -> Int from "C";
 
 func last_errno() -> Int {
     let address -> AnyPtr = nullptr;
-    if (OS == "LINUX") { address = __errno_location(); }
-    else if (OS == "MACOS") { address = __error(); }
+    if (OS == Os.Linux) { address = __errno_location(); }
+    else if (OS == Os.MacOS) { address = __error(); }
     if (address is nullptr) { return 0; }
     let ptr value -> Int = address;
     return value[0];

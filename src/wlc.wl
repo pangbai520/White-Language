@@ -31,7 +31,7 @@ struct CompilerConfig(
 )
 
 func print_usage() -> Void {
-    print("White Language Compiler (v0.3)");
+    print("White Language Compiler (v0.3.1)");
     print("Usage: wlc <source.wl> [extra_files...] [options]");
     print("");
     print("Arguments:");
@@ -208,7 +208,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     } else {
         let temp_dir -> String = "";
         
-        if (sys.OS == "WINDOWS") {
+        if (sys.OS == sys.Os.Windows) {
             temp_dir = sys.env.get_env("TMP");
             if (temp_dir is null) { temp_dir = sys.env.get_env("TEMP"); }
             if (temp_dir is null) { temp_dir = "."; }
@@ -247,21 +247,21 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         else if (cfg.is_compile_only) {
             if (cfg.is_emit_llvm) { cfg.output_file = base_name + ".bc"; }
             else { 
-                if (sys.OS == "WINDOWS") { cfg.output_file = base_name + ".obj"; }
+                if (sys.OS == sys.Os.Windows) { cfg.output_file = base_name + ".obj"; }
                 else { cfg.output_file = base_name + ".o"; }
             }
         }
         else if (cfg.is_shared) {
-            if (sys.OS == "WINDOWS") { 
+            if (sys.OS == sys.Os.Windows) { 
                 cfg.output_file = base_name + ".dll"; 
-            } else if (sys.OS == "MACOS") { 
+            } else if (sys.OS == sys.Os.MacOS) { 
                 cfg.output_file = "lib" + base_name + ".dylib";
             } else { 
                 cfg.output_file = "lib" + base_name + ".so"; 
             }
         }
         else { // EXE
-            if (sys.OS == "WINDOWS") { cfg.output_file = base_name + ".exe"; }
+            if (sys.OS == sys.Os.Windows) { cfg.output_file = base_name + ".exe"; }
             else { cfg.output_file = base_name; }
         }
     }
@@ -326,7 +326,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
 
     log_stage(cfg, "Backend/Linker");
     let clang_cmd -> String = "clang";
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         clang_cmd = "clang.exe";
     }
 
@@ -336,7 +336,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     let wl_path -> String = sys.env.get_env("WL_PATH");
     if (wl_path is !null) {
         let portable_clang -> String = "";
-        if (sys.OS == "WINDOWS") {
+        if (sys.OS == sys.Os.Windows) {
             portable_clang = wl_path + "/tools/llvm/bin/clang.exe";
         } else {
             portable_clang = wl_path + "/tools/llvm/bin/clang";
@@ -355,7 +355,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     if (!has_clang) { has_clang = true; }
 
     let import_lib -> String = "";
-    if (cfg.is_shared && sys.OS == "WINDOWS") {
+    if (cfg.is_shared && sys.OS == sys.Os.Windows) {
         import_lib = windows_implib_path(cfg.output_file);
         if (WhitelangUtils.file_exists(import_lib)) {
             file.remove(import_lib)?;
@@ -392,19 +392,19 @@ func main(argc -> Int, ptr argv -> String) -> Int {
     }
     else {
         if (cfg.is_shared) {
-            if (sys.OS == "MACOS") {
+            if (sys.OS == sys.Os.MacOS) {
                 clang_args.append("-dynamiclib");
             } else {
                 clang_args.append("-shared");
             }
-            if (sys.OS == "WINDOWS" && using_portable_clang) {
+            if (sys.OS == sys.Os.Windows && using_portable_clang) {
                 clang_args.append("-Xlinker");
                 clang_args.append("--out-implib=" + import_lib);
             }
-            if (sys.OS != "WINDOWS") { clang_args.append("-fPIC"); }
+            if (sys.OS != sys.Os.Windows) { clang_args.append("-fPIC"); }
         }
 
-        if (sys.OS == "WINDOWS") {
+        if (sys.OS == sys.Os.Windows) {
             clang_args.append("-nostdlib");
             clang_args.append("-Xlinker");
             if (cfg.is_shared) {
@@ -440,7 +440,7 @@ func main(argc -> Int, ptr argv -> String) -> Int {
         clang_args.append("-o");
         clang_args.append(cfg.output_file);
 
-        if (sys.OS != "WINDOWS") {
+        if (sys.OS != sys.Os.Windows) {
             clang_args.append("-lm");
             clang_args.append("-lc");
         }

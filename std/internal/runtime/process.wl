@@ -8,7 +8,7 @@ import "string.wl" as runtime_string
 
 func write_err(message -> String) -> Void {
     if (message is null || message.length() == 0) { return; }
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         let handle -> AnyPtr = windows.GetStdHandle(windows.STD_ERROR_HANDLE);
         if (!windows.is_invalid_handle(handle)) {
             let written -> Int = 0;
@@ -33,7 +33,7 @@ func panic_out_of_memory(owner -> String) -> Void {
 }
 
 func __free_startup_args(count -> Int, storage -> AnyPtr) -> Void {
-    if (sys.OS != "WINDOWS" || storage is nullptr) { return; }
+    if (sys.OS != sys.Os.Windows || storage is nullptr) { return; }
     let ptr args -> AnyPtr = storage;
     let i -> Int = 0;
     while (i < count) {
@@ -45,7 +45,7 @@ func __free_startup_args(count -> Int, storage -> AnyPtr) -> Void {
 
 @CompilerLink("startup_args")
 func startup_args(ptr argc -> Int) -> AnyPtr {
-    if (sys.OS != "WINDOWS" || argc is nullptr) { return nullptr; }
+    if (sys.OS != sys.Os.Windows || argc is nullptr) { return nullptr; }
     argc[0] = 0;
     let wide_argv -> AnyPtr = windows.CommandLineToArgvW(windows.GetCommandLineW(), argc);
     if (wide_argv is nullptr || argc[0] < 0) { return nullptr; }
@@ -85,12 +85,12 @@ func startup_args(ptr argc -> Int) -> AnyPtr {
 
 @CompilerLink("startup_args_free")
 func free_startup_args(argc -> Int, argv -> AnyPtr) -> Void {
-    if (sys.OS == "WINDOWS") { __free_startup_args(argc, argv); }
+    if (sys.OS == sys.Os.Windows) { __free_startup_args(argc, argv); }
 }
 
 @CompilerLink("process_exit")
 func process_exit(status -> Int) -> Void {
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         windows.ExitProcess(status);
         return;
     }

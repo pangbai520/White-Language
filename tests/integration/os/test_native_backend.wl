@@ -14,7 +14,7 @@ func main() -> Int {
     }
 
     let status -> Int = 0;
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         status = process.shell("exit /b 7");
         if (status != 7) {
             print("FAIL: Win32 process exit status " + status);

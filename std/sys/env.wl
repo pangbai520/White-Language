@@ -30,7 +30,7 @@ func get(name -> String) -> String? {
         if (name[i] == Byte(61)) { throw Error.InvalidName; }
         i += 1;
     }
-    if (OS == "WINDOWS") {
+    if (OS == Os.Windows) {
         let wide_name -> AnyPtr = windows.utf8_to_utf16(name);
         if (wide_name is nullptr) { throw CoreError.OutOfMemory; }
 

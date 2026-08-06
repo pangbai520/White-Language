@@ -83,7 +83,7 @@ class File {
             self.last_error = Error.InvalidPath;
             return;
         }
-        if (sys.OS == "WINDOWS") {
+        if (sys.OS == sys.Os.Windows) {
             let access -> Int = windows.GENERIC_READ;
             let disposition -> Int = windows.OPEN_EXISTING;
             let append_mode -> Bool = false;
@@ -144,7 +144,7 @@ class File {
             self.last_error = Error.InvalidState;
             return false;
         }
-        if (sys.OS != "WINDOWS") {
+        if (sys.OS != sys.Os.Windows) {
             self.write_buffer_len = 0;
             return true;
         }
@@ -169,7 +169,7 @@ class File {
             throw self.last_error;
         }
 
-        if (sys.OS == "WINDOWS") {
+        if (sys.OS == sys.Os.Windows) {
             let size -> Long = 0L;
             if (windows.GetFileSizeEx(self.handle, ref size) == 0 || size < 0L || size > 2147483647L) {
                 if (size > 2147483647L) { throw Error.FileTooLarge; }
@@ -226,7 +226,7 @@ class File {
         }
         if (!self.__flush_write_buffer()) { throw self.last_error; }
         let length -> Long = content.length();
-        if (sys.OS == "WINDOWS") {
+        if (sys.OS == sys.Os.Windows) {
             let bytes_written -> Int = 0;
             if (length > 0L && windows.WriteFile(self.handle, runtime_string.data(content), Int(length), ref bytes_written, nullptr) == 0) {
                 self.last_error = __last_error();
@@ -251,7 +251,7 @@ class File {
     method write(content -> String) -> Void {
         if (self.handle is nullptr) { return; }
         let length -> Long = content.length();
-        if (sys.OS == "WINDOWS") {
+        if (sys.OS == sys.Os.Windows) {
             if (length <= 0L) { return; }
             if (self.write_buffer is null) {
                 self.write_buffer = runtime_string.alloc(65536L);
@@ -298,7 +298,7 @@ class File {
                 pending_error = self.last_error;
             }
             let closed -> Bool = false;
-            if (sys.OS == "WINDOWS") { closed = windows.CloseHandle(self.handle) != 0; }
+            if (sys.OS == sys.Os.Windows) { closed = windows.CloseHandle(self.handle) != 0; }
             else { closed = posix.fclose(self.handle) == 0; }
             self.handle = nullptr;
             if (!closed && pending_error == Error.None) {
@@ -348,7 +348,7 @@ func append(path -> String) -> File? {
 
 func exists(path -> String) -> Bool {
     if (!runtime_string.is_native_text(path)) { return false; }
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         let wide_path -> AnyPtr = windows.utf8_to_utf16(path);
         if (wide_path is nullptr) { return false; }
         let attributes -> Int = windows.GetFileAttributesW(wide_path);
@@ -365,7 +365,7 @@ func exists(path -> String) -> Bool {
 
 func remove(path -> String) -> Void? {
     if (!runtime_string.is_native_text(path)) { throw Error.InvalidPath; }
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         let wide_path -> AnyPtr = windows.utf8_to_utf16(path);
         if (wide_path is nullptr) { throw __last_error(); }
         let removed -> Bool = windows.DeleteFileW(wide_path) != 0;

@@ -59,7 +59,7 @@ func read(stream -> Int, data -> AnyPtr, length -> Int) -> Int? {
     }
     if (length == 0) { return 0; }
 
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         let handle -> AnyPtr = __windows_handle(stream);
         if (windows.is_invalid_handle(handle)) { throw IoError.InvalidStream; }
         __prepare_windows_stream(stream, handle);
@@ -90,7 +90,7 @@ func write(stream -> Int, data -> AnyPtr, length -> Int) -> Int? {
     }
     if (length == 0) { return 0; }
 
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         let handle -> AnyPtr = __windows_handle(stream);
         if (windows.is_invalid_handle(handle)) { throw IoError.InvalidStream; }
         __prepare_windows_stream(stream, handle);

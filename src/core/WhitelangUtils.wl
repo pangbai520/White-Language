@@ -2857,9 +2857,9 @@ func is_subclass(c -> Compiler, child_id -> Int, parent_id -> Int) -> Bool {
 
 // system utils
 func get_target_os() -> String {
-    if (sys.OS == "WINDOWS") { return "WINDOWS"; }
-    if (sys.OS == "LINUX") { return "LINUX"; }
-    if (sys.OS == "MACOS") { return "MACOS"; }
+    if (sys.OS == sys.Os.Windows) { return "WINDOWS"; }
+    if (sys.OS == sys.Os.Linux) { return "LINUX"; }
+    if (sys.OS == sys.Os.MacOS) { return "MACOS"; }
     return "UNKNOWN";
 }
 
@@ -2874,7 +2874,7 @@ func target_name_equals(buffer -> AnyPtr, offset -> Int, name -> String) -> Bool
 }
 
 func get_target_arch() -> String {
-    if (sys.OS == "WINDOWS") {
+    if (sys.OS == sys.Os.Windows) {
         let info -> Byte[48] = [0];
         GetSystemInfo(ref info[0]);
         let arch -> Int = Int(info[0]) | (Int(info[1]) << 8);
@@ -2888,7 +2888,7 @@ func get_target_arch() -> String {
     let info -> Byte[1536] = [0];
     if (uname(ref info[0]) != 0) { return "UNKNOWN"; }
     let machine_offset -> Int = 260;
-    if (sys.OS == "MACOS") { machine_offset = 1024; }
+    if (sys.OS == sys.Os.MacOS) { machine_offset = 1024; }
     let raw -> AnyPtr = ref info[0];
     if (target_name_equals(raw, machine_offset, "i386") || target_name_equals(raw, machine_offset, "i686")) { return "X86"; }
     if (target_name_equals(raw, machine_offset, "x86_64") || target_name_equals(raw, machine_offset, "amd64")) { return "X86_64"; }
@@ -2902,16 +2902,16 @@ func get_target_arch() -> String {
 }
 
 func get_target_abi() -> String {
-    if (sys.OS == "WINDOWS") { return "MSVC"; }
-    if (sys.OS == "LINUX") { return "GNU"; }
-    if (sys.OS == "MACOS") { return "NONE"; }
+    if (sys.OS == sys.Os.Windows) { return "MSVC"; }
+    if (sys.OS == sys.Os.Linux) { return "GNU"; }
+    if (sys.OS == sys.Os.MacOS) { return "NONE"; }
     return "UNKNOWN";
 }
 
 func get_target_binary_format() -> String {
-    if (sys.OS == "WINDOWS") { return "COFF"; }
-    if (sys.OS == "LINUX") { return "ELF"; }
-    if (sys.OS == "MACOS") { return "MACHO"; }
+    if (sys.OS == sys.Os.Windows) { return "COFF"; }
+    if (sys.OS == sys.Os.Linux) { return "ELF"; }
+    if (sys.OS == sys.Os.MacOS) { return "MACHO"; }
     return "UNKNOWN";
 }
 

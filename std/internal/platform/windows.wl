@@ -73,7 +73,7 @@ func is_invalid_handle(handle -> AnyPtr) -> Bool {
 }
 
 func utf8_to_utf16(value -> String) -> AnyPtr {
-    if (OS != "WINDOWS") { return nullptr; }
+    if (OS != Os.Windows) { return nullptr; }
     if (!runtime_string.is_native_text(value)) { return nullptr; }
 
     let length -> Int = value.length();
@@ -93,7 +93,7 @@ func utf8_to_utf16(value -> String) -> AnyPtr {
 }
 
 func utf16_to_utf8(value -> AnyPtr, length -> Int) -> String {
-    if (OS != "WINDOWS") { return null; }
+    if (OS != Os.Windows) { return null; }
     if (value is nullptr || length < 0) { return null; }
     if (length == 0) { return runtime_string.alloc(0L); }
 
@@ -109,6 +109,6 @@ func utf16_to_utf8(value -> AnyPtr, length -> Int) -> String {
 }
 
 func free_utf16(value -> AnyPtr) -> Void {
-    if (OS != "WINDOWS") { return; }
+    if (OS != Os.Windows) { return; }
     if (value is !nullptr) { HeapFree(GetProcessHeap(), 0, value); }
 }
