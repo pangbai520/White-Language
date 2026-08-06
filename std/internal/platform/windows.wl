@@ -11,6 +11,9 @@ func startup_info_size() -> Int {
 extern "system" {
     func GetProcessHeap() -> AnyPtr;
     func GetCurrentProcessId() -> Int;
+    func GetCommandLineW() -> AnyPtr;
+    func CommandLineToArgvW(lpCmdLine -> AnyPtr, pNumArgs -> AnyPtr) -> AnyPtr;
+    func LocalFree(hMem -> AnyPtr) -> AnyPtr;
     func HeapAlloc(hHeap -> AnyPtr, dwFlags -> Int, dwBytes -> Long) -> AnyPtr;
     func HeapReAlloc(hHeap -> AnyPtr, dwFlags -> Int, lpMem -> AnyPtr, dwBytes -> Long) -> AnyPtr;
     func HeapFree(hHeap -> AnyPtr, dwFlags -> Int, lpMem -> AnyPtr) -> Int;

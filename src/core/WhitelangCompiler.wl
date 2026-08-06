@@ -1842,6 +1842,58 @@ func emit_release_owned_args(c -> Compiler, values -> Vector(Struct)) -> Void {
     }
 }
 
+func emit_windows_entrypoint(c -> Compiler) -> Void {
+    if (sys.OS != "WINDOWS") { return; }
+    if (c.is_shared) {
+        c.output_file.write("define i32 @DllMainCRTStartup(i8* %instance, i32 %reason, i8* %reserved) {\n");
+        c.output_file.write("entry:\n");
+        c.output_file.write("  ret i32 1\n");
+        c.output_file.write("}\n\n");
+        return;
+    }
+
+    let main_info -> FuncInfo = c.func_table.get("main");
+    let exit_key -> String = c.compiler_link.get("process_exit");
+    let exit_info -> FuncInfo = c.func_table.get(exit_key);
+    if (main_info is null || exit_info is null) {
+        throw_internal_compiler_error(null, "Missing compiler runtime hooks required by the native entry point.");
+        return;
+    }
+
+    let argc -> Int = 0;
+    if (main_info.arg_types is !null) { argc = main_info.arg_types.length(); }
+    c.output_file.write("define void @mainCRTStartup() {\n");
+    c.output_file.write("entry:\n");
+    if (argc == 0) {
+        c.output_file.write("  %status = call i32 @main()\n");
+    } else {
+        let args_key -> String = c.compiler_link.get("startup_args");
+        let free_key -> String = c.compiler_link.get("startup_args_free");
+        let args_info -> FuncInfo = c.func_table.get(args_key);
+        let free_info -> FuncInfo = c.func_table.get(free_key);
+        if (args_info is null || free_info is null) {
+            throw_internal_compiler_error(null, "Missing compiler runtime hooks required by the Windows entry point.");
+            return;
+        }
+        c.output_file.write("  %argc.addr = alloca i32\n");
+        c.output_file.write("  store i32 0, i32* %argc.addr\n");
+        c.output_file.write("  %argv.raw = call i8* @" + args_info.name + "(i32* %argc.addr)\n");
+        c.output_file.write("  %argv.missing = icmp eq i8* %argv.raw, null\n");
+        c.output_file.write("  br i1 %argv.missing, label %startup.failed, label %startup.ready\n\n");
+        c.output_file.write("startup.failed:\n");
+        c.output_file.write("  call void @" + exit_info.name + "(i32 127)\n");
+        c.output_file.write("  unreachable\n\n");
+        c.output_file.write("startup.ready:\n");
+        c.output_file.write("  %argc = load i32, i32* %argc.addr\n");
+        c.output_file.write("  %argv = bitcast i8* %argv.raw to %struct.$String**\n");
+        c.output_file.write("  %status = call i32 @main(i32 %argc, %struct.$String** %argv)\n");
+        c.output_file.write("  call void @" + free_info.name + "(i32 %argc, i8* %argv.raw)\n");
+    }
+    c.output_file.write("  call void @" + exit_info.name + "(i32 %status)\n");
+    c.output_file.write("  unreachable\n");
+    c.output_file.write("}\n\n");
+}
+
 func emit_alloc_check(c -> Compiler, ptr_reg -> String) -> Void {
     let failed -> String = next_reg(c);
     c.output_file.write(c.indent + failed + " = icmp eq i8* " + ptr_reg + ", null\n");
@@ -10821,6 +10873,7 @@ func compile_end(c -> Compiler) -> Void {
         return;
     }
     compile_arc_hooks(c);
+    emit_windows_entrypoint(c);
 
     let str_vec -> Vector(Struct) = c.string_list;
     let s_len -> Int = 0; if (str_vec is !null) { s_len = str_vec.length(); }

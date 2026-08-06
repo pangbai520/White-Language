@@ -1,6 +1,8 @@
 // std/internal/platform/posix.wl
 // native posix and libc bindings
 
+import * from "../../sys/target.wl"
+
 extern func malloc(size -> Long) -> AnyPtr from "C";
 extern func calloc(count -> Long, size -> Long) -> AnyPtr from "C";
 extern func realloc(block -> AnyPtr, size -> Long) -> AnyPtr from "C";
@@ -10,8 +12,9 @@ extern func write(fd -> Int, buf -> AnyPtr, count -> Long) -> Long from "C";
 extern func read(fd -> Int, buf -> AnyPtr, count -> Long) -> Long from "C";
 extern func getenv(name -> AnyPtr) -> AnyPtr from "C";
 extern func system(command -> AnyPtr) -> Int from "C";
-extern func wl_posix_exit(status -> Int) -> Void from "C";
-extern func wl_last_errno() -> Int from "C";
+extern func exit(status -> Int) -> Void from "C";
+extern func __errno_location() -> AnyPtr from "C";
+extern func __error() -> AnyPtr from "C";
 extern func getpid() -> Int from "C";
 extern func fork() -> Int from "C";
 extern func execvp(file -> AnyPtr, argv -> AnyPtr) -> Int from "C";
@@ -26,3 +29,12 @@ extern func fseek(stream -> AnyPtr, offset -> Long, origin -> Int) -> Int from "
 extern func ftell(stream -> AnyPtr) -> Long from "C";
 extern func rewind(stream -> AnyPtr) -> Void from "C";
 extern func remove(filename -> AnyPtr) -> Int from "C";
+
+func last_errno() -> Int {
+    let address -> AnyPtr = nullptr;
+    if (OS == "LINUX") { address = __errno_location(); }
+    else if (OS == "MACOS") { address = __error(); }
+    if (address is nullptr) { return 0; }
+    let ptr value -> Int = address;
+    return value[0];
+}

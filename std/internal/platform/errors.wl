@@ -137,5 +137,5 @@ func last() -> Kind {
     if (OS == "WINDOWS") {
         return from_windows(windows.GetLastError());
     }
-    return from_posix(posix.wl_last_errno());
+    return from_posix(posix.last_errno());
 }

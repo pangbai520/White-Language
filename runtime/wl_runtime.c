@@ -123,17 +123,4 @@ __declspec(noreturn) __attribute__((weak)) void mainCRTStartup(void) {
     HeapFree(heap, 0, argv);
     ExitProcess((UINT)status);
 }
-#else
-#include <errno.h>
-#include <stdlib.h>
-#endif
-
-#ifndef _WIN32
-void wl_posix_exit(int status) {
-    exit(status);
-}
-
-int wl_last_errno(void) {
-    return errno;
-}
 #endif
