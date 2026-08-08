@@ -14,7 +14,8 @@ func main() -> Int {
     if (original_len == 3 && popped_val == 30 && final_len == 2) {
         print("PASS: Vector dynamic mutation");
     } else {
-        print("FAIL: Vector state corruption");
+        print("FAIL: Vector mutation result");
+        return 1;
     }
     return 0;
 }

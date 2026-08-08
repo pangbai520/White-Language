@@ -23,14 +23,11 @@ func global_heal() -> Int {
 }
 
 func main() -> Int {
-    // prepare complex objects and bound closures for boxing
     let h -> Variant = Variant(hp=888);
     let w -> Weapon = Weapon(d=500);
     let m_ptr -> Method(Int) = w.attack;
     let f_ptr -> Function(Int) = global_heal;
 
-    // trigger compile_map_lit to box diverse types into the Map structure
-    // handles automatic Variant wrapping for all supported data types
     let map -> Dict = {
         "type_int": 42,
         "type_float": 3.1415,
@@ -42,31 +39,25 @@ func main() -> Int {
         "type_function": f_ptr,
     };
 
-    // verify unboxing integrity via bracket access syntax
     let r_int -> Int = map["type_int"];
     let r_float -> Float = map["type_float"];
     let r_bool -> Bool = map["type_bool"];
     let r_str -> String = map["type_string"];
     
-    // validate primitive data persistence
     let prim_ok -> Bool = (r_int == 42 && r_float == 3.1415 && r_bool == true && r_str == "WhiteLang_String");
 
-    // check memory layout and pointer stability for composites
     let r_struct -> Variant = map["type_struct"];
     let r_class -> Weapon = map["type_class"];
     let comp_ok -> Bool = (r_struct.hp == 888 && r_class.damage == 500);
 
-    // ensure environment capture and VTable routing for closures
     let r_method -> Method(Int) = map["type_method"];
     let r_func -> Function(Int) = map["type_function"];
     let clos_ok -> Bool = (r_method() == 500 && r_func() == 999);
 
-    // final integrity assertion
     if (prim_ok && comp_ok && clos_ok) {
-        print("PASS: Dictionary literal boxing and multi-type unboxing");
+        print("PASS: Dictionary literal values");
     } else {
-        // likely a variant type tagging error or dictionary storage corruption
-        print("FAIL: Type corruption detected during Dict literal unboxing");
+        print("FAIL: Dictionary literal value");
         return 1;
     }
 

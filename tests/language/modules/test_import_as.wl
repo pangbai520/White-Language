@@ -1,5 +1,5 @@
 // Test: IMPORT_ALIASING
-// File: tests/language/integration/test_import_as.wl
+// File: tests/language/modules/test_import_as.wl
 // Focus: Testing 'import as' syntax for both specific functions and entire modules.
 import add_int as asd from "../../fixtures/pkgs/math_calc_helper.wl"
 import "builtin" as bt

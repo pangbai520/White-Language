@@ -21,7 +21,8 @@ func main() -> Int {
     if (first_call == 6 && second_call == 11) {
         print("PASS: Closure variable capture and persistence");
     } else {
-        print("FAIL: Closure state corruption. Got: " + second_call);
+        print("FAIL: Closure state, got " + second_call);
+        return 1;
     }
     return 0;
 }

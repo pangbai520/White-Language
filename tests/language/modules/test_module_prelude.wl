@@ -9,5 +9,6 @@ func main() -> Int {
         print("FAIL: imported module prelude");
         return 1;
     }
+    print("PASS: imported module prelude");
     return 0;
 }

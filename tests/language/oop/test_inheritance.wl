@@ -59,7 +59,6 @@ func main() -> Int {
     let dog_speaks -> String = poly_dog.speak(); // must trigger Dog.speak()
     let cat_speaks -> String = poly_cat.speak(); // must trigger Cat.speak()
 
-    // inheritance integrity check
     let dog_name_ok -> Bool = (poly_dog.name == "Buddy"); // accessing parent field via Animal pointer
     let dog_vtable_ok -> Bool = (dog_speaks == "Buddy says: Woof!");
     let cat_vtable_ok -> Bool = (cat_speaks == "Whiskers says: Meow~");

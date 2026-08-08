@@ -43,11 +43,11 @@ func main() -> Int {
     // implicit casts
     let mixed -> Float = 10 + 5.5 * (2 ** 3); // 10 + 44.0 = 54.0
 
-    // final Integrity Assertion
     if (f10 == 55 && post == 10 && counter == 11 && mixed == 54.0) {
-        print("PASS: Logic chaos and scope shadowing");
+        print("PASS: Control flow and scope shadowing");
     } else {
-        print("FAIL: Logic integrity compromised");
+        print("FAIL: Control flow or scope result");
+        return 1;
     }
     return 0;
 }

@@ -1,5 +1,5 @@
 // Test: RC_CONTROL_FLOW_JUMPS
-// File: tests/language/control/test_rc_control_flow.wl
+// File: tests/language/memory/test_rc_control_flow.wl
 // Focus: Reference counting consistency during non-local jumps (break, continue, return).
 
 

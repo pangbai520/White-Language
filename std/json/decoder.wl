@@ -1,7 +1,7 @@
 // std/json/decoder.wl
 
 import Error from "errors"
-import Buffer from "internal/json/buffer"
+import Builder from "strings"
 import JsonError from "errors.wl"
 import Value from "value.wl"
 import null_value from "value.wl"
@@ -141,35 +141,35 @@ class Decoder {
 
     method __string() -> String? {
         if (self.__take() != 34) { self.__fail(JsonError.UnexpectedToken)?; }
-        let output -> Buffer = Buffer(64);
+        let output -> Builder = Builder(64);
 
         while true {
             let value -> Int = self.__take();
             if (value < 0) { self.__fail(JsonError.UnexpectedEnd)?; }
-            if (value == 34) { return output.finish()?; }
+            if (value == 34) { return output.build()?; }
             if (value < 32) { self.__fail(JsonError.InvalidControlCharacter)?; }
 
             if (value != 92) {
-                output.append_byte(Byte(value))?;
+                output.write_byte(Byte(value))?;
                 continue;
             }
 
             let escaped -> Int = self.__take();
             if (escaped < 0) { self.__fail(JsonError.UnexpectedEnd)?; }
             if (escaped == 34 || escaped == 92 || escaped == 47) {
-                output.append_byte(Byte(escaped))?;
+                output.write_byte(Byte(escaped))?;
             } else if (escaped == 98) {
-                output.append_byte(Byte(8))?;
+                output.write_byte(Byte(8))?;
             } else if (escaped == 102) {
-                output.append_byte(Byte(12))?;
+                output.write_byte(Byte(12))?;
             } else if (escaped == 110) {
-                output.append_byte(Byte(10))?;
+                output.write_byte(Byte(10))?;
             } else if (escaped == 114) {
-                output.append_byte(Byte(13))?;
+                output.write_byte(Byte(13))?;
             } else if (escaped == 116) {
-                output.append_byte(Byte(9))?;
+                output.write_byte(Byte(9))?;
             } else if (escaped == 117) {
-                output.append_char(self.__unicode_escape()?)?;
+                output.write_char(self.__unicode_escape()?)?;
             } else {
                 self.__fail(JsonError.InvalidEscape)?;
             }

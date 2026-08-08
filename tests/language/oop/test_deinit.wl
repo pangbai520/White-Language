@@ -1,5 +1,5 @@
 // Test: ARC_POLYMORPHIC_DEINIT
-// File: tests/language/memory/test_deinit_chain.wl
+// File: tests/language/oop/test_deinit.wl
 // Focus: VTable-based virtual teardown, ARC-driven heap release, and ABI-safe super-call chaining.
 
 

@@ -1,5 +1,5 @@
 // Test: PACKAGE_SCOPE_VISIBILITY
-// File: tests/language/integration/test_package_scope.wl
+// File: tests/language/modules/test_package_scope.wl
 // Focus: Verification of symbol visibility across multiple files without explicit aliases.
 import "../../fixtures/pkgs/math_calc_helper.wl"
 

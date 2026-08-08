@@ -1,5 +1,5 @@
 // Test: MULTI_MODULE_INTEGRATION
-// File: tests/language/integration/test_import_logic.wl
+// File: tests/language/modules/test_import_logic.wl
 // Focus: Cross-file function invocation, built-in library resolution, and string method intrinsics.
 import "../../fixtures/pkgs/math_calc_helper.wl"
 

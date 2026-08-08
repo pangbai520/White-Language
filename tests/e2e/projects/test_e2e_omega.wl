@@ -1,6 +1,6 @@
 // Test: OMEGA_E2E
 // File: tests/e2e/projects/test_e2e_omega.wl
-// Focus: FFI ABI stability, function pointer "fire propagation", and complex generic container recursion.
+// Focus: FFI calls, function values, containers, and recursive structures.
 
 import "sys"
 
@@ -26,11 +26,11 @@ func main() -> Int {
     let fn_ptr -> Function(Int, Int, Int) = compute_sum;
     let calc_res -> Int = fn_ptr(50, 50);
 
-    // final integrity assertion
     if (process_id > 0 && calc_res == 100 && v_test.length() == 3 && head.next.val == 2) {
-        print("PASS: Omega system integration");
+        print("PASS: End-to-end language features");
     } else {
-        print("FAIL: Omega system logic collapse");
+        print("FAIL: End-to-end language feature result");
+        return 1;
     }
     return 0;
 }

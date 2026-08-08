@@ -1,6 +1,6 @@
 // std/json/encoder.wl
 
-import Buffer from "internal/json/buffer"
+import Builder from "strings"
 import JsonError from "errors.wl"
 import Kind from "value.wl"
 import Value from "value.wl"
@@ -25,12 +25,12 @@ class Encoder {
         self.__max_depth = max_depth;
     }
 
-    method __write_indent(output -> Buffer, depth -> Int) -> Void? {
-        output.append_byte(Byte(10))?;
+    method __write_indent(output -> Builder, depth -> Int) -> Void? {
+        output.write_byte(Byte(10))?;
         let count -> Int = depth * self.__indent;
         let i -> Int = 0;
         while (i < count) {
-            output.append_byte(Byte(32))?;
+            output.write_byte(Byte(32))?;
             i += 1;
         }
         return;
@@ -41,47 +41,47 @@ class Encoder {
         return Byte(value - 10 + 97);
     }
 
-    method __write_string(output -> Buffer, value -> String) -> Void? {
+    method __write_string(output -> Builder, value -> String) -> Void? {
         if (value is null || !value.is_valid_utf8()) {
             throw JsonError.InvalidUtf8;
         }
-        output.append_byte(Byte(34))?;
+        output.write_byte(Byte(34))?;
         let i -> Int = 0;
         while (i < value.length()) {
             let byte -> Int = Int(value[i]);
             if (byte == 34) {
-                output.append("\\\"")?;
+                output.write("\\\"")?;
             } else if (byte == 92) {
-                output.append("\\\\")?;
+                output.write("\\\\")?;
             } else if (byte == 8) {
-                output.append("\\b")?;
+                output.write("\\b")?;
             } else if (byte == 12) {
-                output.append("\\f")?;
+                output.write("\\f")?;
             } else if (byte == 10) {
-                output.append("\\n")?;
+                output.write("\\n")?;
             } else if (byte == 13) {
-                output.append("\\r")?;
+                output.write("\\r")?;
             } else if (byte == 9) {
-                output.append("\\t")?;
+                output.write("\\t")?;
             } else if (byte < 32) {
-                output.append("\\u00")?;
-                output.append_byte(self.__hex((byte >> 4) & 15))?;
-                output.append_byte(self.__hex(byte & 15))?;
+                output.write("\\u00")?;
+                output.write_byte(self.__hex((byte >> 4) & 15))?;
+                output.write_byte(self.__hex(byte & 15))?;
             } else {
-                output.append_byte(Byte(byte))?;
+                output.write_byte(Byte(byte))?;
             }
             i += 1;
         }
-        output.append_byte(Byte(34))?;
+        output.write_byte(Byte(34))?;
         return;
     }
 
-    method __write_array(output -> Buffer, value -> Value, depth -> Int) -> Void? {
+    method __write_array(output -> Builder, value -> Value, depth -> Int) -> Void? {
         let length -> Int = value.length()?;
-        output.append_byte(Byte(91))?;
+        output.write_byte(Byte(91))?;
         let i -> Int = 0;
         while (i < length) {
-            if (i > 0) { output.append_byte(Byte(44))?; }
+            if (i > 0) { output.write_byte(Byte(44))?; }
             if (self.__indent > 0) { self.__write_indent(output, depth + 1)?; }
             self.__write_value(output, value.at(i)?, depth + 1)?;
             i += 1;
@@ -89,48 +89,48 @@ class Encoder {
         if (length > 0 && self.__indent > 0) {
             self.__write_indent(output, depth)?;
         }
-        output.append_byte(Byte(93))?;
+        output.write_byte(Byte(93))?;
         return;
     }
 
-    method __write_object(output -> Buffer, value -> Value, depth -> Int) -> Void? {
+    method __write_object(output -> Builder, value -> Value, depth -> Int) -> Void? {
     // object keys keep insertion order, so output is stable across runs
         let length -> Int = value.length()?;
-        output.append_byte(Byte(123))?;
+        output.write_byte(Byte(123))?;
         let i -> Int = 0;
         while (i < length) {
-            if (i > 0) { output.append_byte(Byte(44))?; }
+            if (i > 0) { output.write_byte(Byte(44))?; }
             if (self.__indent > 0) { self.__write_indent(output, depth + 1)?; }
             let key -> String = value.key_at(i)?;
             self.__write_string(output, key)?;
-            output.append_byte(Byte(58))?;
-            if (self.__indent > 0) { output.append_byte(Byte(32))?; }
+            output.write_byte(Byte(58))?;
+            if (self.__indent > 0) { output.write_byte(Byte(32))?; }
             self.__write_value(output, value.get(key)?, depth + 1)?;
             i += 1;
         }
         if (length > 0 && self.__indent > 0) {
             self.__write_indent(output, depth)?;
         }
-        output.append_byte(Byte(125))?;
+        output.write_byte(Byte(125))?;
         return;
     }
 
-    method __write_value(output -> Buffer, value -> Value, depth -> Int) -> Void? {
+    method __write_value(output -> Builder, value -> Value, depth -> Int) -> Void? {
         if (value is null) { throw JsonError.InvalidValue; }
         let kind -> Kind = value.kind();
         if (kind == Kind.Null) {
-            output.append("null")?;
+            output.write("null")?;
             return;
         }
         if (kind == Kind.Boolean) {
-            if (value.as_bool()?) { output.append("true")?; }
-            else { output.append("false")?; }
+            if (value.as_bool()?) { output.write("true")?; }
+            else { output.write("false")?; }
             return;
         }
         if (kind == Kind.Number) {
             let source -> String = value.as_number_text()?;
             validate_number(source)?;
-            output.append(source)?;
+            output.write(source)?;
             return;
         }
         if (kind == Kind.Text) {
@@ -158,9 +158,9 @@ class Encoder {
         if (self.__max_depth < 1 || self.__max_depth > __MAX_DEPTH) {
             throw JsonError.InvalidOption;
         }
-        let output -> Buffer = Buffer(256);
+        let output -> Builder = Builder(256);
         self.__write_value(output, value, 0)?;
-        return output.finish()?;
+        return output.build()?;
     }
 }
 

@@ -1,5 +1,5 @@
 // Test: STD_LIBRARY_IMPORT
-// File: tests/language/integration/test_std_import.wl
+// File: tests/language/modules/test_std_import.wl
 // Focus: Resolving built-in standard library paths and namespace availability.
 import "builtin/print"
 

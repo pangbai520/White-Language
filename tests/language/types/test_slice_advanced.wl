@@ -3,7 +3,6 @@
 // Focus: Shallow-copy slices, shared views, backing lifetime, and implicit conversion.
 
 
-// verify universal parameter binding via Array(Int)
 func sum_slice(arr -> Array(Int)) -> Int {
     let s -> Int = 0;
     let i -> Int = 0;
@@ -53,9 +52,9 @@ func main() -> Int {
     let nested_ok -> Bool = (nested_copy[0] == 444 && shared[1] == 555 && v[2] == 555);
 
     if (a_ok && v_ok && s_ok && p_ok && copy_ok && shared_ok && nested_ok) {
-        print("PASS: Slice subsystem semantics and universal interface");
+        print("PASS: Slice copy and view semantics");
     } else {
-        print("FAIL: Slice logic corruption or offset calculation error");
+        print("FAIL: Slice copy or view result");
         return 1;
     }
 

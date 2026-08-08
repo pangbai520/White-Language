@@ -33,11 +33,11 @@ func main() -> Int {
     let ptr p -> Int = ref target;
     deref p = 99999;
 
-    // final integrity assertion
     if (tail_val == 20 && nested_y == 20 && target == 99999) {
         print("PASS: Memory layout and pointer mutation");
     } else {
-        print("FAIL: Memory stress corruption");
+        print("FAIL: Memory layout or pointer mutation");
+        return 1;
     }
     return 0;
 }

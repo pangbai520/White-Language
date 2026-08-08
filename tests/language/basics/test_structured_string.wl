@@ -1,5 +1,5 @@
 // Test: STRUCTURED_STRING_RUNTIME_ABI
-// File: tests/integration/os/test_structured_string.wl
+// File: tests/language/basics/test_structured_string.wl
 // Focus: Structured String ABI stability across runtime calls, ARC cleanup,
 // stdlib methods, native file I/O, and type conversions.
 
